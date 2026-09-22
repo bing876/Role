@@ -67,7 +67,7 @@ export interface ServerEnv {
 // ---------------------------------------------------------------------------
 
 export interface OrchestratorEnv {
-  /** 一票否决：false = 不注册 spawn_workers / delegate，两端退回「只有浏览器 6 工具 + stop」 */
+  /** 一票否决：false = 不注册 spawn_workers / delegate，两端退回「只有 5 个浏览器工具 + stop（共 6 个）」 */
   enabled: boolean;
   /** 主浏览器循环里挂不挂 web_search（唯一的行为变更项；false 时工具表与改前逐字节一致） */
   agentLoopWebSearch: boolean;
