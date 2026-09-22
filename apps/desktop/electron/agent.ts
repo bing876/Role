@@ -165,6 +165,22 @@ const STUCK_ASK_REASONS = new Set([
 ]);
 
 /**
+ * 多智能体编排 · 「等后台子任务」时的轮询参数（见下面 `job_pending` 那一格）。
+ *
+ * · `POLL`：隔多久再问一次 `/next`。太短是无谓的本地往返（虽然是 127.0.0.1，
+ *   但每格都要过一遍 JWT 校验与状态机），太长则结果回来了用户还要多等一截。
+ *   2.5 秒是「用户几乎察觉不到延迟」与「10 分钟里只问 240 次」之间的折中。
+ * · `MARGIN`：本地兜底时限比服务端承诺的 `etaMs` 多留的余量。服务端的 deadline 是
+ *   从「派出那一刻」起算的，桌面第一次读到 `job_pending` 已经晚了一点，
+ *   再加上投递与一次往返的耗时 —— 不留余量就会在服务端**正要**投递结果时抢先放弃。
+ * · `FALLBACK_ETA`：服务端没给 `etaMs` 时按多久算。取委派超时那个默认值（10 分钟），
+ *   宁可等久一点，也不要因为读不到字段就立刻判超时。
+ */
+const JOB_WAIT_POLL_MS = 2_500;
+const JOB_WAIT_MARGIN_MS = 15_000;
+const JOB_WAIT_FALLBACK_ETA_MS = 600_000;
+
+/**
  * 第 27 步（人工介入卡片）：**本地页面信号** —— 这一页是不是需要人来处理的类型。
  *
  * 这是保守触发闸的**条件 A**（条件 B 是「AI 确实卡住了」，见 maybeRaiseHelp）。
@@ -389,6 +405,15 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
     return finish(opts.reason ?? 'paused');
   };
 
+  /**
+   * 多智能体编排 · 「等后台子任务」的**本地兜底时限**（第一次遇到 job_pending 时定死）。
+   *
+   * 服务端那边每个后台子任务都有 deadline（委派默认 10 分钟，到点必然投递一个结果，
+   * 哪怕是「暂未完成」），所以正常情况下这个兜底**永远不会触发**。
+   * 留着它是为了「服务端承诺了却没兑现」那种情况：本地也不能陪着无限等下去。
+   */
+  let jobWaitDeadline: number | null = null;
+
   for (;;) {
     if (hooks.aborted()) return 'aborted';
     if (hooks.isPaused()) {
@@ -440,6 +465,51 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
       hooks.phase('paused', `等你下一步：${goal.slice(0, 30)}`);
       await hooks.taskStatus(taskId, 'paused').catch(() => undefined);
       return finish('say');
+    }
+
+    /**
+     * 多智能体编排 · **循环挂在后台子任务上**（派了临时工 / 把活委派给了同事）。
+     *
+     * ★ 这一格**必须和下面那个通用 `ask` 分支分开处理**，否则整条编排路是断的：
+     *   通用分支会 `return finish('ask_user')` —— 本地驱动循环当场退出，
+     *   于是**再没有人调 `/next`**。等服务端那边子任务跑完、把结果投进历史、
+     *   循环状态从 `waiting_job` 翻回 `running`，也没有人去取那一格决策：
+     *   任务就永远停在半路（用户看到的是「卡住了」，而服务端其实早就备好了结果）。
+     *   这正是用户明确要求防住的「挂死」。
+     *
+     * ★ 所以这里的做法是**继续驱动、只是慢一点**：睡一会儿再问一次。
+     *   反复问是安全的 —— 服务端对 `waiting_job` 的 `/next` 是**幂等重放**：
+     *   原样回同一句 `job_pending`，不调模型、不烧 token、历史一条不增
+     *   （`scripts/verify/orc-park.mts` 第 ② 组断言就是验这个）。
+     *
+     * ★ 不发 `ask` 事件、不置 `lane.awaiting`、不弹人工介入卡片：
+     *   这不是「AI 卡住了要人帮忙」，是「它在等同事交活」—— 报成求助就是狼来了，
+     *   用户被这种假警报训练过之后，真需要介入时反而不会看了。
+     *   （`STUCK_ASK_REASONS` 里也没有 `job_pending`，卡片那条路本来就不会触发。）
+     */
+    if (decision.kind === 'ask' && decision.reason === 'job_pending') {
+      const etaMs = Number(decision.etaMs) > 0 ? Number(decision.etaMs) : JOB_WAIT_FALLBACK_ETA_MS;
+      if (jobWaitDeadline === null) jobWaitDeadline = Date.now() + etaMs + JOB_WAIT_MARGIN_MS;
+
+      if (Date.now() > jobWaitDeadline) {
+        // 服务端承诺的时限过了还没结果：如实说，不陪着无限等（浏览器交还用户）
+        const mins = Math.round(etaMs / 60_000);
+        // 级别用 'error'：`AgentEventPayload` 的 note 只有 info | error 两档（没有 warn），
+        // 而渲染端（App.tsx）对 error 才画 ⚠️ 并刷新驾驶状态 —— 这件事该让用户注意到，
+        // 且我们正把浏览器交还给他，刷新驾驶状态也正是需要的。
+        hooks.emit({
+          kind: 'note',
+          level: 'error',
+          text: `等后台结果超过了预计的 ${mins} 分钟还没回来，我先停下把浏览器交还给你。要接着等就说一声。`,
+        });
+        hooks.phase('paused', `等后台结果超时（预计 ${mins} 分钟）`, 'agent');
+        await hooks.taskStatus(taskId, 'paused').catch(() => undefined);
+        return finish('ask_user');
+      }
+
+      hooks.phase('running', decision.question.slice(0, 60), 'agent');
+      await hooks.sleep(JOB_WAIT_POLL_MS);
+      continue; // 回到循环顶部：先查 aborted / isPaused，再问下一格
     }
 
     if (decision.kind === 'ask') {

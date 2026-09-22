@@ -30,6 +30,7 @@
 import {
   PAYMENT_TARGET_RE,
   sensitiveTargetHit,
+  type AgentJobKind,
   type AgentLoopDecision,
   type BrowserAction,
   type LoopToolCall,
@@ -52,6 +53,7 @@ import {
 // 阶段 0 · Tool Registry：工具表与校验走注册表（旧逻辑保留在 *Legacy 函数里做回滚用）
 import {
   LOOP_TOOL_NAMES,
+  browserToolNamesFor,
   normalizeToolArgs,
   serverToolRegistry,
   type ServerExecutionContext,
@@ -231,7 +233,7 @@ export const LOOP_SYSTEM_PROMPT = [
  *   - `paused` = 挂起。消息历史、步数、目标、暂停前的页面快照**全部原样留着**；
  *     `advance()` 期间不调模型（不烧 token），解除挂起后原地继续。
  */
-export type LoopStatus = 'running' | 'waiting' | 'done' | 'stopped' | 'failed' | 'paused';
+export type LoopStatus = 'running' | 'waiting' | 'done' | 'stopped' | 'failed' | 'paused' | 'waiting_job';
 
 export interface LoopSession {
   id: string;
@@ -272,6 +274,62 @@ export interface LoopSession {
    * 两边职责不重叠：内存这份管「现在是不是挂着」，表里那份管「重启后还能不能看到」。
    */
   pause: LoopPause | null;
+  /**
+   * 多智能体编排 · **这一路发给模型的工具名表**（缺省 = `LOOP_TOOL_NAMES`：浏览器 6 工具 + stop）。
+   *
+   * 为什么必须有它：给模型哪张工具表，就是这一路的**能力边界**。
+   *   · 浏览器循环：`LOOP_TOOL_NAMES`（+ 可选 web_search）——有「手」；
+   *   · 被委派的子循环：`SUB_AGENT_TOOL_NAMES`（web_search/spawn_workers/delegate/stop）——**没有手**，
+   *     工具表里根本没有 open_url/click/type，它想开页也开不了（提示词里也明说了）。
+   * 将来做「桌面手」只需要给子循环分配 wcId + 换这张表，其余部分不用动。
+   *
+   * ★ `LOOP_TOOL_NAMES` 与 6 个浏览器工具定义**一个字都不改** —— 阶段 0 的 181 条对照断言继续全绿。
+   */
+  toolNames?: string[];
+  /**
+   * 'browser'（缺省，桌面手）| 'delegate'（被委派的子循环，服务端自己驱动，**没有桌面**）。
+   * 诊断与「谁能被 /next 找到」用：子循环是 detached 的，HTTP 路由本来就查不到它。
+   */
+  kind?: 'browser' | 'delegate';
+  /** 子循环：它替谁干活（父循环 id，日志/诊断/结果投递用） */
+  parentLoopId?: string;
+  /**
+   * 委派链上的智能体 id（`[发起方, …, 当前]`）。用于两道确定性闸：
+   *   · 链深 `chain.length - 1 <= DELEGATE_MAX_DEPTH`；
+   *   · 目标已在链里 → 判成环（`cycle`），直接拒。
+   * 浏览器循环缺省 = `[自己的 agentId]`（没有 agentId 时为空数组）。
+   */
+  chain?: number[];
+  /**
+   * 这一路此刻挂在哪个后台子任务上（null = 没挂）。
+   *
+   * ★ 投递时的**唯一凭据**：`deliverJobResult` 只认「循环仍挂在同一个 jobId 上」，
+   *   对不上就只落库、绝不静默伪造回执。
+   */
+  jobId?: string | null;
+  /**
+   * 挂着时的那句「人话 + 预计时长」。**必须**随 session 存一份：
+   * `waiting_job` 期间任何 `/next` 都要原样重放同一句 `job_pending`（不再调模型、不烧 token），
+   * 而那时工具早已返回、park 对象已经不在手上了。
+   */
+  jobPark?: { jobId: string; kind: AgentJobKind; etaMs: number; note: string } | null;
+  /**
+   * 当前**在飞的那一次 LLM 请求**的中止器（没有请求在飞时是 null）。
+   *
+   * 见 `askModel` 里的说明：只改 `status` 不掐请求，被叫停的循环还会在后台把 90 秒
+   * 跑完 —— 钱照烧。所以这里留一个把手给 `stopLoop`。
+   */
+  abortCtl?: AbortController | null;
+  /**
+   * `true` = **分离式**循环：不进 `loops` Map、不 `bindPageLoop`。
+   *
+   * ★ 为什么子循环必须分离（改这里前先读）：`MAX_LIVE_LOOPS=32` + `sweep()` 是
+   *   「按 touchedAt 淘汰最旧的」。子循环挤进同一张 Map 会**把用户挂起 6 小时的浏览器循环挤掉**
+   *   （反向也成立：8 路子循环会被用户的页挤掉）。所以子循环由 orchestrator 自己的
+   *   Map 管（独立上限 + 由 job 的 deadline 驱动回收）。
+   *   `advance()` 本身不查 Map，所以分离式循环照样能被驱动。
+   */
+  detached?: boolean;
   createdAt: number;
   touchedAt: number;
 }
@@ -311,8 +369,12 @@ const LOOP_TTL_MS = 10 * 60 * 1000;
  * 所以这里给等待态一个**更长但有界**的窗口（6 小时），并且：
  *   · 等待态**照旧参与** MAX_LIVE_LOOPS 的从旧到新淘汰（见 sweep），内存上界仍然成立；
  *   · 6 小时是刻意的：跨天不管、隔夜一定回收，不是"永久保留"。
+ *
+ * 多智能体编排补一档 `waiting_job`（循环挂在临时工/委派上等结果）：委派最长要等 10 分钟，
+ * 而活跃档只有 10 分钟 TTL —— 不给长窗就会**在结果回来的前一刻把循环回收掉**。
+ * 它不会变僵尸：job 自己的 deadline（≤10 分钟）一定会先到，到点要么投递结果、要么如实超时。
  */
-const WAITING_STATUSES = new Set<LoopStatus>(['paused', 'waiting']);
+const WAITING_STATUSES = new Set<LoopStatus>(['paused', 'waiting', 'waiting_job']);
 const WAITING_TTL_MS = 6 * 60 * 60 * 1000;
 
 /** 这条循环该用哪个回收窗口：在等用户的用长的，其余用 10 分钟 */
@@ -430,6 +492,35 @@ export interface StartLoopInput {
   goal: string;
   pageUrl?: string;
   state?: LoopStateBrief | null;
+  /** 多智能体编排 · 这一路的工具表（缺省 = LOOP_TOOL_NAMES，即浏览器 6 工具 + stop） */
+  toolNames?: string[];
+  /** 多智能体编排 · 'browser'（缺省） | 'delegate'（子循环，服务端自己驱动） */
+  kind?: 'browser' | 'delegate';
+  /** 多智能体编排 · 子循环替谁干活（父循环 id） */
+  parentLoopId?: string;
+  /** 多智能体编排 · 委派链上的智能体 id（用于链深/成环闸） */
+  chain?: number[];
+  /** 多智能体编排 · 分离式（不进 loops Map、不 bindPageLoop） */
+  detached?: boolean;
+  /**
+   * 多智能体编排 · **追加**到第一条 user 消息末尾的编排说明段（同事名单 + 三条硬规矩）。
+   *
+   * ★ 为什么是「追加段」而不是改 `LOOP_SYSTEM_PROMPT`：主提示词是全局唯一那份话术
+   *   （文件头写着「桌面不再自己维护第二套」），为编排再开一套就等于又造一份要同步维护的东西。
+   *   追加段既保留全部既有规矩，又天然满足「最新指令优先」。缺省空串 = 行为零变化。
+   *
+   * ⚠️ 循环启动点有**两个**：`routes/chat.ts`（任务轮）与 `routes/loop.ts`（桌面自建）。
+   *   两处都必须把它传进来，字段名必须一致 —— 这是本项目踩过的坑。
+   */
+  orchestrationBlock?: string;
+  /**
+   * 多智能体编排 · 覆盖系统提示词（缺省 = `LOOP_SYSTEM_PROMPT`，即浏览器循环那份）。
+   *
+   * 被委派的子循环用它换成人设版（「你是项目里的 X，同事把一件事交给你，**你没有浏览器手**」）。
+   * 放在这里而不是让 toolLoop 去 import orchestrator 的提示词，是为了**不产生循环依赖**：
+   * 依赖方向永远是 orchestrator → toolLoop。
+   */
+  systemPrompt?: string;
 }
 
 /** 建一个循环（只有 /chat/stream 的任务轮与主进程兜底会调它） */
@@ -449,7 +540,7 @@ export function startLoop(env: ServerEnv, input: StartLoopInput): LoopSession {
     wcId: input.wcId,
     goal: input.goal.slice(0, 500),
     messages: [
-      { role: 'system', content: LOOP_SYSTEM_PROMPT },
+      { role: 'system', content: input.systemPrompt?.trim() ? input.systemPrompt : LOOP_SYSTEM_PROMPT },
       { role: 'user', content: firstUserMessage(input, env.agentLoopMaxSteps, brief) },
     ],
     step: 0,
@@ -460,9 +551,31 @@ export function startLoop(env: ServerEnv, input: StartLoopInput): LoopSession {
     usedTools: [],
     advancing: false,
     pause: null,
+    toolNames:
+      input.toolNames && input.toolNames.length > 0
+        ? [...input.toolNames]
+        : // 主浏览器循环：调用方没指定就用「浏览器 6 工具 + stop（+ 可选 web_search）」
+          browserToolNamesFor(env),
+    kind: input.kind ?? 'browser',
+    parentLoopId: input.parentLoopId ?? undefined,
+    // 缺省链 = [自己]；没有 agentId 的循环（老的单步适配器）就是空链
+    chain: input.chain ?? (input.agentId !== null && input.agentId > 0 ? [input.agentId] : []),
+    jobId: null,
+    detached: Boolean(input.detached),
     createdAt: Date.now(),
     touchedAt: Date.now(),
   };
+  /**
+   * 多智能体编排 · **分离式循环不进 `loops` Map、不 `bindPageLoop`**（见 LoopSession.detached 的说明）。
+   *
+   * 两件事都必须跳过：
+   *   · 进 Map 就会参与 `sweep()` 的 32 路上限淘汰，把用户挂着的浏览器循环挤掉；
+   *   · `bindPageLoop` 会把这条子循环记到某张真实页上 —— 而它**没有页**（wcId 恒为 null），
+   *     真记上去就等于把「这一页正在跑的循环」指向一条没有桌面手的循环，
+   *     之后 `/next` 的归属硬闸会一路 409。
+   * 分离式循环由 orchestrator 自己的 Map 管（独立上限 + job 的 deadline 驱动回收）。
+   */
+  if (session.detached) return session;
   // 把「这一路在服务端的循环号」记在页上（同一套 id，方便诊断与将来做「按页停」）
   const wcId = Number(input.wcId);
   if (Number.isInteger(wcId)) bindPageLoop(wcId, session.id, input.userId, input.agentId);
@@ -525,6 +638,11 @@ function firstUserMessage(input: StartLoopInput, maxSteps: number, brief: LoopSt
           .filter(Boolean)
           .join('\n')
       : '',
+    /**
+     * 多智能体编排 · 同事名单与三条硬规矩（追加段，见 StartLoopInput.orchestrationBlock）。
+     * 放在「请选下一步工具」**之前**：模型读到最后仍是那句选择指令，不被名单冲淡。
+     */
+    input.orchestrationBlock?.trim() ? input.orchestrationBlock.trim() : '',
     '请选下一步要调用的工具（一次一个）。',
   ];
   return lines.filter(Boolean).join('\n\n');
@@ -536,10 +654,44 @@ export function stopLoop(loopId: string, reason = 'user_stop'): boolean {
   if (!s) return false;
   s.status = 'stopped';
   s.touchedAt = Date.now();
+  // 在飞的那次 LLM 请求一并掐掉：只改 status 的话它会在后台把 90 秒跑完（钱照烧）
+  s.abortCtl?.abort();
+  s.abortCtl = null;
   if (s.messages.length > 0) {
     s.messages.push({ role: 'user', content: `（用户叫停：${reason}。不要再调任何动作工具。）` });
   }
+  notifyLoopStopped(loopId, reason);
   return true;
+}
+
+/**
+ * 多智能体编排 · **「循环被停掉了」的订阅口**。
+ *
+ * ★ 为什么用订阅而不是让 `stopLoop` 直接 import orchestrator：
+ *   依赖方向必须是 orchestrator → toolLoop（编排用循环，循环不该认识编排）。
+ *   直接 import 会造出循环依赖，Node 的 ESM 在这种情况下拿到的是**未初始化的绑定**，
+ *   表现为「本地跑得好、打包后启动即崩」—— 这类 bug 最难查，所以从源头避免。
+ *
+ * 订阅方（`orchestrator/tools.ts` 在 `initOrchestrator` 里注册）拿它做一件事：
+ * **级联取消这条循环名下的后台子任务**。发起方都被用户停了，临时工与子智能体
+ * 还在后台跑就是纯烧 token（R9 记过服务端此前对调用量毫无上限，编排会把它放大数倍）。
+ */
+type LoopStoppedHook = (loopId: string, reason: string) => void;
+const loopStoppedHooks: LoopStoppedHook[] = [];
+
+export function onLoopStopped(hook: LoopStoppedHook): void {
+  loopStoppedHooks.push(hook);
+}
+
+function notifyLoopStopped(loopId: string, reason: string): void {
+  for (const hook of loopStoppedHooks) {
+    try {
+      hook(loopId, reason);
+    } catch (err) {
+      // 钩子抛错不能影响「停」本身 —— 停不掉才是真故障
+      console.error('[loop] loop-stopped 钩子抛错（不影响停止）：', (err as Error)?.message ?? String(err));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -699,14 +851,26 @@ export function hasLoop(loopId: string): boolean {
 }
 
 /** 按「哪张页」停：桌面放下某一路时用它 */
+/**
+ * 「还能被停掉」的状态。
+ *
+ * ★ 多智能体编排补了 `waiting_job`：一条挂在临时工/委派上的循环**不是**终态，
+ *   但它显然也该能被「放下这一路 / 登出」停掉。漏了它的后果是：用户放下这一路之后，
+ *   那条循环继续挂着，10 分钟后子任务结果回来还会把它转回 running —— 幽灵任务。
+ */
+function stoppable(s: LoopSession): boolean {
+  return s.status === 'running' || s.status === 'paused' || s.status === 'waiting_job';
+}
+
 export function stopLoopsOfPage(userId: number, wcId: number): number {
   let n = 0;
   for (const s of loops.values()) {
     // 阶段简报：挂起态也要一起停 —— 否则「放下这一路」之后它还会挂到 TTL 到期
-    if (s.userId === userId && s.wcId === wcId && (s.status === 'running' || s.status === 'paused')) {
+    if (s.userId === userId && s.wcId === wcId && stoppable(s)) {
       s.status = 'stopped';
       s.touchedAt = Date.now();
       n += 1;
+      notifyLoopStopped(s.id, 'page_dropped');
     }
   }
   return n;
@@ -715,10 +879,11 @@ export function stopLoopsOfPage(userId: number, wcId: number): number {
 export function stopLoopsOfUser(userId: number): number {
   let n = 0;
   for (const s of loops.values()) {
-    if (s.userId === userId && (s.status === 'running' || s.status === 'paused')) {
+    if (s.userId === userId && stoppable(s)) {
       s.status = 'stopped';
       s.touchedAt = Date.now();
       n += 1;
+      notifyLoopStopped(s.id, 'user_logout');
     }
   }
   return n;
@@ -766,6 +931,28 @@ export function snapshotBrief(s: PageSnapshot): string {
   ].join('\n');
 }
 
+/**
+ * 结构化结果进上下文的硬上限（字符数）。
+ *
+ * ★ 为什么必须有上限：一批 5 个临时工的汇报 + 来源列表，不截断能轻松上 20KB ——
+ *   那会挤掉循环自己的页面快照与历史，模型反而看不清「我现在在哪一张页」。
+ *   6KB 够放 5 份汇报的要点（summary 300 字 + 8 条 findings 已被 workers.ts 截过一轮）。
+ */
+const TOOL_RESULT_DATA_MAX = 6000;
+
+function describeToolData(data: unknown): string {
+  if (data === null || data === undefined) return '';
+  let text: string;
+  try {
+    text = JSON.stringify(data);
+  } catch {
+    return '';
+  }
+  if (!text || text === '{}' || text === '[]') return '';
+  if (text.length > TOOL_RESULT_DATA_MAX) text = `${text.slice(0, TOOL_RESULT_DATA_MAX)}…（结构化结果过长已截断）`;
+  return `\n结构化结果（JSON，请基于它作答，不要编造里面没有的内容）：\n${text}`;
+}
+
 /** 桌面回执 → 塞回模型的 tool 消息（短、只有人话摘要） */
 export function describeToolResult(call: LoopToolCall, r: LoopToolResult): string {
   const head = `工具 ${call.name} 回执：${r.ok ? '成功' : '失败'}`;
@@ -776,7 +963,14 @@ export function describeToolResult(call: LoopToolCall, r: LoopToolResult): strin
   if (r.noChange) bits.push('动作执行了，但页面看不出任何变化（地址/标题/节点数都没动）——多半没点中、被弹层挡住，或这颗按钮只是唤起手机 App');
   if (r.userAnswer) bits.push(`用户补了一句：${r.userAnswer.slice(0, 300)}`);
   const page = r.page ? `\n执行后的当前页：\n${snapshotBrief(r.page)}` : '';
-  return [head, ...bits].join('\n') + page;
+  /**
+   * 多智能体编排 · **结构化结果必须进上下文**。
+   *
+   * ★ 这是整个临时工/委派机制最吃重的一行：`detail` 只是「3 个临时工都回来了」这种一句话，
+   *   真正的汇报内容全在 `data` 里。少了这一段，模型看到的就只有那句话 ——
+   *   它会以为活干了却什么都不知道，只能瞎编，并行机制等于白跑。
+   */
+  return [head, ...bits].join('\n') + describeToolData(r.data) + page;
 }
 
 // ---------------------------------------------------------------------------
@@ -924,14 +1118,32 @@ interface UpstreamChoice {
 async function askModel(env: ServerEnv, session: LoopSession, tag: string): Promise<{ ok: true; message: NonNullable<UpstreamChoice['message']> } | { ok: false; status: number; brief: string }> {
   // 任务模式首格：强制必须调用工具（tool_choice: 'required'），禁止纯文字挂起
   const isFirstStep = session.step === 0 || !session.messages.some((m) => m.role === 'tool');
+  /**
+   * 多智能体编排：这一格在飞的 LLM 请求要**可掐**。
+   *
+   * 用户叫停 / 委派超时熔断时，如果只把 `status` 改成 `stopped`，那一次已经发出去的
+   * 请求还会在后台跑满 90 秒（钱照烧、连接照占）。所以把 controller 挂在 session 上，
+   * 由 `stopLoop` 掐掉。两个信号用 `AbortSignal.any` 合并：
+   * 「被叫停」与「90 秒超时」任一触发即中止 —— 超时保护没有被这次改动削弱。
+   */
+  const ctl = new AbortController();
+  session.abortCtl = ctl;
   const r = await llmFetch(env, session.messages, {
     tag,
     temperature: 0.2,
     timeoutMs: 90_000,
+    signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(90_000)]),
     // 阶段 0：默认从注册表取工具表（内容与 LOOP_TOOLS deep-equal，有对照测试兜底）；
     // TOOL_REGISTRY_LEGACY=1 时用旧字面量，请求体与改前逐字节一致
-    tools: useLegacyToolPath() ? (LOOP_TOOLS as unknown as unknown[]) : serverToolRegistry.toOpenAITools(LOOP_TOOL_NAMES),
+    // 多智能体编排：这一路的工具表由 session.toolNames 决定（缺省 = 浏览器 6 工具 + stop）。
+    // 缺省路径与改前**逐字节一致**，阶段 0 的 181 条对照断言继续全绿。
+    tools: useLegacyToolPath()
+      ? (LOOP_TOOLS as unknown as unknown[])
+      : serverToolRegistry.toOpenAITools(session.toolNames ?? LOOP_TOOL_NAMES),
     toolChoice: isFirstStep ? 'required' : 'auto',
+  }).finally(() => {
+    // 请求已经落地（成功/失败都一样）→ 把手收回，免得后面 stopLoop 掐到一个早已结束的信号
+    if (session.abortCtl === ctl) session.abortCtl = null;
   });
   if (!r.ok) {
     const brief = (await r.text().catch(() => '')).slice(0, 200).replace(/\s+/g, ' ');
@@ -1032,6 +1244,8 @@ function serverContextOf(session: LoopSession): ServerExecutionContext {
     wcId: session.wcId,
     conversationId: session.conversationId,
     snapshot: session.lastSnapshot,
+    // 多智能体编排：委派链（`delegate` 的链深/成环闸要用；没有就当「只有发起方」）
+    chain: Array.isArray(session.chain) ? [...session.chain] : undefined,
   };
 }
 
@@ -1066,6 +1280,39 @@ export function ingestToolResult(session: LoopSession, result: LoopToolResult): 
   }
 }
 
+/**
+ * 多智能体编排 · **把后台子任务的结果投递给发起方循环**（临时工汇报 / 委派结果）。
+ *
+ * 这是「挂起 → 结果回来自动续跑」的落地点，也是全链路里最容易写错的一处。三条硬规矩：
+ *
+ *   1. **只认同一个 jobId**：循环已经挂在别的子任务上（或根本没挂）→ 返回 false，
+ *      调用方据此**只落库、不动历史**。绝不静默伪造回执 —— 那会让模型看到一段
+ *      自己从没发起过的工具结果。
+ *   2. **幂等**：投递成功后立刻清 `jobId`，重复投递必然 false（registry 侧也有一道
+ *      `markResultReady` 闸，两道一起才挡得住「超时与完成赛跑」）。
+ *   3. **尊重用户的暂停**：`waiting_job` → 转 `running`（可续跑）；
+ *      `paused` → **只补回执、不改状态**（用户按了暂停，凭什么替他解除？）；
+ *      终态 → 一律 false。
+ *
+ * 回执走 `ingestToolResult`（与 `/next`、`/pause` 同一份实现），所以
+ * `assistant.tool_calls` 与 `tool` 消息仍然一一对应，`step` 也只加一次。
+ */
+export function deliverJobResult(session: LoopSession, jobId: string, result: LoopToolResult): boolean {
+  if (!jobId) return false;
+  if (session.status === 'stopped' || session.status === 'done' || session.status === 'failed') return false;
+  if (session.jobId !== jobId) return false;
+  ingestToolResult(session, result);
+  session.jobId = null;
+  session.jobPark = null;
+  // 只有「确实在等这个子任务」才转 running；用户手动暂停的那一路保持 paused
+  if (session.status === 'waiting_job') session.status = 'running';
+  session.touchedAt = Date.now();
+  console.log(
+    `[loop] 循环 ${session.id} 收到子任务 ${jobId} 的结果（ok=${result.ok}），状态 → ${session.status}、已走 ${session.step} 步`,
+  );
+  return true;
+}
+
 async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopToolResult | null): Promise<AgentLoopDecision> {
   session.touchedAt = Date.now();
 
@@ -1085,6 +1332,31 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
       step: session.step,
       pausedAt: session.pause?.at ?? session.touchedAt,
       pausedBy: session.pause?.by ?? 'user',
+    };
+  }
+
+  /**
+   * 多智能体编排 · **`waiting_job` 期间的幂等重放**。
+   *
+   * 这一格在等临时工/委派的结果。此时任何 `/next`（用户在旧桌面上狂点「继续」、
+   * 或新桌面的轮询抢跑）都**一律不再调模型**，原样回同一句 `job_pending`：
+   *   · 不烧 token（R9 记过：服务端此前对调用量毫无上限）；
+   *   · 不动历史（否则会在 `pendingCallId` 还挂着的时候插进对不上的 tool 消息）；
+   *   · 不下发任何动作（浏览器交还在用户手上）。
+   *
+   * 结果回来时由 `deliverJobResult()` 把结构化结果当作**那一格工具的正式回执**注入，
+   * 并把状态放回 `running` —— 下一次 `/next` 就能接着走。
+   */
+  if (session.status === 'waiting_job') {
+    const park = session.jobPark;
+    return {
+      kind: 'ask',
+      reason: 'job_pending',
+      question: park?.note ?? '我已经把这件事派出去了，正在等结果回来（这一步没有再消耗模型调用）。',
+      step: session.step,
+      jobId: park?.jobId ?? session.jobId ?? undefined,
+      jobKind: park?.kind,
+      etaMs: park?.etaMs,
     };
   }
 
@@ -1209,6 +1481,38 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
       } catch (err) {
         serverResult = { ok: false, error: (err as Error)?.message ?? String(err) };
       }
+
+      /**
+       * 多智能体编排 · **park 分支**：工具说「这一格不阻塞，先把我挂起来」。
+       *
+       * 顺序是这件事的全部难点（改之前先读）：
+       *   ① assistant 的 tool_call **已经**在上面 push 进历史了，`pendingCallId = call.id` 也已置好；
+       *   ② 这里**绝不能**push tool 回执 —— 结果还没出来，写了就是伪造；
+       *   ③ 转 `waiting_job` 并原样返回 `ask/job_pending`，浏览器交还用户；
+       *   ④ 结果回来时 `deliverJobResult()` 用同一个 `pendingCallId` 补上那一条 tool 消息。
+       * 于是历史里 assistant.tool_calls 与 tool 回执仍然**严格一一对应** —— 少一条或多一条，
+       * 上游模型就会看到一段自相矛盾的对话（这正是 R3 修的那个坑）。
+       */
+      if (serverResult.park) {
+        const park = serverResult.park;
+        session.jobId = park.jobId;
+        session.jobPark = { jobId: park.jobId, kind: park.kind, etaMs: park.etaMs, note: park.note };
+        session.status = 'waiting_job';
+        session.touchedAt = Date.now();
+        console.log(
+          `[loop] 循环 ${session.id} 挂在子任务 ${park.jobId}（${park.kind}，预计 ${Math.round(park.etaMs / 1000)}s）——不调模型、不下发动作`,
+        );
+        return {
+          kind: 'ask',
+          reason: 'job_pending',
+          question: park.note,
+          step: session.step,
+          jobId: park.jobId,
+          jobKind: park.kind,
+          etaMs: park.etaMs,
+        };
+      }
+
       session.messages.push({ role: 'tool', tool_call_id: call.id, content: describeToolResult(call, serverResult) });
       if (serverResult.page) session.lastSnapshot = serverResult.page;
       session.pendingCallId = null;

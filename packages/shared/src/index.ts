@@ -840,7 +840,26 @@ export interface ChatStateResult {
 // ---------------------------------------------------------------------------
 
 /** 循环里允许出现的工具名（就是这 6 个，不多不少） */
-export type LoopToolName = 'open_url' | 'read_page' | 'click' | 'type' | 'scroll' | 'stop';
+/**
+ * 工具名。前 6 个是浏览器手（side='desktop'，桌面执行）；
+ * 后 3 个是**多智能体编排**加的服务端工具（side='server'，服务端就地执行，
+ * 桌面完全感知不到 —— 见 `apps/server/src/toolLoop.ts` 的 advanceInner 内循环）。
+ *
+ * ★ 为什么新名字必须进这个联合类型而不是靠 `as` 硬转：
+ *   `sanitizeToolCall` 会把它 cast 成 LoopToolName，类型上是谎；
+ *   加进来之后，桌面 `resolveBrowserAction` 查不到映射时**返回 null**（既有语义，
+ *   不抛错），服务端则走 server 分支就地执行 —— 两侧都安全。
+ */
+export type LoopToolName =
+  | 'open_url'
+  | 'read_page'
+  | 'click'
+  | 'type'
+  | 'scroll'
+  | 'stop'
+  | 'web_search'
+  | 'spawn_workers'
+  | 'delegate';
 
 /** 模型选出来的一个工具调用 */
 export interface LoopToolCall {
@@ -865,12 +884,54 @@ export interface LoopToolResult {
   refused?: string;
   /** 用户在循环跑着的时候补的一句答复（只进上下文，不落库） */
   userAnswer?: string;
+  /**
+   * 多智能体编排 · **结构化结果**（可选，旧代码/旧桌面完全不感知）。
+   *
+   * 谁产生它：`side='server'` 的工具（`spawn_workers` 的临时工汇报、`delegate` 的委派结果、
+   * `web_search` 的来源列表）。`detail` 仍是一句人话，`data` 是给模型看的**完整结构化事实**。
+   *
+   * ★ 两处必须同时改（改这里前先读）：
+   *   ① `toolLoop.ts` 的 `describeToolResult` 要把 `data` 序列化进 tool 消息，
+   *      否则模型**永远看不到**临时工汇报（只有那句 detail），整个并行机制等于白跑；
+   *   ② `routes/loop.ts` 的 `/agent/loop/next` result 白名单**刻意不收** `data`
+   *      —— 客户端注入不了它，也就伪造不了回执。投递只能走服务端进程内。
+   */
+  data?: unknown;
+  /**
+   * 多智能体编排 · **「这一格不阻塞，先把我挂起来」**（由服务端工具自己声明）。
+   *
+   * 为什么必须存在：临时工/委派要跑几十秒到 10 分钟，而桌面 `/next` 只有 90 秒硬超时、
+   * 服务端单次模型调用也是 90 秒 —— 在 `advance()` 里 `await` 子任务必然把循环打成
+   * `brain_failed`（R6 已证明传输出错就永久杀循环）。
+   * 所以长耗时工具**立刻返回**并声明 park：循环转 `waiting_job`（不调模型、不烧 token），
+   * 结果回来后由服务端把结构化结果当作**这一格工具的正式回执**注入历史并续跑。
+   */
+  park?: { jobId: string; kind: AgentJobKind; etaMs: number; note: string };
 }
 
 /** 服务端对循环的一次推进结果：要么给一个工具，要么收尾/提问 */
 export type AgentLoopDecision =
   | { kind: 'tool'; call: LoopToolCall; step: number; text?: string }
-  | { kind: 'ask'; reason: string; question: string; step: number }
+  /**
+   * ★ 多智能体编排：**「等子任务」复用 `ask`，不加新的 decision kind。**
+   *
+   * 为什么（改这里前先读）：已安装的旧桌面遇到未知 `kind` 会掉进 `tool` 分支、
+   * 把垃圾回执喂回来 → 死循环自旋。复用 `ask` + 新 `reason='job_pending'` 之后：
+   *   · 旧桌面：正常停下、把 `question` 显示给用户（不自旋，用户点「继续」即可）；
+   *   · 新桌面：识别 `reason==='job_pending'` → ℹ️ 提示 + 轮询 → 自动续跑。
+   * 后三个字段全是**可选**的，旧端读到 undefined 也不会有任何行为差。
+   */
+  | {
+      kind: 'ask';
+      reason: string;
+      question: string;
+      step: number;
+      /** 这一格挂在哪个后台子任务上（`reason==='job_pending'` 时才有） */
+      jobId?: string;
+      jobKind?: AgentJobKind;
+      /** 预计还要多久（毫秒），界面画倒计时用 */
+      etaMs?: number;
+    }
   | { kind: 'done'; summary: string; document_title: string; document_outline: string[]; step: number }
   | { kind: 'say'; text: string; step: number }
   | { kind: 'stopped'; reason: string; step: number }
@@ -982,6 +1043,169 @@ export interface AgentLoopInfoResult {
 /** POST /agent/loop/next 的响应 */
 export interface AgentLoopNextResult {
   decision: AgentLoopDecision;
+}
+
+// ---------------------------------------------------------------------------
+// 多智能体编排（阶段 1 临时工 + 阶段 2 委派）· 共用类型
+//
+// 这一整块都是**新增**的，没有改任何既有类型 —— 旧桌面 / 旧服务端读到 undefined
+// 就是「没有这回事」，行为零变化。
+// ---------------------------------------------------------------------------
+
+/** 后台子任务的两种：`workers` = 一批临时工并行；`delegate` = 委派给另一个智能体 */
+export type AgentJobKind = 'workers' | 'delegate';
+
+/** 一个临时工要干的活（发起方给的最小任务书） */
+export interface WorkerTaskSpec {
+  /** 这件事叫什么（≤60 字，汇报时原样带回，方便对上号） */
+  title: string;
+  /** 具体要做什么、要回什么（≤600 字，一件事） */
+  instruction: string;
+  /** 可选：发起方手上已有的资料（≤2000 字） */
+  context?: string;
+}
+
+/**
+ * 一个临时工的结构化汇报。
+ *
+ * ★ 为什么必须结构化、不能是一段自由文本：
+ *   临时工**没有身份、没有记忆、用完即销毁**，发起方拿到的只有这份汇报。
+ *   自由文本会让发起方分不清「哪个工人说的哪一句」，也没法在界面上画卡片。
+ *   `status` 三态是硬要求：单个工人失败/超时**不影响**同批其他人（`allSettled` 语义），
+ *   发起方看到的是「3 个里 1 个超时」，不是整批失败。
+ */
+export interface WorkerReport {
+  /** 与入参顺序对应的稳定 id（`w1`/`w2`/…），不是随机 uuid */
+  id: string;
+  title: string;
+  status: 'ok' | 'failed' | 'timeout';
+  /** 结论（≤300 字） */
+  summary: string;
+  /** 要点（≤8 条，每条 ≤200 字） */
+  findings: string[];
+  /** 来源（≤5 条，复用既有 ChatSource 类型） */
+  sources: ChatSource[];
+  confidence: 'high' | 'medium' | 'low';
+  /** status!='ok' 时的原因（人话，如实说） */
+  error?: string;
+  tookMs: number;
+}
+
+/** 一批临时工的汇总（`reports` 顺序与入参 `tasks` 严格一致，确定性可断言） */
+export interface WorkerBatchResult {
+  jobId: string;
+  reports: WorkerReport[];
+  okCount: number;
+  failCount: number;
+  tookMs: number;
+}
+
+/** 一次委派的状态机 */
+export type DelegationStatus =
+  | 'pending'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'timeout'
+  | 'need_user'
+  | 'rejected';
+
+/** 一条委派记录（UI 画状态徽标 + 超时熔断都靠它；跨进程重启仍可读） */
+export interface DelegationView {
+  id: number;
+  channelId: number;
+  fromAgentId: number;
+  toAgentId: number;
+  fromName: string;
+  toName: string;
+  task: string;
+  status: DelegationStatus;
+  createdAt: string;
+  deadlineAt: string;
+  finishedAt: string | null;
+  /** 被委派方的结论（已脱敏） */
+  summary?: string;
+  outline?: string[];
+  /** 失败/超时/被拒的原因（人话） */
+  error?: string;
+}
+
+/** 频道里一条消息的类型 */
+export type ChannelMessageKind =
+  /** 发起方派活 */
+  | 'task'
+  /** 被委派方的过程注记（做了什么，例如「已搜索：xxx」） */
+  | 'progress'
+  /** 被委派方交活 */
+  | 'reply'
+  /** 系统留痕：被拒 / 超时 / 取消（附原因） */
+  | 'system';
+
+/** 内部频道的一条消息（正文在服务端是密文，下发前解密） */
+export interface AgentChannelMessage {
+  id: number;
+  kind: ChannelMessageKind;
+  fromAgentId: number;
+  toAgentId: number;
+  fromName: string;
+  toName: string;
+  text: string;
+  /** 结构化附加数据（已脱敏：状态码/计数/来源网址/耗时） */
+  payload?: unknown;
+  delegationId?: number;
+  at: string;
+}
+
+/** 频道列表的一项（一对智能体一条） */
+export interface AgentChannelSummary {
+  id: number;
+  peerAgentId: number;
+  peerName: string;
+  lastAt: string;
+  /** 最后一句的预览（解密后截 60 字） */
+  lastPreview: string;
+  messageCount: number;
+  /** 此刻这条频道上有没有在跑的委派（界面画「进行中」徽标） */
+  liveDelegationId?: number;
+  liveStatus?: DelegationStatus;
+}
+
+/** GET /agents/channels */
+export interface ChannelListResult {
+  channels: AgentChannelSummary[];
+}
+
+/** GET /agents/channels/:id/messages */
+export interface ChannelMessagesResult {
+  channel: AgentChannelSummary;
+  messages: AgentChannelMessage[];
+}
+
+/** GET /agents/delegations */
+export interface DelegationListResult {
+  delegations: DelegationView[];
+}
+
+/**
+ * GET /agent/loop/job?loopId= —— 「这一路挂在哪个子任务上、好了没」。
+ *
+ * 只读、不含任何内容（只有状态与时间戳），所以它既给桌面轮询用，
+ * 也给验收脚本取证用。
+ */
+export interface LoopJobStateResult {
+  loopId: string;
+  status: string;
+  job:
+    | null
+    | {
+        jobId: string;
+        kind: AgentJobKind;
+        /** true = 还在跑；false = 已有结果（或已被取消） */
+        pending: boolean;
+        startedAt: number;
+        deadlineAt: number;
+        resultReady: boolean;
+      };
 }
 
 // ---------------------------------------------------------------------------

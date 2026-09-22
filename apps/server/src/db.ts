@@ -294,6 +294,68 @@ CREATE INDEX IF NOT EXISTS idx_task_pauses_user ON task_pauses (user_id, paused_
 -- 同一条循环同时只应有一次「未解除」的挂起：部分唯一索引兜底（防重复请求写两行）
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_task_pauses_open
   ON task_pauses (loop_id) WHERE resumed_at IS NULL;
+
+-- ---------------------------------------------------------------------------
+-- 多智能体编排（2026-09-23）：**智能体之间的内部频道** + 委派记录。
+--
+-- 为什么要落库、不能只放内存：
+--   1. 「用户可以查看这个交流过程」是硬需求，而服务端重启/循环 TTL 到期都会清内存 ——
+--      委派可能跑满 10 分钟，落库才能保证「超时了也能看到它当时说了什么」；
+--   2. 超时熔断要能算出 deadline（deadline_at 那一列），跨重启仍然有效；
+--   3. 频道正文一律密文（与 messages 表同一套 AES-256-GCM），备份里看不到内容。
+--
+-- ★ 敏感口径（写这三张表的每一处都必须遵守）：
+--   进 content_enc / payload 的任何文本**先过一遍脱敏**（orchestrator/redact.ts，
+--   复用 R1/R2 同一套正则）。命中的委派/派工**当场拒绝**并说明原因，不是「悄悄替换后照发」。
+-- ---------------------------------------------------------------------------
+
+-- 内部频道：一对智能体一条。agent_a_id 恒 < agent_b_id，靠 UNIQUE 保证唯一，
+-- 所以「A→B」和「B→A」是**同一条**频道（用户看到的是一个双向对话，不是两个单向窗口）。
+CREATE TABLE IF NOT EXISTS agent_channels (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id      BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_a_id      BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  agent_b_id      BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_message_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, agent_a_id, agent_b_id)
+);
+
+-- 频道里的每一条（正文密文；payload 只放已脱敏的结构化数据：状态码/计数/来源网址/耗时）
+CREATE TABLE IF NOT EXISTS agent_channel_messages (
+  id            BIGSERIAL PRIMARY KEY,
+  channel_id    BIGINT NOT NULL REFERENCES agent_channels(id) ON DELETE CASCADE,
+  from_agent_id BIGINT NOT NULL,
+  to_agent_id   BIGINT NOT NULL,
+  kind          TEXT NOT NULL CHECK (kind IN ('task','progress','reply','system')),
+  content_enc   TEXT NOT NULL,
+  payload       JSONB,
+  delegation_id BIGINT,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_channel_messages ON agent_channel_messages (channel_id, id);
+
+-- 一次委派一条（UI 画状态徽标、超时熔断算 deadline、验收取证都靠它）
+CREATE TABLE IF NOT EXISTS agent_delegations (
+  id             BIGSERIAL PRIMARY KEY,
+  user_id        BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id     BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  channel_id     BIGINT NOT NULL REFERENCES agent_channels(id) ON DELETE CASCADE,
+  from_agent_id  BIGINT NOT NULL,
+  to_agent_id    BIGINT NOT NULL,
+  parent_loop_id TEXT,
+  child_loop_id  TEXT,
+  task           TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deadline_at    TIMESTAMPTZ NOT NULL,
+  finished_at    TIMESTAMPTZ,
+  result         JSONB,
+  error          TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_agent_delegations_user ON agent_delegations (user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_delegations_channel ON agent_delegations (channel_id, id DESC);
 `;
 
 

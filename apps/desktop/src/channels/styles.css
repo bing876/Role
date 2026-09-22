@@ -1,0 +1,291 @@
+/*
+ * 多智能体编排 · 内部频道面板的样式。
+ *
+ * 边界：只管这个面板自己，不碰左栏 / 聊天 / 浏览器工作区。
+ * 用根 styles.css 里既有的变量（--panel/--border/--text/--text-weak/--accent），
+ * 不新造一套配色 —— 否则深色/浅色一改就两边不一致。
+ */
+
+.channelsPanel {
+  position: absolute;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.channelsPanel__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.channelsPanel__sub {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+
+.channelsPanel__acts {
+  display: flex;
+  gap: 6px;
+}
+
+.channelsPanel__err {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #b3261e;
+  background: #fdecea;
+  border-bottom: 1px solid var(--border);
+}
+
+.channelsPanel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+/* ---- 左：频道列表 ---- */
+.channelsPanel__list {
+  flex: 0 0 260px;
+  min-height: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.channelsPanel__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  cursor: pointer;
+}
+
+.channelsPanel__item:hover {
+  background: #f0f4ff;
+}
+
+.channelsPanel__item--on {
+  background: #e8efff;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.channelsPanel__peer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.channelsPanel__preview {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-weak);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channelsPanel__meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+
+.channelsPanel__empty {
+  padding: 18px 14px;
+  font-size: 12px;
+  color: var(--text-weak);
+  line-height: 1.6;
+}
+
+/* ---- 右：对话 + 委派记录 ---- */
+.channelsPanel__conv {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+
+.channelsPanel__msgs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+/* 四种消息类型的左边条颜色：派活/交活是"正事"，过程是灰的，系统留痕要显眼 */
+.msg--task {
+  border-left-color: var(--accent);
+}
+.msg--reply {
+  border-left-color: #1e8e3e;
+}
+.msg--progress {
+  border-left-color: #d0d0d4;
+  background: #fbfbfc;
+}
+.msg--system {
+  border-left-color: #b26a00;
+  background: #fff8ec;
+}
+
+.msg__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.msg__arrow {
+  color: var(--text-weak);
+}
+
+.msg__kind {
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--text-weak);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+}
+
+.msg__at {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+
+.msg__text {
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  /* 频道正文是智能体写给人看的，可能很长 —— 保留换行，但不许横向溢出 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- 委派记录 ---- */
+.channelsPanel__dels {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.channelsPanel__delsHead {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-weak);
+  margin-bottom: 6px;
+}
+
+.del {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.del__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.del__at {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+
+.del__task {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.del__sum {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #1e8e3e;
+}
+
+.del__outline {
+  margin: 5px 0 0 18px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* 超时/失败的原因必须显眼 —— 「不假装完成」那条要求在界面上的落点 */
+.del__err {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #b3261e;
+}
+
+/* 超时那条整块染一点底色，扫一眼就能挑出来 */
+.del--bad {
+  background: #fff5f5;
+  border-color: #f0c4c0;
+}
+
+/* ---- 状态徽标 ---- */
+.chip {
+  padding: 0 6px;
+  font-size: 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.chip--ok {
+  color: #1e8e3e;
+  background: #e9f7ee;
+  border-color: #bfe6cc;
+}
+
+.chip--wait {
+  color: #b26a00;
+  background: #fff4e0;
+  border-color: #f0d9ac;
+}
+
+.chip--bad {
+  color: #b3261e;
+  background: #fdecea;
+  border-color: #f0c4c0;
+}
+
+.chip--mute {
+  color: var(--text-weak);
+  background: var(--bg);
+  border-color: var(--border);
+}

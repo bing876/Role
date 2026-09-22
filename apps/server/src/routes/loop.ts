@@ -22,6 +22,7 @@ import type {
   AgentLoopDecision,
   AgentLoopInfoResult,
   AgentLoopStartResult,
+  LoopJobStateResult,
   LoopToolResult,
   PageSnapshot,
   TaskPauseRecord,
@@ -51,6 +52,8 @@ import {
   type LoopStateBrief,
 } from '../toolLoop';
 import { broadcastLoopEvent, endLoopSse } from '../loopSse';
+import { orchestrationBlockFor } from '../orchestrator/roster';
+import { getJob, jobOfLoop } from '../orchestrator/registry';
 
 export interface LoopDeps {
   pool: Pool;
@@ -137,6 +140,10 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       goal,
       pageUrl: typeof b?.pageUrl === 'string' ? b.pageUrl.trim().slice(0, 500) : '',
       state,
+      // 多智能体编排：同项目同事名单 + 编排规矩（追加到第一条 user 消息）。
+      // ★ 名单必须在这里查、在这里传：它是**按项目按当下**变的，进不了工具 description。
+      //   查不到 / 没开编排 → 传 undefined，`startLoop` 那边走「不加这一段」的老路。
+      orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, agentId),
     });
     // R2 全面加固（2026-09-22）：循环创建日志不再打印 goal 明文（goal 可能含密码/卡号），只打 ID/归属/步数
     console.log(
@@ -575,6 +582,45 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       step: session.step,
       maxSteps: session.maxSteps,
     } satisfies AgentLoopInfoResult;
+  });
+
+  /**
+   * 多智能体编排 · **「这一路挂在哪个子任务上」**（只回状态与时间戳，不含任何内容）。
+   *
+   * ★ 为什么要有这个接口：
+   *   循环 park 成 `waiting_job` 之后，桌面端需要知道「还要等多久」才能画出倒计时。
+   *   `/next` 也会重放 `job_pending`（带 `etaMs`），但桌面可能已经刷过页、手里只有 loopId，
+   *   再发一次 `/next` 只为拿个倒计时太贵（那是推进循环的接口）。所以单开一个只读口子。
+   *
+   * 不回 `jobId` 之外的任何业务内容：子任务的结果**只能**通过 `deliverJobResult` 进上下文，
+   * 不给「绕开循环直接把结果捞出来」的第二条路。
+   */
+  app.get('/agent/loop/job', async (req: FastifyRequest, reply: FastifyReply) => {
+    const claims = authed(req, env);
+    if (!claims) return errJson(reply, 401, '未登录或登录已过期');
+    const q = req.query as { loopId?: unknown } | null;
+    const loopId = typeof q?.loopId === 'string' ? q.loopId.trim() : '';
+    if (!loopId) return errJson(reply, 400, 'loopId 必填');
+    const session = getLoop(loopId);
+    // 不是自己的循环一律 404（与 /agent/loop/info 同一口径，不泄漏存在性）
+    if (!session || session.userId !== claims.sub) {
+      return errJson(reply, 404, '这个循环不存在或已过期（重新下指令即可）');
+    }
+    const job = jobOfLoop(session.id) ?? (session.jobId ? getJob(session.jobId) : null);
+    return {
+      loopId: session.id,
+      status: session.status,
+      job: job
+        ? {
+            jobId: job.id,
+            kind: job.kind,
+            pending: job.status === 'running' && !job.resultReady,
+            startedAt: job.startedAt,
+            deadlineAt: job.deadlineAt,
+            resultReady: job.resultReady,
+          }
+        : null,
+    } satisfies LoopJobStateResult;
   });
 
   /** 诊断用：当前有几路循环活着（不泄漏内容，只看个数） */

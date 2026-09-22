@@ -58,6 +58,7 @@ import { buildAgentContext, buildUserMemoryBlock, ensureAgentConversation } from
 import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
+import { orchestrationBlockFor } from '../orchestrator/roster';
 
 export interface ChatDeps {
   pool: Pool;
@@ -387,13 +388,18 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         // 循环记的智能体以**会话自己的 agent_id** 为准（比请求里的 agentId 更权威）
         const convAgent = await pool.query<{ agent_id: string | null }>('SELECT agent_id FROM conversations WHERE id = $1', [convId]);
         const convAgentId = Number(convAgent.rows[0]?.agent_id);
+        const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;
         const loop = startLoop(env, {
           userId: claims.sub,
-          agentId: Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId,
+          agentId: loopAgentId,
           conversationId: convId,
           wcId,
           goal: message,
           pageUrl: pageUrl || openedUrl,
+          // 多智能体编排：同项目同事名单（与 /agent/loop/start 走同一个拼装函数，
+          // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
+          // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。
+          orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, loopAgentId),
           state: {
             current_task: state.current_task,
             browser_confirmed: state.browser_confirmed,

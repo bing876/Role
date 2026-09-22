@@ -48,6 +48,143 @@ export interface ServerEnv {
   tavilyApiKey: string;
   /** Tavily 接口地址，默认 https://api.tavily.com（换代理/镜像才动） */
   tavilyBaseUrl: string;
+  /**
+   * 多智能体编排（临时工并行 + 智能体互相委派）的全部开关与上限。
+   *
+   * ★ 每一项都有默认值，`.env` 里一个都不写也能跑（按下面的默认值）。
+   *   纯解析函数是 `resolveOrchestratorEnv()`，可单测（见 scripts/verify/orc-registry.mts）。
+   */
+  orch: OrchestratorEnv;
+}
+
+// ---------------------------------------------------------------------------
+// 多智能体编排 · 配置
+//
+// ★ 这些不是「调优参数」，是**费用与死循环的闸**（R9 记录过：服务端此前对 LLM 调用
+//   没有任何上限，一个跑飞的桩 45 秒打了 700 次）。编排会**成倍放大**调用量
+//   （一个循环派 5 个临时工 = 6 路模型调用），所以上限必须在代码里有默认值、
+//   在配置里可收紧，而不是「等出事了再加」。
+// ---------------------------------------------------------------------------
+
+export interface OrchestratorEnv {
+  /** 一票否决：false = 不注册 spawn_workers / delegate，两端退回「只有浏览器 6 工具 + stop」 */
+  enabled: boolean;
+  /** 主浏览器循环里挂不挂 web_search（唯一的行为变更项；false 时工具表与改前逐字节一致） */
+  agentLoopWebSearch: boolean;
+  /** 全局同时在跑的后台子任务上限 */
+  maxLiveJobs: number;
+  /** 同时在跑的被委派子循环上限（与上面的 maxLiveJobs 是两道独立的闸） */
+  subLoopMaxLive: number;
+  /** 一批临时工里同时跑几个（真并行的度） */
+  workerConcurrency: number;
+  /** 一次 spawn_workers 最多派几个临时工 */
+  workerMaxPerCall: number;
+  /** 一条循环累计最多派几个临时工（防「派完再派」刷费用） */
+  workerMaxPerLoop: number;
+  /** 单个临时工的硬超时 */
+  workerTimeoutMs: number;
+  /** 整批临时工的预算（到点没回来的按 timeout 汇报，不是整批失败） */
+  workerJobBudgetMs: number;
+  /** 单个临时工最多搜几轮（0 = 纯推理，不联网） */
+  workerMaxSearchRounds: number;
+  /**
+   * 委派等待的熔断时长（**用户拍板：10 分钟**）。
+   * 到点如实告诉发起方「暂未完成」，绝不假装完成、绝不让任务卡死。
+   * 配置项 DELEGATE_TIMEOUT_MS，夹在 60 秒 ~ 30 分钟之间（配歪了也不会变成无限等）。
+   */
+  delegateTimeoutMs: number;
+  /** 一个智能体同时能接几件被委派的活（默认 1；超了当场拒收 `agent_busy`，v1 不排队） */
+  delegateMaxActivePerAgent: number;
+  /** 委派链最大深度（2 = A→B→C 可以，A→B→C→D 不行） */
+  delegateMaxDepth: number;
+  /** 一条循环最多发起几次委派 */
+  delegateMaxPerLoop: number;
+  /** 一条循环里 web_search 最多几轮 */
+  webSearchMaxRoundsPerLoop: number;
+}
+
+export const ORCH_DEFAULTS: OrchestratorEnv = {
+  enabled: true,
+  agentLoopWebSearch: true,
+  maxLiveJobs: 8,
+  subLoopMaxLive: 8,
+  workerConcurrency: 3,
+  workerMaxPerCall: 5,
+  workerMaxPerLoop: 12,
+  workerTimeoutMs: 120_000,
+  workerJobBudgetMs: 180_000,
+  workerMaxSearchRounds: 2,
+  delegateTimeoutMs: 600_000,
+  delegateMaxActivePerAgent: 1,
+  delegateMaxDepth: 2,
+  delegateMaxPerLoop: 3,
+  webSearchMaxRoundsPerLoop: 3,
+};
+
+/** 委派超时的允许区间：配歪了也不会变成「无限等」或「1 秒就熔断」 */
+export const DELEGATE_TIMEOUT_MS_MIN = 60_000;
+export const DELEGATE_TIMEOUT_MS_MAX = 30 * 60_000;
+
+function bool(raw: string | undefined, fallback: boolean): boolean {
+  const v = String(raw ?? '').trim().toLowerCase();
+  if (v === '' ) return fallback;
+  if (v === '0' || v === 'false' || v === 'off' || v === 'no') return false;
+  if (v === '1' || v === 'true' || v === 'on' || v === 'yes') return true;
+  return fallback;
+}
+
+function intIn(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const n = Number(String(raw ?? '').trim());
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+/**
+ * 解析编排配置（纯函数，可单测）。传入的表可以是 `process.env`，也可以是测试自己造的。
+ *
+ * ★ 每一项都**夹在合理区间内**：配成 0 / 负数 / 天文数字都不会生效成那个值。
+ *   这不是不信任运维，是这些值直接决定「烧多少钱」和「会不会卡死」。
+ */
+export function resolveOrchestratorEnv(src: Record<string, string | undefined> = process.env): OrchestratorEnv {
+  return {
+    enabled: bool(src.ORCHESTRATION_TOOLS, ORCH_DEFAULTS.enabled),
+    agentLoopWebSearch: bool(src.AGENT_LOOP_WEB_SEARCH, ORCH_DEFAULTS.agentLoopWebSearch),
+    maxLiveJobs: intIn(src.ORCH_MAX_LIVE_JOBS, ORCH_DEFAULTS.maxLiveJobs, 1, 64),
+    subLoopMaxLive: intIn(src.SUB_LOOP_MAX_LIVE, ORCH_DEFAULTS.subLoopMaxLive, 1, 64),
+    workerConcurrency: intIn(src.WORKER_CONCURRENCY, ORCH_DEFAULTS.workerConcurrency, 1, 16),
+    workerMaxPerCall: intIn(src.WORKER_MAX_PER_CALL, ORCH_DEFAULTS.workerMaxPerCall, 1, 20),
+    workerMaxPerLoop: intIn(src.WORKER_MAX_PER_LOOP, ORCH_DEFAULTS.workerMaxPerLoop, 1, 100),
+    workerTimeoutMs: intIn(src.WORKER_TIMEOUT_MS, ORCH_DEFAULTS.workerTimeoutMs, 5_000, 10 * 60_000),
+    workerJobBudgetMs: intIn(src.WORKER_JOB_BUDGET_MS, ORCH_DEFAULTS.workerJobBudgetMs, 10_000, 15 * 60_000),
+    // 0 是合法值（= 纯推理不联网），所以这一项不走 intIn 的「<=0 用默认」
+    workerMaxSearchRounds: (() => {
+      const raw = String(src.WORKER_MAX_SEARCH_ROUNDS ?? '').trim();
+      if (raw === '') return ORCH_DEFAULTS.workerMaxSearchRounds;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) return ORCH_DEFAULTS.workerMaxSearchRounds;
+      return Math.min(5, Math.floor(n));
+    })(),
+    delegateTimeoutMs: intIn(
+      src.DELEGATE_TIMEOUT_MS,
+      ORCH_DEFAULTS.delegateTimeoutMs,
+      DELEGATE_TIMEOUT_MS_MIN,
+      DELEGATE_TIMEOUT_MS_MAX,
+    ),
+    delegateMaxActivePerAgent: intIn(
+      src.DELEGATE_MAX_ACTIVE_PER_AGENT,
+      ORCH_DEFAULTS.delegateMaxActivePerAgent,
+      1,
+      8,
+    ),
+    delegateMaxDepth: intIn(src.DELEGATE_MAX_DEPTH, ORCH_DEFAULTS.delegateMaxDepth, 1, 5),
+    delegateMaxPerLoop: intIn(src.DELEGATE_MAX_PER_LOOP, ORCH_DEFAULTS.delegateMaxPerLoop, 1, 20),
+    webSearchMaxRoundsPerLoop: intIn(
+      src.WEB_SEARCH_MAX_ROUNDS_PER_LOOP,
+      ORCH_DEFAULTS.webSearchMaxRoundsPerLoop,
+      1,
+      10,
+    ),
+  };
 }
 
 /**
@@ -167,5 +304,6 @@ export function loadEnv(): ServerEnv {
     agentLoopMaxSteps: resolveAgentLoopMaxSteps(process.env.AGENT_LOOP_MAX_STEPS),
     tavilyApiKey: (process.env.TAVILY_API_KEY || '').trim(),
     tavilyBaseUrl: (process.env.TAVILY_BASE_URL || '').trim() || 'https://api.tavily.com',
+    orch: resolveOrchestratorEnv(process.env),
   };
 }
