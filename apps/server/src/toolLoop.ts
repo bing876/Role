@@ -275,7 +275,7 @@ export interface LoopSession {
    */
   pause: LoopPause | null;
   /**
-   * 多智能体编排 · **这一路发给模型的工具名表**（缺省 = `LOOP_TOOL_NAMES`：浏览器 6 工具 + stop）。
+   * 多智能体编排 · **这一路发给模型的工具名表**（缺省 = `LOOP_TOOL_NAMES`：5 个浏览器工具 + stop，共 6 个）。
    *
    * 为什么必须有它：给模型哪张工具表，就是这一路的**能力边界**。
    *   · 浏览器循环：`LOOP_TOOL_NAMES`（+ 可选 web_search）——有「手」；
@@ -492,7 +492,7 @@ export interface StartLoopInput {
   goal: string;
   pageUrl?: string;
   state?: LoopStateBrief | null;
-  /** 多智能体编排 · 这一路的工具表（缺省 = LOOP_TOOL_NAMES，即浏览器 6 工具 + stop） */
+  /** 多智能体编排 · 这一路的工具表（缺省 = LOOP_TOOL_NAMES，即 5 个浏览器工具 + stop，共 6 个） */
   toolNames?: string[];
   /** 多智能体编排 · 'browser'（缺省） | 'delegate'（子循环，服务端自己驱动） */
   kind?: 'browser' | 'delegate';
@@ -554,7 +554,7 @@ export function startLoop(env: ServerEnv, input: StartLoopInput): LoopSession {
     toolNames:
       input.toolNames && input.toolNames.length > 0
         ? [...input.toolNames]
-        : // 主浏览器循环：调用方没指定就用「浏览器 6 工具 + stop（+ 可选 web_search）」
+        : // 主浏览器循环：调用方没指定就用「5 个浏览器工具 + stop（共 6 个，+ 可选 web_search）」
           browserToolNamesFor(env),
     kind: input.kind ?? 'browser',
     parentLoopId: input.parentLoopId ?? undefined,
@@ -1135,7 +1135,7 @@ async function askModel(env: ServerEnv, session: LoopSession, tag: string): Prom
     signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(90_000)]),
     // 阶段 0：默认从注册表取工具表（内容与 LOOP_TOOLS deep-equal，有对照测试兜底）；
     // TOOL_REGISTRY_LEGACY=1 时用旧字面量，请求体与改前逐字节一致
-    // 多智能体编排：这一路的工具表由 session.toolNames 决定（缺省 = 浏览器 6 工具 + stop）。
+    // 多智能体编排：这一路的工具表由 session.toolNames 决定（缺省 = 5 个浏览器工具 + stop，共 6 个）。
     // 缺省路径与改前**逐字节一致**，阶段 0 的 181 条对照断言继续全绿。
     tools: useLegacyToolPath()
       ? (LOOP_TOOLS as unknown as unknown[])
