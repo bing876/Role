@@ -3,7 +3,7 @@
  *
  * ★ 为什么要在这里再写一份定义，而不是直接用 `search/chatTool.ts` 的 `WEB_SEARCH_TOOL`：
  *   那一份是「聊天路径」的独立常量（`chatLoop.ts` 自己 `tools:[WEB_SEARCH_TOOL]` 喂模型、
- *   自己解析、自己执行），**没有**进 Tool Registry —— 阶段 0 只注册化了浏览器 6 工具 + stop。
+ *   自己解析、自己执行），**没有**进 Tool Registry —— 阶段 0 只注册化了 5 个浏览器工具 + stop（共 6 个）。
  *   编排需要的是「能被 `serverToolRegistry` 注册、能被循环内联执行、有 validate 闸」的那一份。
  *
  *   ⚠️ 所以本项目现在有**两份** web_search 定义。这是有意的过渡状态，不是疏忽：

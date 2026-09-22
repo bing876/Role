@@ -5,7 +5,7 @@
  *   · `delegate`      —— 智能体间委派（阶段 2，见 delegation.ts）
  *   · `web_search`    —— 联网检索（见 search.ts）
  *
- * ★ 这是本项目**第一次**有 `side='server'` 的工具上线。阶段 0 只注册化了浏览器 6 工具 + stop，
+ * ★ 这是本项目**第一次**有 `side='server'` 的工具上线。阶段 0 只注册化了 5 个浏览器工具 + stop（共 6 个），
  *   `advanceInner` 里的「服务端直执行 → continue 再问一轮」分支此前只被对照测试覆盖。
  *   所以本文件是那条分支的第一个真实调用方 —— 改它之前先读 `toolLoop.ts` 的 park 分支注释。
  *
@@ -283,7 +283,7 @@ async function executeSpawnWorkers(
  * 启动时调一次：装上限、注册工具、挂上「循环被停 → 级联取消」的钩子。
  *
  * ★ `ORCHESTRATION_TOOLS=0` 是**一票否决**：不注册 spawn_workers / delegate / web_search，
- *   服务端与桌面就退回「只有浏览器 6 工具 + stop」——`browserToolNamesFor()` 查注册表
+ *   服务端与桌面就退回「只有 5 个浏览器工具 + stop（共 6 个）」——`browserToolNamesFor()` 查注册表
  *   发现 web_search 不在，主循环的工具表与改造前**逐字节一致**。
  */
 /**

@@ -117,7 +117,7 @@ async function main(): Promise<void> {
       const rosterPart = text.slice(text.indexOf('同事名单') >= 0 ? text.indexOf('同事名单') : 0);
       assert.ok(!/- ?「?小助/.test(rosterPart), `名单里出现了自己：${rosterPart.slice(0, 200)}`);
     });
-    await check('主循环工具表 = 浏览器 6 工具 + stop + web_search + spawn_workers + delegate', () => {
+    await check('主循环工具表 = 5 个浏览器工具 + stop + web_search + spawn_workers + delegate', () => {
       const s = getLoop(body.loopId);
       const names = [...(s?.toolNames ?? [])].sort();
       assert.ok(names.includes('spawn_workers'), `缺 spawn_workers：${names.join(',')}`);
