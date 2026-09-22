@@ -15,15 +15,23 @@ function shouldEnterTaskModeTest(msg, hasPage) {
   if (/^(你好|您好|hi|hello|哈喽|早上好|中午好|晚上好|早安|晚安|嗨|你是谁|做个自我介绍|介绍一下你自己|谢谢|感谢|多谢|thx|thanks)[!！。？?~～\s]*$/i.test(t)) {
     return false;
   }
-  if (!hasPage && /^(什么是|解释一下|科普一下|写一首|写一篇|写一段|帮我写代码)/.test(t) && !/(网页|网站|打开|搜|查|看|下单|买)/.test(t)) {
+  if (/^(什么是|解释一下|科普一下|写一首|写一篇|写一段|帮我写代码)/.test(t)) {
+    if (!/(打开|访问|浏览|点击|填|输入|登录|注册|下单|买|购|订|选|抓取|整理|分析|诊断|爬取|刷新|滚动|关闭|切换|http)/.test(t)) {
+      return false;
+    }
+  }
+  if (/https?:\/\//i.test(t)) return true;
+  const STRONG_ACTION = /(打开|访问|浏览|点击|填|输入|登录|注册|下单|买|购|订|选|抓取|整理|分析|诊断|爬取|刷新|滚动|关闭|切换)/;
+  const WEAK_ACTION = /(搜|查|看)/;
+  const PAGE_REF = /(这个页面|当前页|当前页面|这张页|页面上|页面里|在这里|在这张|在这页|此页面)/;
+  if (hasPage) {
+    if (STRONG_ACTION.test(t)) return true;
+    if (WEAK_ACTION.test(t) && PAGE_REF.test(t)) return true;
+    return false;
+  } else {
+    if (STRONG_ACTION.test(t)) return true;
     return false;
   }
-  if (hasPage) return true;
-  if (/(打开|访问|浏览|搜|查|看|下单|买|购|订|选|填|登录|注册|抓取|整理|分析|诊断|爬取|刷新|点击|http)/.test(t)) {
-    return true;
-  }
-  if (t.length >= 15) return true;
-  return false;
 }
 
 const testCases = [
@@ -35,6 +43,11 @@ const testCases = [
   { msg: '你好', hasPage: true, expected: false },
   { msg: '什么是量子力学', hasPage: false, expected: false },
   { msg: '在这个页面搜一下 AI 最新动态', hasPage: true, expected: true },
+  // R4 新增：长闲聊不应发车
+  { msg: '今天天气真舒服，早上出门遛弯的时候楼下花坛开了好多月季，心情特别好，你那边天气怎么样啊', hasPage: false, expected: false },
+  { msg: '帮我查一下今天北京的天气怎么样', hasPage: false, expected: false },
+  { msg: '打开百度，搜索一下今天的新闻', hasPage: false, expected: true },
+  { msg: '今天北京天气怎么样', hasPage: true, expected: false },
 ];
 
 let allPassed = true;
