@@ -138,8 +138,9 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       pageUrl: typeof b?.pageUrl === 'string' ? b.pageUrl.trim().slice(0, 500) : '',
       state,
     });
+    // R2 全面加固（2026-09-22）：循环创建日志不再打印 goal 明文（goal 可能含密码/卡号），只打 ID/归属/步数
     console.log(
-      `[loop] 新循环 ${session.id}（智能体 ${agentId ?? '-'}，页 ${wcId ?? '-'}，上限 ${session.maxSteps} 步）：${goal.slice(0, 40)}`,
+      `[loop] 新循环 ${session.id}（智能体 ${agentId ?? '-'}，页 ${wcId ?? '-'}，上限 ${session.maxSteps} 步）`,
     );
     return {
       loopId: session.id,
@@ -218,7 +219,9 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       // 实时向 SSE 长连接推送 AI 步骤与人话进展
       if (decision.kind === 'tool') {
         const desc = formatToolDesc(decision.call);
-        broadcastLoopEvent(loopId, 'step', { step: session.step + 1, call: decision.call, description: desc });
+        // R2 全面加固：广播给聊天长连的 call 必须脱敏（type 的明文会直接打进聊天气泡）
+        const safeCall = scrubCallForBroadcast(decision.call);
+        broadcastLoopEvent(loopId, 'step', { step: session.step + 1, call: safeCall, description: desc });
         broadcastLoopEvent(loopId, null, { delta: `\n\n**步骤 ${session.step + 1}**：${desc}` });
       } else if (decision.kind === 'done') {
         broadcastLoopEvent(loopId, 'step', { step: session.step, phase: 'done', summary: decision.summary });
@@ -608,11 +611,26 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
   });
 }
 
+function scrubCallForBroadcast(call: { name: string; args?: unknown }): { name: string; args?: unknown } {
+  if (call.name !== 'type') return call;
+  const args = (call.args ?? {}) as Record<string, unknown>;
+  const text = String(args.text ?? '');
+  const len = [...text].length;
+  return {
+    ...call,
+    args: { ...args, text: `[已脱敏·${len}字]` },
+  };
+}
+
 function formatToolDesc(call: { name: string; args?: unknown }): string {
   const args = (call?.args ?? {}) as Record<string, unknown>;
   if (call.name === 'open_url') return `打开网址 ${String(args.url ?? '')}`;
   if (call.name === 'click') return `点击「${String(args.target ?? '')}」`;
-  if (call.name === 'type') return `在「${String(args.target ?? '')}」中输入 "${String(args.text ?? '')}"${args.submit ? ' 并回车提交' : ''}`;
+  if (call.name === 'type') {
+    // R2 全面加固（2026-09-22）：type 的输入值绝不进描述原文，只记字数（与 driver.ts / agent.ts 同口径）
+    const len = [...String(args.text ?? '')].length;
+    return `在「${String(args.target ?? '')}」中输入了 ${len} 个字符${args.submit ? '并回车' : ''}`;
+  }
   if (call.name === 'read_page') return '查看并分析当前页面内容';
   if (call.name === 'scroll') return `向${args.direction === 'up' ? '上' : '下'}滚动页面`;
   if (call.name === 'stop') return `结束任务：${String(args.conclusion ?? args.reason ?? '')}`;
