@@ -21,6 +21,8 @@
     "package:dir": "npm run build -w @ai-workbench/shared && npm run package:dir -w @ai-workbench/desktop",
     "typecheck": "npm run typecheck -w @ai-workbench/shared && npm run typecheck -w @ai-workbench/desktop && npm run typecheck -w @ai-workbench/server",
     "verify:tools": "tsx scripts/verify/tool-registry-parity.mts",
+    "verify:r4": "node scripts/verify/r4-intent-source-parity.mjs && node scripts/verify/r4-dispatch-acceptance.mjs",
+    "verify:orch": "tsx scripts/verify/orc-schema.mts && tsx scripts/verify/orc-registry.mts && tsx scripts/verify/orc-workers.mts && tsx scripts/verify/orc-park.mts && tsx scripts/verify/orc-delegate.mts && tsx scripts/verify/orc-e2e.mts && tsx scripts/verify/orc-routes.mts && tsx scripts/verify/orc-desktop-park.mts && tsx scripts/verify/orc-channels-ui.mts && tsx scripts/verify/orc-killswitch.mts",
     "live": "node scripts/live.mjs",
     "clean": "node scripts/clean.mjs"
   },

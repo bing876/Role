@@ -22,6 +22,7 @@ import type {
   AgentLoopDecision,
   AgentLoopInfoResult,
   AgentLoopStartResult,
+  LoopJobStateResult,
   LoopToolResult,
   PageSnapshot,
   TaskPauseRecord,
@@ -51,6 +52,8 @@ import {
   type LoopStateBrief,
 } from '../toolLoop';
 import { broadcastLoopEvent, endLoopSse } from '../loopSse';
+import { orchestrationBlockFor } from '../orchestrator/roster';
+import { getJob, jobOfLoop } from '../orchestrator/registry';
 
 export interface LoopDeps {
   pool: Pool;
@@ -137,9 +140,14 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       goal,
       pageUrl: typeof b?.pageUrl === 'string' ? b.pageUrl.trim().slice(0, 500) : '',
       state,
+      // 多智能体编排：同项目同事名单 + 编排规矩（追加到第一条 user 消息）。
+      // ★ 名单必须在这里查、在这里传：它是**按项目按当下**变的，进不了工具 description。
+      //   查不到 / 没开编排 → 传 undefined，`startLoop` 那边走「不加这一段」的老路。
+      orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, agentId),
     });
+    // R2 全面加固（2026-09-22）：循环创建日志不再打印 goal 明文（goal 可能含密码/卡号），只打 ID/归属/步数
     console.log(
-      `[loop] 新循环 ${session.id}（智能体 ${agentId ?? '-'}，页 ${wcId ?? '-'}，上限 ${session.maxSteps} 步）：${goal.slice(0, 40)}`,
+      `[loop] 新循环 ${session.id}（智能体 ${agentId ?? '-'}，页 ${wcId ?? '-'}，上限 ${session.maxSteps} 步）`,
     );
     return {
       loopId: session.id,
@@ -218,7 +226,9 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       // 实时向 SSE 长连接推送 AI 步骤与人话进展
       if (decision.kind === 'tool') {
         const desc = formatToolDesc(decision.call);
-        broadcastLoopEvent(loopId, 'step', { step: session.step + 1, call: decision.call, description: desc });
+        // R2 全面加固：广播给聊天长连的 call 必须脱敏（type 的明文会直接打进聊天气泡）
+        const safeCall = scrubCallForBroadcast(decision.call);
+        broadcastLoopEvent(loopId, 'step', { step: session.step + 1, call: safeCall, description: desc });
         broadcastLoopEvent(loopId, null, { delta: `\n\n**步骤 ${session.step + 1}**：${desc}` });
       } else if (decision.kind === 'done') {
         broadcastLoopEvent(loopId, 'step', { step: session.step, phase: 'done', summary: decision.summary });
@@ -574,6 +584,45 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
     } satisfies AgentLoopInfoResult;
   });
 
+  /**
+   * 多智能体编排 · **「这一路挂在哪个子任务上」**（只回状态与时间戳，不含任何内容）。
+   *
+   * ★ 为什么要有这个接口：
+   *   循环 park 成 `waiting_job` 之后，桌面端需要知道「还要等多久」才能画出倒计时。
+   *   `/next` 也会重放 `job_pending`（带 `etaMs`），但桌面可能已经刷过页、手里只有 loopId，
+   *   再发一次 `/next` 只为拿个倒计时太贵（那是推进循环的接口）。所以单开一个只读口子。
+   *
+   * 不回 `jobId` 之外的任何业务内容：子任务的结果**只能**通过 `deliverJobResult` 进上下文，
+   * 不给「绕开循环直接把结果捞出来」的第二条路。
+   */
+  app.get('/agent/loop/job', async (req: FastifyRequest, reply: FastifyReply) => {
+    const claims = authed(req, env);
+    if (!claims) return errJson(reply, 401, '未登录或登录已过期');
+    const q = req.query as { loopId?: unknown } | null;
+    const loopId = typeof q?.loopId === 'string' ? q.loopId.trim() : '';
+    if (!loopId) return errJson(reply, 400, 'loopId 必填');
+    const session = getLoop(loopId);
+    // 不是自己的循环一律 404（与 /agent/loop/info 同一口径，不泄漏存在性）
+    if (!session || session.userId !== claims.sub) {
+      return errJson(reply, 404, '这个循环不存在或已过期（重新下指令即可）');
+    }
+    const job = jobOfLoop(session.id) ?? (session.jobId ? getJob(session.jobId) : null);
+    return {
+      loopId: session.id,
+      status: session.status,
+      job: job
+        ? {
+            jobId: job.id,
+            kind: job.kind,
+            pending: job.status === 'running' && !job.resultReady,
+            startedAt: job.startedAt,
+            deadlineAt: job.deadlineAt,
+            resultReady: job.resultReady,
+          }
+        : null,
+    } satisfies LoopJobStateResult;
+  });
+
   /** 诊断用：当前有几路循环活着（不泄漏内容，只看个数） */
   app.get('/agent/loop/live', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
@@ -608,11 +657,26 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
   });
 }
 
+function scrubCallForBroadcast(call: { name: string; args?: unknown }): { name: string; args?: unknown } {
+  if (call.name !== 'type') return call;
+  const args = (call.args ?? {}) as Record<string, unknown>;
+  const text = String(args.text ?? '');
+  const len = [...text].length;
+  return {
+    ...call,
+    args: { ...args, text: `[已脱敏·${len}字]` },
+  };
+}
+
 function formatToolDesc(call: { name: string; args?: unknown }): string {
   const args = (call?.args ?? {}) as Record<string, unknown>;
   if (call.name === 'open_url') return `打开网址 ${String(args.url ?? '')}`;
   if (call.name === 'click') return `点击「${String(args.target ?? '')}」`;
-  if (call.name === 'type') return `在「${String(args.target ?? '')}」中输入 "${String(args.text ?? '')}"${args.submit ? ' 并回车提交' : ''}`;
+  if (call.name === 'type') {
+    // R2 全面加固（2026-09-22）：type 的输入值绝不进描述原文，只记字数（与 driver.ts / agent.ts 同口径）
+    const len = [...String(args.text ?? '')].length;
+    return `在「${String(args.target ?? '')}」中输入了 ${len} 个字符${args.submit ? '并回车' : ''}`;
+  }
   if (call.name === 'read_page') return '查看并分析当前页面内容';
   if (call.name === 'scroll') return `向${args.direction === 'up' ? '上' : '下'}滚动页面`;
   if (call.name === 'stop') return `结束任务：${String(args.conclusion ?? args.reason ?? '')}`;

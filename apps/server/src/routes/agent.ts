@@ -307,7 +307,8 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
         ],
       );
       try {
-        notifyUser(claims.sub, `${doc.hint}（任务 #${taskId}：${goal.slice(0, 30)}）`);
+        // R2 全面加固（2026-09-22）：通知文案不再带 goal 明文（goal 可能含密码/卡号），只带任务号与 hint
+        notifyUser(claims.sub, `${doc.hint}（任务 #${taskId}）`);
       } catch (err) {
         // 通知挂了不碍事：说明书钉死——任务仍算 done，红点和文档都在
         console.warn('[agent] 通知失败（忽略，不影响任务）：', (err as Error).message);

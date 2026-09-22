@@ -31,6 +31,10 @@ import { registerKnowledgeRoutes, KNOWLEDGE_MAX_UPLOAD_BYTES } from './routes/kn
 import { registerMultiAgentRoutes } from './routes/agents';
 import { registerProjectRoutes } from './routes/projects';
 import { registerLoopRoutes } from './routes/loop';
+import { registerChannelRoutes } from './routes/channels';
+import { initOrchestrator } from './orchestrator/tools';
+import { jobStats } from './orchestrator/registry';
+import { subLoopCount } from './orchestrator/subLoops';
 import { liveLoopCount, runningLoopCount, agentLoopActiveWindowMs } from './toolLoop';
 import { pageStateCount } from './pageState';
 
@@ -78,6 +82,12 @@ async function main(): Promise<void> {
       liveLoopsWindowMs: agentLoopActiveWindowMs(),
       // 子阶段 A：按页（wcId）分片的实时状态现在在册几张页（证明分片真的按页建起来了）
       pageStates: pageStateCount(),
+      // 多智能体编排：在飞的后台子任务（临时工批次 / 委派）+ 累计计数。
+      // jobs.byKind 两个数一起看才有意义：delegate 一直不为 0 = 有委派没收到尾（该查熔断）。
+      jobs: jobStats(),
+      subLoops: subLoopCount(),
+      orchestration: env.orch.enabled ? 'on' : 'off',
+      delegateTimeoutMs: env.orch.delegateTimeoutMs,
       time: new Date().toISOString(),
     };
   });
@@ -96,6 +106,19 @@ async function main(): Promise<void> {
   // 第 21 步：网页工具循环（脑在服务端；工具 open_url/read_page/click/type/scroll/stop，
   // 执行在桌面主进程的现有 driver 上）。/chat/stream 的任务轮与它共用同一份 session_state。
   registerLoopRoutes(app, { pool, env, cipher });
+  // 多智能体编排：内部频道的**只读**接口（用户看智能体之间怎么交流的）
+  registerChannelRoutes(app, { pool, env, cipher });
+  /**
+   * 多智能体编排 · 装编排能力（web_search / spawn_workers / delegate 三个服务端工具 + 名额表）。
+   *
+   * ★ 必须在 `registerLoopRoutes` **之后**、服务开始收请求**之前**装：
+   *   `startLoop` 只记工具**名字**，真正解析发生在每次 `advance` 调模型前。
+   *   装晚了的话，第一个请求会拿到一张「名字在册、实现不在册」的工具表。
+   * ★ 只装一次（`initOrchestrator` 自己有闸）：env 是启动时读的，跑起来不会变。
+   * ★ 关掉它 = `ORCHESTRATION_TOOLS=0`：三个工具都不注册，主循环工具表回到改动前那张，
+   *   `LOOP_SYSTEM_PROMPT` 从头到尾没改过一个字 —— 所以关掉就是**完全回到旧行为**。
+   */
+  initOrchestrator({ pool, env, cipher });
   startIdleScheduler({ pool, env, cipher });
 
   // ★ 迁移必须**带重试**（2026-09-20 修）。

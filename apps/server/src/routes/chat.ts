@@ -58,6 +58,7 @@ import { buildAgentContext, buildUserMemoryBlock, ensureAgentConversation } from
 import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
+import { orchestrationBlockFor } from '../orchestrator/roster';
 
 export interface ChatDeps {
   pool: Pool;
@@ -324,25 +325,50 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
        * 服务端自主意图判断：是否进入任务模式（taskMode）。
        * 废除必须依赖前端本地正则预判的硬性拦截，支持"帮我下单"、"诊断店铺"等各种自然语言指令。
        */
+      /**
+       * R4 保守收紧（2026-09-22）：发车判定收紧，修复“几乎所有聊天都发车”的问题。
+       * 旧逻辑：hasPage => true 一票发车；动作词含 搜/查/看；length>=15 一票发车。
+       * 新逻辑（保守）：
+       *   1. 问候/感谢 -> 聊天
+       *   2. 纯概念提问（什么是/解释一下...）且无强动作词 -> 聊天
+       *   3. 显式 URL -> 任务
+       *   4. 有活页时：只有强动作词，或 弱动作词(搜/查/看)+页面指代(这个页面/当前页/页面上...) 才发车
+       *   5. 无活页时：只有强动作词才发车，弱动作词一律走聊天搜索
+       *   6. 删除 length>=15 一票发车
+       */
       const shouldEnterTaskMode = (msg: string, hasPage: boolean): boolean => {
         const t = (msg ?? '').trim();
         if (!t) return false;
-        // 1. 纯问候/纯闲聊 -> 走普通聊天
+        // 1. 纯问候/纯闲聊/感谢 -> 走普通聊天
         if (/^(你好|您好|hi|hello|哈喽|早上好|中午好|晚上好|早安|晚安|嗨|你是谁|做个自我介绍|介绍一下你自己|谢谢|感谢|多谢|thx|thanks)[!！。？?~～\s]*$/i.test(t)) {
           return false;
         }
-        // 2. 纯概念提问且未打开页面 -> 走普通聊天（普通聊天自带 web_search）
-        if (!hasPage && /^(什么是|解释一下|科普一下|写一首|写一篇|写一段|帮我写代码)/.test(t) && !/(网页|网站|打开|搜|查|看|下单|买)/.test(t)) {
-          return false;
+        // 2. 纯概念提问且无强动作词 -> 走普通聊天（普通聊天自带 web_search）
+        if (/^(什么是|解释一下|科普一下|写一首|写一篇|写一段|帮我写代码)/.test(t)) {
+          if (!/(打开|访问|浏览|点击|填|输入|登录|注册|下单|买|购|订|选|抓取|整理|分析|诊断|爬取|刷新|滚动|关闭|切换|http)/.test(t)) {
+            return false;
+          }
         }
-        // 3. 当前有打开页面，且不是纯闲聊 -> 默认走任务模式让驾驶员操作/感知页面
-        if (hasPage) return true;
-        // 4. 包含操作、浏览、开页、搜索、购买等任务动作词，或中长任务指令
-        if (/(打开|访问|浏览|搜|查|看|下单|买|购|订|选|填|登录|注册|抓取|整理|分析|诊断|爬取|刷新|点击|http)/.test(t)) {
+        // 3. 显式 URL -> 任务（用户贴了链接要打开）
+        if (/https?:\/\//i.test(t)) {
           return true;
         }
-        if (t.length >= 15) return true;
-        return false;
+        // 强动作词：明确的浏览器/交易操作，不含模糊的 搜/查/看
+        const STRONG_ACTION = /(打开|访问|浏览|点击|填|输入|登录|注册|下单|买|购|订|选|抓取|整理|分析|诊断|爬取|刷新|滚动|关闭|切换)/;
+        // 弱动作词：搜/查/看，单独出现时走聊天搜索，只有配合页面指代才算浏览器任务
+        const WEAK_ACTION = /(搜|查|看)/;
+        const PAGE_REF = /(这个页面|当前页|当前页面|这张页|页面上|页面里|在这里|在这张|在这页|此页面)/;
+
+        if (hasPage) {
+          // 有活页时：强动作词 => 任务；弱动作词 + 页面指代 => 任务；其余 => 聊天
+          if (STRONG_ACTION.test(t)) return true;
+          if (WEAK_ACTION.test(t) && PAGE_REF.test(t)) return true;
+          return false;
+        } else {
+          // 无活页时：只有强动作词才发车，弱动作词一律走聊天
+          if (STRONG_ACTION.test(t)) return true;
+          return false;
+        }
       };
 
       const hasActivePage = Boolean(taskWcId || openedUrl || (typeof body?.pageUrl === 'string' && body.pageUrl.trim()));
@@ -362,13 +388,18 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         // 循环记的智能体以**会话自己的 agent_id** 为准（比请求里的 agentId 更权威）
         const convAgent = await pool.query<{ agent_id: string | null }>('SELECT agent_id FROM conversations WHERE id = $1', [convId]);
         const convAgentId = Number(convAgent.rows[0]?.agent_id);
+        const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;
         const loop = startLoop(env, {
           userId: claims.sub,
-          agentId: Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId,
+          agentId: loopAgentId,
           conversationId: convId,
           wcId,
           goal: message,
           pageUrl: pageUrl || openedUrl,
+          // 多智能体编排：同项目同事名单（与 /agent/loop/start 走同一个拼装函数，
+          // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
+          // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。
+          orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, loopAgentId),
           state: {
             current_task: state.current_task,
             browser_confirmed: state.browser_confirmed,

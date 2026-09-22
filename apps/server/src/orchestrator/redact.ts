@@ -1,0 +1,150 @@
+/**
+ * 多智能体编排 · 统一的**脱敏与敏感判定**（进库 / 进提示词 / 进频道之前都必须过一遍）。
+ *
+ * ★ 为什么单独一个文件、而不是各写各的：
+ *   R1（聊天搜敏感直传第三方）与 R2（敏感输入值明文落库）是同一个根因的两张脸 ——
+ *   「敏感内容的判定散落在各处，每加一条新通道就漏一处」。编排一次新增了三条通道
+ *   （委派任务文本 / 临时工 instruction / 内部频道正文），再各写一份正则就是第三次踩坑。
+ *
+ * 口径（与 R1/R2 同一套，别在这里另立标准）：
+ *   · 判定用 `@ai-workbench/shared` 的 `SENSITIVE_TARGET_RE`（密码/验证码/支付/银行卡/身份证…）；
+ *   · 掩码用下面这几个**值形态**正则（判定命中「字段名」，掩码要抹掉「值」，两者不是一回事）。
+ *
+ * 两条使用规则（改调用方之前先读）：
+ *   1. **命中即拒绝，不是悄悄替换后照发** —— 委派/派工的任务文本命中敏感判定就当场拒
+ *      （`sensitive_content`），并如实告诉发起方原因。悄悄替换会让模型以为对方收到的是完整任务。
+ *   2. 落库前**仍然**过一遍 `redactForStorage()` 做纵深防御（判定漏了一个形态时，
+ *      至少库里不是原文）。这两层不是重复，是「拒绝」与「兜底」。
+ */
+import { SENSITIVE_TARGET_RE } from '@ai-workbench/shared';
+
+/** 命中的敏感类别（人话，进拒绝原因；不含原文） */
+export type SensitiveHit = '' | 'password' | 'otp' | 'card' | 'idcard' | 'payment';
+
+/**
+ * 值形态掩码表。顺序有意为之：先抹「字段名+值」的组合（最准），再抹裸的长数字串。
+ * 每条都只保留「有几个字符」这类**非内容**信息 —— 与 R2 在 driver/loop 里的口径一致
+ * （「在「备注」输入了 14 个字符」，不是原文）。
+ */
+const VALUE_PATTERNS: Array<{ re: RegExp; tag: string }> = [
+  // 密码：xxx: <值> / 密码是<值>
+  { re: /((?:密码|口令|password|passwd|pwd)\s*[:：是为]?\s*)([^\s，。,;；]{1,64})/gi, tag: 'password' },
+  // 验证码 / 短信码 / 动态口令
+  { re: /((?:验证码|校验码|短信码|动态口令|otp|captcha|verification\s*code)\s*[:：是为]?\s*)([A-Za-z0-9]{3,10})/gi, tag: 'otp' },
+  // 银行卡号：12~19 位，允许空格/横线分组
+  { re: /\b(?:\d[ -]?){12,19}\d\b/g, tag: 'card' },
+  // 身份证：18 位（末位可为 X）
+  { re: /\b\d{17}[\dXx]\b/g, tag: 'idcard' },
+  // CVV
+  { re: /((?:cvv|cvn|安全码)\s*[:：是为]?\s*)(\d{3,4})/gi, tag: 'card' },
+];
+
+/**
+ * 这段文本里有没有敏感内容。命中返回类别，没有返回空串。
+ *
+ * ★ 只做**判定**、不改文本 —— 调用方要用它决定「拒绝这次委派」，
+ *   而不是把改过的文本发出去（见文件头使用规则 1）。
+ */
+export function detectSensitive(text: string): SensitiveHit {
+  const t = String(text ?? '');
+  if (!t) return '';
+  if (/(密码|口令|password|passwd|pwd)/i.test(t)) return 'password';
+  if (/(验证码|校验码|短信码|动态口令|otp|captcha|verification\s*code)/i.test(t)) return 'otp';
+  if (/\b(?:\d[ -]?){12,19}\d\b/.test(t)) return 'card';
+  if (/\b\d{17}[\dXx]\b/.test(t)) return 'idcard';
+  if (/(cvv|cvn|安全码)/i.test(t)) return 'card';
+  // 兜底：命中项目里那份唯一的敏感词表（支付/付款等没有「值形态」的类别）
+  return SENSITIVE_TARGET_RE.test(t) ? 'payment' : '';
+}
+
+/** 类别 → 人话（进拒绝原因与频道 system 留痕；绝不带原文） */
+export function sensitiveLabel(hit: SensitiveHit): string {
+  switch (hit) {
+    case 'password':
+      return '密码/口令';
+    case 'otp':
+      return '验证码/短信码';
+    case 'card':
+      return '银行卡号/CVV';
+    case 'idcard':
+      return '身份证号';
+    case 'payment':
+      return '支付类敏感信息';
+    default:
+      return '敏感信息';
+  }
+}
+
+/**
+ * 落库前的纵深防御：把命中的**值**换成掩码，只留「有几个字符」。
+ *
+ * 注意它**不**用来「清洗后照发」—— 那是使用规则 1 明确禁止的。
+ */
+export function redactForStorage(text: string): string {
+  let out = String(text ?? '');
+  for (const { re, tag } of VALUE_PATTERNS) {
+    out = out.replace(re, (...m: unknown[]) => {
+      const groups = m as unknown[];
+      const whole = String(groups[0] ?? '');
+      const prefix = typeof groups[1] === 'string' ? groups[1] : '';
+      const value = typeof groups[2] === 'string' ? groups[2] : whole;
+      const len = [...value].length;
+      return `${prefix}[已脱敏·${tag}·${len}字]`;
+    });
+  }
+  return out;
+}
+
+/**
+ * 结构化 payload 的脱敏：只保留「非内容」字段。
+ *
+ * 频道里的 payload 是给界面画卡片用的（状态/计数/来源网址/耗时），
+ * 本来就不该带正文 —— 这里做的是**白名单式**过滤，而不是「递归找敏感词」：
+ * 白名单漏了顶多界面少显示一项，黑名单漏了就是明文落库。
+ */
+export function sanitizePayload(payload: unknown): unknown {
+  if (payload === null || payload === undefined) return null;
+  if (typeof payload === 'number' || typeof payload === 'boolean') return payload;
+  if (typeof payload === 'string') return redactForStorage(payload.slice(0, 500));
+  if (Array.isArray(payload)) return payload.slice(0, 20).map((x) => sanitizePayload(x));
+  if (typeof payload === 'object') {
+    const src = payload as Record<string, unknown>;
+    const ALLOWED = new Set([
+      'status',
+      'reason',
+      'kind',
+      'okCount',
+      'failCount',
+      'tookMs',
+      'count',
+      'confidence',
+      'title',
+      'url',
+      'delegationId',
+      'jobId',
+      'depth',
+      'steps',
+      'sources',
+      'findings',
+      'summary',
+      // 多智能体编排：被委派方的**要点提纲**（频道 reply 与委派 result 都要带它，
+      // 用户看内部频道时「结论 + 要点」才是可读的；漏掉的话只剩一句话）。
+      'outline',
+      // 超时熔断的**等了多久**（前端要拿它算「等了几分钟」，不该是字符串）
+      'waitedMs',
+      // 委派目标名（频道列表要显示「交给谁」）
+      'to',
+      // 频道里的对方 id / 消息数
+      'peerAgentId',
+      'messageCount',
+    ]);
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(src)) {
+      if (!ALLOWED.has(k)) continue;
+      // 数字/布尔原样保留（耗时、计数不该被转成字符串，界面要拿它算倒计时）
+      out[k] = typeof v === 'number' || typeof v === 'boolean' ? v : sanitizePayload(v);
+    }
+    return out;
+  }
+  return null;
+}
