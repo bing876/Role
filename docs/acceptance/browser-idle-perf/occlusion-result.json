@@ -1,0 +1,44 @@
+{
+  "res": {
+    "fs1": {
+      "raf_fps": 60.0,
+      "iv_fps": 62.5,
+      "guest_hidden": false,
+      "guest_vis": "visible",
+      "main_hidden": false
+    },
+    "bg1": {
+      "raf_fps": 1.0,
+      "iv_fps": 62.5,
+      "guest_hidden": false,
+      "guest_vis": "visible",
+      "main_hidden": false
+    },
+    "fs2": {
+      "raf_fps": 60.0,
+      "iv_fps": 62.5,
+      "guest_hidden": false,
+      "guest_vis": "visible",
+      "main_hidden": false
+    },
+    "bg2": {
+      "raf_fps": 1.1,
+      "iv_fps": 62.5,
+      "guest_hidden": false,
+      "guest_vis": "visible",
+      "main_hidden": false
+    }
+  },
+  "windows": [
+    [
+      2429640,
+      36684,
+      "Developer Tools - http://localhost:5193/"
+    ],
+    [
+      43389114,
+      36684,
+      "AI 工作台"
+    ]
+  ]
+}

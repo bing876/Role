@@ -1,0 +1,116 @@
+{
+  "lines": [
+    "已从 driver.ts 抠出真实 PAGE_HELPERS（15521 字符）—— 下面跑的 find()/snapshot() 都是**线上那份**",
+    "",
+    "=== ① 懒加载墙：视频列表在滚动前是否存在 ===",
+    "  未滚动时：",
+    "    DOM 里 .card 数量 = 3   scrollY=0",
+    "    snapshot().links = [\"影视飓风：iPhone 17 Pro 深度评测\",\"影视飓风：我们如何拍一部电影\",\"影视飓风：色彩管理入门\"]",
+    "    contentTexts() 前几条 = [\"影视飓风：iPhone 17 Pro 深度评测\",\"影视飓风：我们如何拍一部电影\",\"影视飓风：色彩管理入门\"]",
+    "  滚动一遍之后（再滚回顶部）：",
+    "    DOM 里 .card 数量 = 5   （懒加载触发过=true）",
+    "    snapshot().links = [\"影视飓风：iPhone 17 Pro 深度评测\",\"影视飓风：我们如何拍一部电影\",\"影视飓风：色彩管理入门\",\"别的UP主：开箱视频\",\"别的UP主：Vlog 日常\"]",
+    "    contentTexts() 前几条 = [\"影视飓风：iPhone 17 Pro 深度评测\",\"影视飓风：我们如何拍一部电影\",\"影视飓风：色彩管理入门\",\"别的UP主：开箱视频\",\"别的UP主：Vlog 日常\"]",
+    "",
+    "  PASS 懒加载：未滚动只看到首屏、滚动后才全（driver 需要主动滚动才拿得全）  —— 未滚动 3 张 → 滚动后 5 张",
+    "  PASS ★ 修复后：contentTexts() 能拿到链接列表（老实现返回空数组）  —— [\"影视飓风：iPhone 17 Pro 深度评测\",\"影视飓风：我们如何拍一部电影\",\"影视飓风：色彩管理入门\"]",
+    "",
+    "=== ② iframe 墙 + ③ Shadow DOM 墙：现有的 find() 能不能看见 ===",
+    "  主文档按钮（基线）        → 找到 BUTTON#hostbtn",
+    "  iframe 里的「▶ 播放视频」  → 找到 BUTTON#play",
+    "  Shadow DOM 里的播放按钮    → 找到 BUTTON#splay",
+    "  iframe.contentDocument 可读? true",
+    "  iframe 内实际存在的按钮     = [\"▶ 播放视频\"]",
+    "  shadowRoot 可读? true",
+    "  snapshot().buttons         = [\"主文档按钮（基线）\",\"▶ 播放视频\",\"▶ 播放（Shadow DOM）\"]",
+    "  snapshot().links           = []",
+    "",
+    "  PASS ★ 修复后：iframe 里的元素**找得到**了  —— BUTTON#play",
+    "  PASS ★ 修复后：Shadow DOM 里的元素**找得到**了  —— BUTTON#splay",
+    "  PASS ★ 修复后：snapshot() 能看到 iframe 与 shadow 里的按钮  —— [\"主文档按钮（基线）\",\"▶ 播放视频\",\"▶ 播放（Shadow DOM）\"]",
+    "  PASS 但 iframe/shadow 里的元素**其实存在且可点**（说明缺的是\"找\"，不是\"点\"）",
+    "  真鼠标点 iframe 内播放按钮 → inner hits=1",
+    "  PASS 点击链路本身没问题：拿到坐标就能点动 iframe 内的按钮",
+    "",
+    "=== ④ 新标签语义：target=_blank 被拦成\"同页导航\"后，渲染层看得到吗 ===",
+    "  点击前：data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Ctitle%3ENEWTAB%20%E7%AB%99%E7%82%B9%3C%2Ftitle%3E%0A%3Cstyle%3Ebody%7Bmargin%3A0%3Bfont%3A14px%20system-ui%3Bpadding%3A12px%7D%0A%20a%2Cbutton%7Bdisplay%3Ablock%3Bmargin%3A8px%200%3Bfont-size%3A16px%7D%0A%20%23st%7Bfont%3A13px%20monospace%3Bbackground%3A%23eee%3Bpadding%3A8px%3Bmargin-top%3A12px%7D%3C%2Fstyle%3E%0A%3C%2Fhead%3E%3Cbody%3E%0A%3Ca%20id%3D%22a-blank%22%20href%3D%22about%3Ablank%23second%22%20target%3D%22_blank%22%3E%E2%91%A0%20target%3D_blank%20%E6%A0%87%E9%A2%98%EF%BC%88%E7%9C%9F%E5%AE%9E%E7%AB%99%E7%82%B9%E6%9C%80%E5%B8%B8%E8%A7%81%EF%BC%89%3C%2Fa%3E%0A%3Ca%20id%3D%22a-self%22%20href%3D%22about%3Ablank%23third%22%3E%E2%91%A1%20%E6%99%AE%E9%80%9A%E5%90%8C%E9%A1%B5%E9%93%BE%E6%8E%A5%3C%2Fa%3E%0A%3Cbutton%20id%3D%22b-open%22%3E%E2%91%A2%20window.open%20%E6%89%93%E5%BC%80%E6%96%B0%E6%A0%87%E7%AD%BE%3C%2Fbutton%3E%0A%3Cdiv%20id%3D%22st%22%3EpageKey%20%E5%9F%BA%E7%BA%BF%3C%2Fdiv%3E%0A%3Cscript%3E%0Awindow.__opened%20%3D%200%3B%0Adocument.getElementById('b-open').onclick%20%3D%20function()%7B%0A%20%20window.__opened%20%2B%3D%201%3B%0A%20%20const%20w%20%3D%20window.open('about%3Ablank%23popup-'%20%2B%20window.__opened%2C%20'_blank')%3B%0A%20%20document.getElementById('st').textContent%20%3D%20'window.open%20%E8%BF%94%E5%9B%9E%EF%BC%9A'%20%2B%20(w%20%3F%20'%E7%AA%97%E5%8F%A3%E5%AF%B9%E8%B1%A1'%20%3A%20'null%EF%BC%88%E8%A2%AB%E6%8B%A6%EF%BC%89')%3B%0A%7D%3B%0A%3C%2Fscript%3E%3C%2Fbody%3E%3C%2Fhtml%3E  title=NEWTAB 站点",
+    "  点击后：about:blank#second  title=",
+    "  → 同一个 guest **导航走了**（页面被替换）：true",
+    "  ★ 这就是截图里那句「能真的打开了新标签，只是工作台没切换」的可观测形态：",
+    "     guest 里地址变了，但**渲染层的 tab 列表由 React state 维护**，主进程没有把",
+    "     「这张 guest 换地址了」的通知回推给渲染层 → 顶部不多一条 tab、地址栏不同步。",
+    "  PASS 新标签被折成同页导航（渲染层无从得知新 tab 存在）",
+    "  当前 webContents 数 = -1（单窗口单 guest 场景下没有第二个）",
+    "",
+    "=== 结论 ===",
+    "  ① 懒加载：未滚动 3 张 → 滚动后 5 张（driver 需主动滚动才拿得全）",
+    "  ② iframe  墙：★ 已修复（find 能找到）",
+    "  ③ shadow  墙：★ 已修复（find 能找到）",
+    "  ④ 新标签   ：折成同页导航 —— 渲染层 tab 不同步，用户觉得\"没开新 tab\"",
+    "",
+    "  失败项：0"
+  ],
+  "fails": 0,
+  "lazyBefore": {
+    "domCards": 3,
+    "visibleLinks": 3,
+    "linkTexts": [
+      "影视飓风：iPhone 17 Pro 深度评测",
+      "影视飓风：我们如何拍一部电影",
+      "影视飓风：色彩管理入门"
+    ],
+    "contentTexts": [
+      "影视飓风：iPhone 17 Pro 深度评测",
+      "影视飓风：我们如何拍一部电影",
+      "影视飓风：色彩管理入门"
+    ],
+    "scrollY": 0
+  },
+  "lazyAfter": {
+    "domCards": 5,
+    "visibleLinks": 5,
+    "linkTexts": [
+      "影视飓风：iPhone 17 Pro 深度评测",
+      "影视飓风：我们如何拍一部电影",
+      "影视飓风：色彩管理入门",
+      "别的UP主：开箱视频",
+      "别的UP主：Vlog 日常"
+    ],
+    "contentTexts": [
+      "影视飓风：iPhone 17 Pro 深度评测",
+      "影视飓风：我们如何拍一部电影",
+      "影视飓风：色彩管理入门",
+      "别的UP主：开箱视频",
+      "别的UP主：Vlog 日常"
+    ],
+    "lazyCalled": true
+  },
+  "probe": {
+    "host": {
+      "found": true,
+      "node": "BUTTON#hostbtn"
+    },
+    "iframe": {
+      "found": true,
+      "node": "BUTTON#play"
+    },
+    "shadow": {
+      "found": true,
+      "node": "BUTTON#splay"
+    },
+    "_snapButtons": [
+      "主文档按钮（基线）",
+      "▶ 播放视频",
+      "▶ 播放（Shadow DOM）"
+    ],
+    "_snapLinks": [],
+    "_pageKey": "data:text/html;charset=utf-8,%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D%22utf-8%22%3E%3Ctitle%3EFRAME%20%E7%AB%99%E7%82%B9%3C%2Ftitle%3E%0A%3Cstyle%3Ebody%7Bmargin%3A0%3Bfont%3A14px%20system-ui%3Bbackground%3A%23fff%7D%0A%20%23hostbtn%7Bmargin%3A12px%3Bpadding%3A10px%2018px%3Bbackground%3A%2328a%3Bborder%3A0%3Bcolor%3A%23fff%3Bborder-radius%3A6px%7D%0A%20iframe%7Bwidth%3A460px%3Bheight%3A180px%3Bborder%3A2px%20solid%20%23999%3Bmargin%3A12px%3Bdisplay%3Ablock%7D%0A%20%23sst%7Bmargin%3A12px%3Bfont%3A13px%20monospace%3Bbackground%3A%23eee%3Bpadding%3A8px%7D%3C%2Fstyle%3E%0A%3C%2Fhead%3E%3Cbody%3E%0A%3Cbutton%20id%3D%22hostbtn%22%3E%E4%B8%BB%E6%96%87%E6%A1%A3%E6%8C%89%E9%92%AE%EF%BC%88%E5%9F%BA%E7%BA%BF%EF%BC%89%3C%2Fbutton%3E%0A%3Ciframe%20id%3D%22fr%22%20srcdoc%3D%22%3C!doctype%20html%3E%3Chtml%3E%3Chead%3E%3Cmeta%20charset%3D%26quot%3Butf-8%26quot%3B%3E%3Ctitle%3Eplayer%3C%2Ftitle%3E%0A%3Cstyle%3Ebody%7Bmargin%3A0%3Bbackground%3A%23000%3Bcolor%3A%23fff%3Bfont%3A14px%20system-ui%7D%0A%23play%7Bmargin%3A24px%3Bpadding%3A14px%2022px%3Bbackground%3A%23e33%3Bborder%3A0%3Bcolor%3A%23fff%3Bfont-size%3A17px%3Bborder-radius%3A6px%7D%0A%23st%7Bmargin%3A24px%3Bfont%3A13px%20monospace%7D%3C%2Fstyle%3E%3C%2Fhead%3E%3Cbody%3E%0A%3Cbutton%20id%3D%26quot%3Bplay%26quot%3B%3E%E2%96%B6%20%E6%92%AD%E6%94%BE%E8%A7%86%E9%A2%91%3C%2Fbutton%3E%0A%3Cdiv%20id%3D%26quot%3Bst%26quot%3B%3Einner%20hits%3A0%3C%2Fdiv%3E%0A%3Cscript%3Ewindow.__h%3D0%3Bdocument.getElementById('play').onclick%3Dfunction()%7B%0A%20window.__h%2B%2B%3Bdocument.getElementById('st').textContent%3D'inner%20hits%3A'%2Bwindow.__h%3B%7D%3B%3C%2Fscript%3E%0A%3C%2Fbody%3E%3C%2Fhtml%3E%22%3E%3C%2Fiframe%3E%0A%3Cdiv%20id%3D%22sdhost%22%3E%3C%2Fdiv%3E%0A%3Cdiv%20id%3D%22sst%22%3Eshadow%20hits%3A0%3C%2Fdiv%3E%0A%3Cscript%3E%0Awindow.__hostH%3D0%3B%20document.getElementById('hostbtn').onclick%3Dfunction()%7Bwindow.__hostH%2B%2B%3B%7D%3B%0Aconst%20root%20%3D%20document.getElementById('sdhost').attachShadow(%7Bmode%3A'open'%7D)%3B%0Aroot.innerHTML%3D'%3Cbutton%20id%3D%22splay%22%20style%3D%22margin%3A12px%3Bpadding%3A10px%2018px%3Bbackground%3A%23793%3Bborder%3A0%3Bcolor%3A%23fff%3Bborder-radius%3A6px%22%3E%E2%96%B6%20%E6%92%AD%E6%94%BE%EF%BC%88Shadow%20DOM%EF%BC%89%3C%2Fbutton%3E'%3B%0Awindow.__shadowH%3D0%3B%0Aroot.getElementById('splay').onclick%3Dfunction()%7Bwindow.__shadowH%2B%2B%3B%0A%20document.getElementById('sst').textContent%3D'shadow%20hits%3A'%2Bwindow.__shadowH%3B%7D%3B%0A%3C%2Fscript%3E%3C%2Fbody%3E%3C%2Fhtml%3E|FRAME 站点|21",
+    "_helperVer": 11,
+    "_iframeDocReadable": true,
+    "_iframeInnerButtons": [
+      "▶ 播放视频"
+    ],
+    "_shadowRootReadable": true
+  },
+  "navigated": true
+}

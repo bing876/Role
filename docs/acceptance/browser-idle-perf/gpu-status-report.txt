@@ -1,0 +1,63 @@
+
+==============================================================================
+0. 环境自检
+==============================================================================
+  端口占用：无（干净）
+
+==============================================================================
+1. 起 Electron（**不需要登录**，只看 GPU 状态）
+==============================================================================
+  窗口出现：True（1091ms）
+
+==============================================================================
+2. 这次启动有没有回退 --no-sandbox（看日志）
+==============================================================================
+  GPU 崩溃行数：9
+  "GPU process isn't usable" 出现：True
+  回退 --no-sandbox 提示出现：True
+  启动尝试次数（DevTools listening 出现次数）：2
+
+==============================================================================
+3. CDP SystemInfo.getInfo（浏览器级端点）
+==============================================================================
+  浏览器：Chrome/130.0.6723.191
+  GPU 设备数：3
+    · vendorId=4318 deviceId=7170  active=None
+    · vendorId=4318 deviceId=7170  active=None
+    · vendorId=5140 deviceId=140  active=None
+  gl_renderer : None
+  gl_vendor   : None
+  gl_version  : None
+  driverBugWorkarounds: None
+  软件渲染（softwareRendering）= None
+
+  ★ 各特性状态（featureStatus）：
+    2d_canvas                          enabled
+    canvas_oop_rasterization           enabled_on
+    direct_rendering_display_compositor disabled_off_ok
+    gpu_compositing                    enabled
+    multiple_raster_threads            enabled_on
+    opengl                             enabled_on
+    rasterization                      enabled
+    raw_draw                           disabled_off_ok
+    skia_graphite                      disabled_off
+    video_decode                       enabled
+    video_encode                       enabled
+    vulkan                             disabled_off
+    webgl                              enabled
+    webgl2                             enabled
+    webgpu                             enabled
+    webnn                              disabled_off
+
+==============================================================================
+4. 渲染层自报的 WebGL 渲染器（一锤定音）
+==============================================================================
+  主窗口渲染进程：{"webgl": "ok", "unmaskedRenderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 3GB (0x00001C02) Direct3D11 vs_5_0 ps_5_0, D3D11)", "unmaskedVendor": "Google Inc. (NVIDIA)", "version": "WebGL 1.0 (OpenGL ES 2.0 Chromium)", "webgl2": "ok"}
+
+==============================================================================
+5. 结论
+==============================================================================
+  featureStatus.gpu_compositing = enabled
+  featureStatus.rasterization   = enabled
+  WebGL UNMASKED_RENDERER       = ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 3GB (0x00001C02) Direct3D11 vs_5_0 ps_5_0, D3D11)
+  ⇒ **确认是硬件加速**：渲染器是 ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 3GB (0x00001C02) Direct3D11 vs_5_0 ps_5_0, D3D11)。GPU 进程启动时崩溃只是"首次尝试"的问题，回退 --no-sandbox 之后已恢复。

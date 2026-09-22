@@ -1,0 +1,429 @@
+{
+  "app": {
+    "sel": ".wtApp",
+    "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 1164,
+      "h": 721
+    },
+    "width": "1164px",
+    "height": "721px",
+    "borderRadius": "0px",
+    "background": "rgb(0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "14px",
+    "fontWeight": "400",
+    "borderRight": "0px none rgba(255, 255, 255, 0.92)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "X会话知识库插件设置智能体助小助在线新新"
+  },
+  "rail": {
+    "sel": ".wtRail",
+    "rect": {
+      "x": 0,
+      "y": 0,
+      "w": 60,
+      "h": 721
+    },
+    "width": "60px",
+    "height": "721px",
+    "borderRadius": "0px",
+    "background": "rgb(42, 42, 42)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "10px 0px",
+    "gap": "10px",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "14px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(255, 255, 255, 0.04)",
+    "boxShadow": "rgba(255, 255, 255, 0.1) 0px 1px 0px 0px inset",
+    "backdropFilter": "blur(26px) saturate(1.2)",
+    "zIndex": "20",
+    "iconVar": "",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "X会话知识库插件设置"
+  },
+  "railMe": {
+    "sel": ".wtRail__me",
+    "rect": {
+      "x": 9,
+      "y": 10,
+      "w": 41,
+      "h": 41
+    },
+    "width": "41px",
+    "height": "41px",
+    "borderRadius": "11px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "has-image",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgb(255, 255, 255)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(255, 255, 255, 0.12)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "18px",
+    "svgRect": null,
+    "text": "X"
+  },
+  "railNav": {
+    "sel": ".wtRail__nav",
+    "rect": {
+      "x": 0,
+      "y": 72,
+      "w": 59,
+      "h": 194
+    },
+    "width": "59px",
+    "height": "194px",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "10px",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "14px",
+    "fontWeight": "400",
+    "borderRight": "0px none rgba(255, 255, 255, 0.92)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "会话知识库插件设置"
+  },
+  "itemChat": {
+    "sel": "[data-wt-global=\"chat\"]",
+    "rect": {
+      "x": 9,
+      "y": 72,
+      "w": 41,
+      "h": 41
+    },
+    "width": "41px",
+    "height": "41px",
+    "borderRadius": "11px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "has-image",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgb(255, 255, 255)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(0, 0, 0, 0)",
+    "boxShadow": "rgba(255, 255, 255, 0.14) 0px 0px 0px 1.5px inset, rgba(255, 255, 255, 0.1) 0px 1px 0px 0px inset",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "20px",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "会话"
+  },
+  "itemKb": {
+    "sel": "[data-wt-global=\"knowledge\"]",
+    "rect": {
+      "x": 9,
+      "y": 123,
+      "w": 41,
+      "h": 41
+    },
+    "width": "41px",
+    "height": "41px",
+    "borderRadius": "11px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.58)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(0, 0, 0, 0)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "20px",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "知识库"
+  },
+  "itemPlugins": {
+    "sel": "[data-wt-global=\"plugins\"]",
+    "rect": {
+      "x": 9,
+      "y": 174,
+      "w": 41,
+      "h": 41
+    },
+    "width": "41px",
+    "height": "41px",
+    "borderRadius": "11px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.58)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(0, 0, 0, 0)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "20px",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "插件"
+  },
+  "itemSettings": {
+    "sel": "[data-wt-global=\"settings\"]",
+    "rect": {
+      "x": 9,
+      "y": 225,
+      "w": 41,
+      "h": 41
+    },
+    "width": "41px",
+    "height": "41px",
+    "borderRadius": "11px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.58)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(0, 0, 0, 0)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "20px",
+    "svgRect": {
+      "w": 20,
+      "h": 20
+    },
+    "text": "设置"
+  },
+  "sb": {
+    "sel": ".wtSb",
+    "rect": {
+      "x": 60,
+      "y": 0,
+      "w": 270,
+      "h": 721
+    },
+    "width": "270px",
+    "height": "721px",
+    "borderRadius": "0px",
+    "background": "rgb(47, 47, 48)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "12px 12px 8px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "14px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(255, 255, 255, 0.05)",
+    "boxShadow": "rgba(255, 255, 255, 0.1) 0px 1px 0px 0px inset",
+    "backdropFilter": "blur(36px) saturate(1.28)",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": {
+      "w": 16,
+      "h": 16
+    },
+    "text": "智能体助小助在线新新智能体等你填引导表删"
+  },
+  "sbHead": {
+    "sel": ".wtSb__head",
+    "rect": {
+      "x": 72,
+      "y": 12,
+      "w": 245,
+      "h": 30
+    },
+    "width": "245px",
+    "height": "30px",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "8px",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "14px",
+    "fontWeight": "400",
+    "borderRight": "0px none rgba(255, 255, 255, 0.92)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": {
+      "w": 16,
+      "h": 16
+    },
+    "text": "智能体"
+  },
+  "sbRow": {
+    "sel": ".wtSb__row",
+    "rect": {
+      "x": 72,
+      "y": 50,
+      "w": 245,
+      "h": 51
+    },
+    "width": "245px",
+    "height": "51px",
+    "borderRadius": "14px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "4px",
+    "gap": "10px",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "1px solid rgba(0, 0, 0, 0)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": null,
+    "text": "助小助在线"
+  },
+  "sbAvatar": {
+    "sel": ".wtSb__avatar",
+    "rect": {
+      "x": 77,
+      "y": 55,
+      "w": 41,
+      "h": 41
+    },
+    "width": "41px",
+    "height": "41px",
+    "borderRadius": "11px",
+    "background": "rgba(255, 255, 255, 0.16)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "13.3333px",
+    "fontWeight": "400",
+    "borderRight": "0px none rgba(255, 255, 255, 0.92)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": null,
+    "text": "助"
+  },
+  "sbName": {
+    "sel": ".wtSb__name",
+    "rect": {
+      "x": 128,
+      "y": 59,
+      "w": 184,
+      "h": 17
+    },
+    "width": "184px",
+    "height": "17px",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "4px",
+    "color": "rgba(255, 255, 255, 0.92)",
+    "fontSize": "13px",
+    "fontWeight": "600",
+    "borderRight": "0px none rgba(255, 255, 255, 0.92)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": null,
+    "text": "小助"
+  },
+  "sbStatus": {
+    "sel": ".wtSb__status",
+    "rect": {
+      "x": 128,
+      "y": 77,
+      "w": 184,
+      "h": 15
+    },
+    "width": "184px",
+    "height": "15px",
+    "borderRadius": "0px",
+    "background": "rgba(0, 0, 0, 0)",
+    "backgroundImage": "none",
+    "backgroundSize": "auto",
+    "padding": "0px",
+    "gap": "normal",
+    "color": "rgba(255, 255, 255, 0.58)",
+    "fontSize": "11px",
+    "fontWeight": "400",
+    "borderRight": "0px none rgba(255, 255, 255, 0.58)",
+    "boxShadow": "none",
+    "backdropFilter": "none",
+    "zIndex": "auto",
+    "iconVar": "",
+    "svgRect": null,
+    "text": "在线"
+  },
+  "railSvgs": [
+    {
+      "w": 20,
+      "h": 20,
+      "cls": "wtRail__itemIcon"
+    },
+    {
+      "w": 20,
+      "h": 20,
+      "cls": "wtRail__itemIcon"
+    },
+    {
+      "w": 20,
+      "h": 20,
+      "cls": "wtRail__itemIcon"
+    },
+    {
+      "w": 20,
+      "h": 20,
+      "cls": "wtRail__itemIcon"
+    }
+  ]
+}

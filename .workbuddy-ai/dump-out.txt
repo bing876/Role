@@ -1,0 +1,81 @@
+[1] token 已生成
+[2] 启动 pid=24668 端口=True
+[3] inner = 1400x900
+[4] .wtApp = True | .authWrap = False
+
+===== .wtRail =====
+wtRail  [0,0 60x900]
+  wtRail__me  [10,14 41x41]
+    wtRail__meFace  [24,26 12x18]  "X"
+  wtRail__tab wtRail__tab--msg is-selected  [9,72 42x42]
+    wtRail__tabIcon  [13,75 35x35]
+      svg  [13,75 35x35]
+  wtRail__tab wtRail__tab--kb  [10,116 41x41]
+    wtRail__tabIcon wtRail__tabIcon--kb  [19,127 22x20]
+      svg  [19,127 22x20]
+  wtRail__quickAdd  [10,160 41x41]
+    wtRail__qaddH  [24,179 13x3]
+    wtRail__qaddV  [29,174 3x13]
+  wtRail__settings  [20,862 20x14]
+    span  [20,862 20x2]
+    span  [20,868 20x2]
+    span  [20,874 20x2]
+
+===== .wtSb =====
+wtSb  [60,0 270x900]
+  wtSb__searchRow  [60,12 270x36]
+    wtSb__searchPill  [64,12 222x36]
+      wtSb__searchIco  [76,20 20x20]
+      wtSb__searchField  [104,12 144x36]
+    wtSb__addBtn  [293,16 29x29]
+      svg  [299,21 18x18]
+  wtSb__list  [60,52 270x848]
+    wtSb__row wtSb__row--on  [62,56 264x56]
+      wtSb__avatar  [70,64 41x41]
+      wtSb__meta  [122,64 192x41]
+    wtSb__row  [62,116 264x56]
+      wtSb__avatar  [70,124 41x41]
+      wtSb__meta  [122,124 192x41]
+    wtSb__row  [62,176 264x56]
+      wtSb__avatar  [70,184 41x41]
+      wtSb__meta  [122,184 192x41]
+
+===== .inputBar =====
+inputBar  [340,843 936x47]
+  inputBar__attach  [348,851 31x31]
+    inputBar__plus  [356,859 15x15]
+  inputBar__composer  [386,843 800x47]
+    inputBar__field  [386,865 800x25]
+  inputBar__voice  [1186,847 40x40]
+    svg  [1196,857 20x20]
+      rect  [1204,859 5x9]
+      path  [1201,866 10x8]
+  inputBar__send  [1232,849 36x36]
+    svg  [1239,856 22x22]
+      path  [1241,857 18x18]
+
+===== .wtMain =====
+wtMain  [330,0 1070x900]
+  chat  [330,0 1070x843]
+  inputBar  [340,843 936x47]
+    inputBar__attach  [348,851 31x31]
+      inputBar__plus  [356,859 15x15]
+    inputBar__composer  [386,843 800x47]
+      inputBar__field  [386,865 800x25]
+    inputBar__voice  [1186,847 40x40]
+      svg  [1196,857 20x20]
+    inputBar__send  [1232,849 36x36]
+      svg  [1239,856 22x22]
+  plugOutside  [1286,843 104x47]
+    plugBtn  [1286,843 47x47]
+      plugH  [1302,865 16x4]
+      plugV  [1308,859 4x16]
+    plugBtn  [1343,843 47x47]
+      plugH  [1359,865 16x4]
+      plugV  [1365,859 4x16]
+
+===== 页面上所有可见文字 =====
+X | 助 | 小助 | 在线 | 卡 | 卡布 | 已就位 | 电 | 电商小助手 | 已就位
+
+[5] 截图 -> C:\Users\bing\workbuddy-ai\work123\docs\acceptance\ui1_5\dump-app.png 24424 B
+DONE

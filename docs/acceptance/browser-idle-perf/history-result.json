@@ -1,0 +1,62 @@
+{
+ "n": 200,
+ "conversationId": 1358,
+ "A_empty": {
+  "snap": {
+   "cpu": 0.02,
+   "mem": 595.8,
+   "nproc": 5
+  },
+  "frames": {
+   "n": 900,
+   "p50": 16.7,
+   "p95": 16.8,
+   "p99": 16.9,
+   "max": 17.5,
+   "over33": 0,
+   "over100": 0,
+   "fps": 60,
+   "longCount": 0,
+   "longMax": 0,
+   "msgNodes": 0,
+   "domNodes": 59,
+   "hidden": false,
+   "vis": "visible"
+  },
+  "typing": {
+   "n": 25,
+   "p50": 33.3,
+   "p95": 33.6,
+   "max": 33.6
+  }
+ },
+ "B_full": {
+  "snap": {
+   "cpu": 0.04,
+   "mem": 601.4,
+   "nproc": 5
+  },
+  "frames": {
+   "n": 900,
+   "p50": 16.7,
+   "p95": 16.8,
+   "p99": 16.9,
+   "max": 18.1,
+   "over33": 0,
+   "over100": 0,
+   "fps": 60,
+   "longCount": 0,
+   "longMax": 0,
+   "msgNodes": 200,
+   "domNodes": 458,
+   "hidden": false,
+   "vis": "visible"
+  },
+  "typing": {
+   "n": 25,
+   "p50": 33.3,
+   "p95": 33.5,
+   "max": 33.5
+  }
+ }
+}

@@ -1,0 +1,187 @@
+/* modal —— 源自设计基准 workbench.work.html 第 1499-1684 行（原序切分，勿重排） */
+/* ===== 配置中心（创建智能体）：玻璃卡片 + 全屏遮罩（fixed 直挂 body，避开 frame transform 与任何 z-index 遮挡） ===== */
+.config-modal{
+  position:fixed; inset:0; z-index:1100;
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity .2s ease;
+}
+.config-modal.open{ opacity:1; pointer-events:auto; }
+.config-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,0.45); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+.config-card{
+  position:relative; width:340px; max-width:88%;
+  background:rgba(28,28,34,0.55); -webkit-backdrop-filter:blur(30px); backdrop-filter:blur(30px);
+  border:1px solid rgba(255,255,255,0.14); border-radius:16px;
+  box-shadow:0 12px 40px rgba(0,0,0,0.45);
+  padding:20px; color:#fff; font-family:var(--font-ui);
+}
+.config-card h3{ margin:0 0 4px; font-size:17px; font-weight:var(--fw-semibold); }
+.config-card .sub{ margin:0 0 16px; font-size:12px; color:rgba(255,255,255,0.45); }
+.config-field{ margin-bottom:14px; }
+.config-field label{ display:block; font-size:12px; color:rgba(255,255,255,0.6); margin-bottom:6px; }
+.config-field input[type=text], .config-field select, .config-field textarea{
+  width:100%; box-sizing:border-box; border:1px solid rgba(255,255,255,0.14);
+  background:rgba(255,255,255,0.06); color:#fff; border-radius:10px;
+  padding:9px 11px; font-size:13px; font-family:inherit; outline:none;
+  transition:border-color .15s ease;
+}
+.config-field input:focus, .config-field select:focus, .config-field textarea:focus{ border-color:rgba(124,92,255,0.8); }
+.config-field textarea{ resize:none; height:64px; line-height:1.5; }
+.config-row{ display:flex; gap:10px; }
+.config-row .config-field{ flex:1; }
+.config-toggle{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.config-toggle span{ font-size:13px; color:rgba(255,255,255,0.85); }
+.config-toggle input{ appearance:none; -webkit-appearance:none; width:38px; height:22px; border-radius:11px; background:rgba(255,255,255,0.18); position:relative; cursor:pointer; transition:background .18s ease; }
+.config-toggle input::after{ content:''; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background:#fff; transition:transform .18s ease; }
+.config-toggle input:checked{ background:linear-gradient(135deg,#7c5cff,#4f8bff); }
+.config-toggle input:checked::after{ transform:translateX(16px); }
+.config-actions{ display:flex; gap:10px; margin-top:18px; }
+.config-actions button{ flex:1; height:38px; border:0; border-radius:11px; font-size:14px; font-weight:var(--fw-semibold); cursor:pointer; font-family:inherit; }
+.config-cancel{ background:rgba(255,255,255,0.1); color:#fff; }
+.config-cancel:hover{ background:rgba(255,255,255,0.16); }
+.config-create{ background:linear-gradient(135deg,#7c5cff,#4f8bff); color:#fff; box-shadow:var(--panel-shadow); }
+.config-create:hover{ filter:brightness(1.08); }
+
+/* ===== 设置（Round 131）：左下角汉堡打开；双栏玻璃卡片（fixed 直挂 body，同 config-modal 架构）
+   卡片整体 = 输入栏同款材质（rgba(0,0,0,0.2) + 白色外发光）；左栏 = 第一列背景色；右栏 = 工作台背景色；纯文字无 icon ===== */
+.settings-modal{
+  position:fixed; inset:0; z-index:1100;
+  display:flex; align-items:center; justify-content:center;
+  opacity:0; pointer-events:none; transition:opacity .2s ease;
+}
+.settings-modal.open{ opacity:1; pointer-events:auto; }
+.settings-backdrop{ position:absolute; inset:0; background:rgba(0,0,0,0.45); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); transform:translateZ(0); will-change:opacity; }
+.settings-card{
+  position:absolute; left:50%; top:50%;   /* Round 134：绝对定位，支持拖动窗口 */
+  width:730px; height:630px; box-sizing:border-box;   /* 固定 730×630（含 3px 描边） */
+  display:flex; overflow:hidden;
+  transform:translate(-50%, -50%) translateZ(0); will-change:transform;  /* 居中 + 合成层提升；拖动由 JS 改 translate */
+  cursor:grab;   /* 可拖动提示 */
+  /* Round 135：删除全部描边相关 box-shadow（inset 高光 + 白外发光），仅保留单一 3px 白 0.2 描边，与工作台一致 */
+  background:rgba(255,255,255,0.12);
+  border:3px solid rgba(255,255,255,0.2);
+  box-shadow:none;
+  border-radius:20px;
+  color:#fff; font-family:var(--font-ui);
+}
+.settings-card.dragging{ cursor:grabbing; }
+/* 右上 ×：与输入栏「＋」同规格 16px 视觉（16×2.8 CSS 条），距上/距右间距相等（10/10） */
+.settings-close{
+  position:absolute; top:6px; right:10px; z-index:2;   /* Round 134：× 再上移一点 */
+  width:36px; height:36px; border:0; border-radius:50%;
+  background:transparent; cursor:pointer; padding:0;
+}
+.settings-close::before,
+.settings-close::after{
+  content:''; position:absolute; left:50%; top:50%;
+  width:16px; height:2.8px; margin-left:-8px; margin-top:-1.4px;
+  background:rgba(255,255,255,0.88); border-radius:1.4px;
+}
+.settings-close::before{ transform:rotate(45deg); }
+.settings-close::after{ transform:rotate(-45deg); }
+.settings-close:hover{ background:rgba(255,255,255,0.2); }
+/* Round 141：左栏「黑 0.66 → 白 0.66」（用户要求"黑色改成白色，参数不变"）
+   只改基色通道（0,0,0 → 255,255,255）；opacity 0.66 / blur30 / saturate140 / 左缘圆角 20px 全部保留。
+   白底白字不可读 → 文字翻深色（沿用 Round 138 白底面板文字色：默认/激活 0.66/0.92、hover 0.85；
+   hover/active 底色改用深色微染 rgba(0,0,0,0.06/0.1)，保证全宽选中态在白底上可见）。 */
+.settings-nav{
+  flex:0 0 200px; box-sizing:border-box;   /* Round 136 (E)：左半球比例加大 160 → 200 */
+  background:rgba(255,255,255,0.66);
+  -webkit-backdrop-filter:blur(30px) saturate(140%);
+  backdrop-filter:blur(30px) saturate(140%);
+  border-radius:20px 0 0 20px;            /* Round 138 保留：左缘圆角与卡片同款 */
+  display:flex; flex-direction:column; gap:4px;
+  padding:22px 0;
+}
+.settings-nav-item{
+  text-align:left; padding:14px 24px; border:0; border-radius:0;
+  background:transparent; color:rgba(0,0,0,0.66);
+  font-size:15px; font-family:var(--font-ui); font-weight:var(--fw-medium);
+  cursor:pointer; line-height:1.2;
+  transition:background .15s ease, color .15s ease;
+}
+.settings-nav-item:hover{ background:rgba(0,0,0,0.06); color:rgba(0,0,0,0.85); }
+.settings-nav-item.active{ background:rgba(0,0,0,0.1); color:rgba(0,0,0,0.92); font-weight:var(--fw-semibold); }
+/* 右栏 = 工作台背景色（.main-glass 同款 rgba(255,255,255,0.15)） */
+.settings-body{
+  flex:1; box-sizing:border-box; position:relative;
+  background:rgba(255,255,255,0.15);
+  padding:22px 24px; overflow:auto;
+}
+.settings-pane{ display:none; }
+.settings-pane.active{ display:block; }
+.settings-pane h4{ margin:0 0 6px; font-size:16px; font-weight:var(--fw-semibold); }
+.settings-hint{ margin:0 0 18px; font-size:12px; color:rgba(255,255,255,0.5); line-height:18px; }
+.settings-actions{ display:flex; gap:10px; margin-bottom:14px; }
+/* 按钮 = 输入栏 pill 同款材质（黑 20 底 + 白色外发光 + 全圆角） */
+.settings-btn{
+  height:38px; padding:0 18px; border:0; border-radius:19px;
+  background:rgba(0,0,0,0.2); box-shadow:0px 2px 2px rgba(255,255,255,0.25);
+  color:#fff; font-size:13px; font-family:inherit; cursor:pointer;
+}
+.settings-btn:hover{ background:rgba(0,0,0,0.32); }
+.settings-btn.ghost{ background:transparent; box-shadow:inset 0 0 0 1.5px rgba(255,255,255,0.35); }
+.settings-btn.ghost:hover{ background:rgba(255,255,255,0.2); }
+.settings-preview{ width:100%; height:150px; border-radius:10px; background-size:cover; background-position:center; margin-top:4px; }
+.settings-status{ margin:10px 0 0; font-size:12px; color:rgba(255,255,255,0.45); }
+
+/* ===== 工作台壁纸层（Round 131c 重定位）：用户上传，覆盖整个工作台 1200×770，
+   = 工作台最底层背景（第一层壁纸，第二层三列 UI 压在其上）；
+   位于 .main-glass 之上、sidebar / rail / main-area 之下（树序绘制，插在 main-glass 之后即为正确层级） ===== */
+.user-bg-layer{
+  /* Round 145 图层重排：壁纸 = 工作台最底层（玻璃之下，玻璃实时模糊壁纸 = 真实磨砂） */
+  position:absolute; inset:0; z-index:1;
+  border-radius:20px;
+  background-size:cover; background-position:center;
+  display:none;
+}
+.user-bg-layer.has-img{ display:block; }   /* Round 150：背景层恢复——设置里添加的壁纸重新上屏（z1 垫底，在 rail/sidebar 之下） */
+
+/* ===== Frame 25 玻璃内容面（Round 132）：壁纸层之上、三列之下 =====
+   Figma 参数：107.76deg 灰玻璃渐变 + backdrop blur(80) + r25 + flex row + box-sizing/padding:0；
+   尺寸不取 Figma 的 1140×750 —— 按需求自适应工作台 1200×770（inset:0），内容自适应填塞；
+   边角不变：r25 由 .frame 的 overflow:hidden 裁到外描边 r20，工作台外观零变化；
+   不设 pointer-events（保持默认）—— 与 main-glass 同理可发起窗口拖拽，不挡三列事件 */
+.workbench-mat{
+  /* Round 151：Frame 25 玻璃面恢复（用户给定参数）——尺寸不取 Figma 1140×750，inset:0 自适应工作台 1200×770 */
+  position:absolute; inset:0;
+  z-index:2;   /* 壁纸(z1) 之上、三列(z4/5) 之下 */
+  box-sizing:border-box; padding:0;
+  display:flex; flex-direction:row; align-items:flex-start;
+  background:linear-gradient(107.76deg, rgba(167,167,167,0.1) -1.16%, rgba(133,133,133,0.05) 100%);
+  -webkit-backdrop-filter:blur(80px); backdrop-filter:blur(80px);
+  border-radius:20px;
+}
+
+/* (已移除：语音滚动点 voice-dots) */
+
+/* (已移除：语音确认按钮 voice-confirm) */
+
+
+
+/* ===== V3 Drag Architecture Isolation ===== */
+.frame-drag-area{
+  position:absolute;
+  left:0;
+  top:0;
+  width:var(--frame-w);
+  height:44px;
+  z-index:999;
+  cursor:default;   /* Round 125g：删除抓手（grab）→ 普通鼠标指针 */
+  touch-action:none;
+  user-select:none;
+}
+.frame-drag-area.dragging{
+  cursor:default;
+}
+.frame{
+  touch-action:none;
+  /* Round 125i：恢复 user-select:none —— 拖动工作台 / 拖动滚动时不再误选文字。
+     消息正文仍可复制：.ai-seg-text 与 .message.user .message-bubble 各自带 user-select:text
+     （user-select 可被子元素显式覆盖），所以「能复制正文」与「拖动不误选」两者兼得。 */
+  -webkit-user-select:none; user-select:none;
+}
+.splitter{
+  touch-action:none;
+  user-select:none;
+}
+

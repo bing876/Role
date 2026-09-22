@@ -1,0 +1,56 @@
+/* frame —— 源自设计基准 workbench.work.html 第 120-174 行（原序切分，勿重排） */
+/* ---------- 工作台窗口（可拖动） ---------- */
+.frame{
+  position:absolute; left:120px; top:65px;   /* 初始居中于 1440×900：(1440-1200)/2=120, (900-770)/2=65 */
+  width:var(--frame-w); height:var(--frame-h);
+  border:0;
+  border-radius:20px;          /* Round 129d：工作台圆角 25 → 20 */
+  overflow:hidden;
+  background:transparent;   /* Round 146：底色统一由文末 V16 规则承担（!important 深灰实底渐变） */
+  cursor:default;   /* Round 125g：删除抓手（grab）→ 普通鼠标指针 */
+  /* Round 141：重新添加描边（规格：白 0.2 / 宽 4）—— 直接挂 .frame，box-shadow 不受自身 overflow:hidden 裁切、
+     圆角由 border-radius 渲染不压缩、随 frame 拖动 left/top 移动、不"单独浮在桌面" */
+  box-shadow:none;   /* Round 148：工作台整体描边已删 */
+}
+.frame.dragging{ cursor:default; }
+/* (已移除：语音变暗遮罩 frame-dim) */
+
+/* Round 138：统一外描边已迁移到 .frame 的 box-shadow（见 .frame 规则）。
+   原因：box-shadow 不受 .frame 自身 overflow:hidden 裁切、圆角由 border-radius 渲染不压缩，
+   且随 frame 拖动 left/top 一起移动（不再"单独浮在桌面"）。故删除原 .stage::after。 */
+
+/* ---------- 1. 主玻璃区 (Rectangle 1) — 全框底色，三列共享同一背景、第一列右边缘与主玻璃无缝衔接 ---------- */
+.main-glass{
+  position:absolute; left:0; top:0;
+  width:var(--frame-w); height:var(--frame-h);
+  z-index:2;   /* Round 145 图层重排：玻璃底层（壁纸之上，实时模糊壁纸） */
+  display:none;   /* Round 146：玻璃底层已删——底色改由 .frame 实底承担；元素保留防 JS 空引用 */
+  /* 玻璃材质独立：无纯色、无渐变底色；颜色完全由 Desktop Layer 透过玻璃产生
+     （Desktop 浅色→浅灰白玻璃 / 深色→深灰玻璃 / 彩色→环境色偏移） */
+  background:rgba(255,255,255,0.15);
+  -webkit-backdrop-filter:blur(80px) saturate(180%);
+  backdrop-filter:blur(80px) saturate(180%);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.30),     /* 顶缘高光 */
+    inset 1px 0 0 rgba(255,255,255,0.12),     /* 左缘微光 */
+    inset -1px 0 0 rgba(255,255,255,0.12),    /* 右缘微光 */
+    inset 0 -1px 0 rgba(255,255,255,0.08),    /* 底缘微光 */
+    inset 0 0 60px rgba(255,255,255,0.05);    /* 内阴影（厚度感） */
+}
+/* ---------- 2. 侧栏面板 (Rectangle 3) — 与主玻璃同高同顶，无 3px 内缩，贴合无缝隙 ----------
+   Round 137：深色磨砂玻璃（核心参数：107.76deg 对角渐变 + blur30 saturate140），与 .rail / .settings-nav 统一 */
+.sidebar{
+  position:absolute; left:var(--rail-w); top:0;
+  width:var(--sb-w); height:var(--frame-h);         /* Round 157：回退内缩（sidebar 60..310） */
+  z-index:5;   /* Round 145 图层重排：第二列背景层（第一列背景之上、组件之下） */
+  background:linear-gradient(107.76deg, rgba(0,0,0,0.34) -1.16%, rgba(0,0,0,0.22) 100%);   /* Round 137 */
+  -webkit-backdrop-filter:blur(30px) saturate(140%);
+  backdrop-filter:blur(30px) saturate(140%);
+}
+/* 第三列（主区）：随分隔条自动伸缩，left/width 由 JS 控制 */
+.main-area{
+  position:absolute; left:calc(var(--rail-w) + var(--sb-w)); top:0;
+  width:calc(var(--frame-w) - var(--rail-w) - var(--sb-w)); height:var(--frame-h);   /* Round 157：回退内缩，与 JS applySplit(INSET=0) 一致 */
+  z-index:5;   /* Round 145 图层重排：组件层（与第二列同层，DOM 靠后自然在上；splitter z:6 仍在其上可拖） */
+}
+

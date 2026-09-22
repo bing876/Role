@@ -1,0 +1,110 @@
+{
+  "a_no_tab": {
+    "frames": {
+      "n": 600,
+      "p50": 16.7,
+      "p95": 16.8,
+      "p99": 17.1,
+      "max": 17.9,
+      "over33": 0,
+      "over100": 0,
+      "fps": 60.1,
+      "longCount": 0,
+      "longTotalMs": 0,
+      "longMaxMs": 0,
+      "hidden": false,
+      "vis": "visible"
+    },
+    "perf": {
+      "TaskDuration": 0.2057,
+      "ScriptDuration": 0.0514,
+      "LayoutDuration": 0,
+      "RecalcStyleDuration": 0,
+      "JSHeapUsedSize": 199504,
+      "Nodes": 0,
+      "LayoutCount": 0,
+      "RecalcStyleCount": 0
+    },
+    "typing": {
+      "n": 25,
+      "p50": 33.3,
+      "p95": 34.1,
+      "max": 34.8,
+      "total": 832,
+      "domValue": "压测24",
+      "reactValue": "压测24"
+    }
+  },
+  "b_one_tab_full": {
+    "frames": {
+      "n": 600,
+      "p50": 16.7,
+      "p95": 16.9,
+      "p99": 17.2,
+      "max": 19.4,
+      "over33": 0,
+      "over100": 0,
+      "fps": 60,
+      "longCount": 0,
+      "longTotalMs": 0,
+      "longMaxMs": 0,
+      "hidden": false,
+      "vis": "visible"
+    },
+    "perf": {
+      "TaskDuration": 0.2176,
+      "ScriptDuration": 0.059,
+      "LayoutDuration": 0.0,
+      "RecalcStyleDuration": 0.0,
+      "JSHeapUsedSize": -2064820,
+      "Nodes": -77,
+      "LayoutCount": 0,
+      "RecalcStyleCount": 0
+    },
+    "typing": {
+      "n": 25,
+      "p50": 33.3,
+      "p95": 33.6,
+      "max": 33.8,
+      "total": 822,
+      "domValue": "压测24",
+      "reactValue": "压测24"
+    }
+  },
+  "c_one_tab_bg": {
+    "frames": {
+      "n": 600,
+      "p50": 16.7,
+      "p95": 16.9,
+      "p99": 17.5,
+      "max": 19,
+      "over33": 0,
+      "over100": 0,
+      "fps": 60,
+      "longCount": 0,
+      "longTotalMs": 0,
+      "longMaxMs": 0,
+      "hidden": false,
+      "vis": "visible"
+    },
+    "perf": {
+      "TaskDuration": 0.2378,
+      "ScriptDuration": 0.0628,
+      "LayoutDuration": 0.0,
+      "RecalcStyleDuration": 0.0,
+      "JSHeapUsedSize": -10636,
+      "Nodes": 0,
+      "LayoutCount": 0,
+      "RecalcStyleCount": 0
+    },
+    "typing": {
+      "n": 25,
+      "p50": 33.3,
+      "p95": 33.4,
+      "max": 33.5,
+      "total": 827,
+      "domValue": "压测24",
+      "reactValue": "压测24"
+    }
+  }
+}

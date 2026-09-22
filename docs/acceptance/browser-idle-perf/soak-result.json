@@ -1,0 +1,555 @@
+{
+ "soakSecs": 300,
+ "samples": [
+  {
+   "t": 0.0,
+   "cpu": 0.06,
+   "mem": 705.4,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 152.9,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 119.1,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.6,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 115.2,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 154.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.4,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 30.0,
+   "cpu": 0.03,
+   "mem": 688.9,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 151.7,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 119.1,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.6,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 113.4,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 140.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.9,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 60.0,
+   "cpu": 0.05,
+   "mem": 685.2,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 151,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 118.4,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 112.2,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 139.3,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.8,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 90.0,
+   "cpu": 0.03,
+   "mem": 683,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 151.2,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 118.4,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 112,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.7,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 120.0,
+   "cpu": 0.03,
+   "mem": 684.3,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 152,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 118.6,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 112.4,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.6,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 150.0,
+   "cpu": 0.06,
+   "mem": 684.9,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 152.4,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 118.6,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 112.6,
+     "cpuPct": 0.03
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.6,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 180.0,
+   "cpu": 0.04,
+   "mem": 685.4,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 152.6,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 118.6,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 112.9,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.6,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 210.0,
+   "cpu": 0.03,
+   "mem": 684.3,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 153,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 116.7,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 113.3,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.6,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 240.0,
+   "cpu": 0.04,
+   "mem": 684.5,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 153,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 116.7,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 113.5,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.6,
+     "cpuPct": 0
+    }
+   ]
+  },
+  {
+   "t": 270.0,
+   "cpu": 0.04,
+   "mem": 685.3,
+   "heapMB": 0.0,
+   "nodes": null,
+   "docs": null,
+   "layoutCount": null,
+   "recalcCount": null,
+   "taskDur": null,
+   "scriptDur": null,
+   "fps": null,
+   "p95": null,
+   "over33": null,
+   "frames": null,
+   "procs": [
+    {
+     "pid": 37012,
+     "type": "Browser",
+     "memMB": 153.1,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 36828,
+     "type": "GPU",
+     "memMB": 116.7,
+     "cpuPct": 0.01
+    },
+    {
+     "pid": 16032,
+     "type": "Utility",
+     "name": "Network Service",
+     "memMB": 61.5,
+     "cpuPct": 0
+    },
+    {
+     "pid": 29280,
+     "type": "Tab",
+     "memMB": 114.2,
+     "cpuPct": 0.02
+    },
+    {
+     "pid": 36708,
+     "type": "Tab",
+     "memMB": 137.2,
+     "cpuPct": 0
+    },
+    {
+     "pid": 34620,
+     "type": "Tab",
+     "memMB": 102.6,
+     "cpuPct": 0
+    }
+   ]
+  }
+ ]
+}

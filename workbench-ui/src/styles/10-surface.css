@@ -1,0 +1,384 @@
+/* surface —— 源自设计基准 workbench.work.html 第 1685-2067 行（原序切分，勿重排） */
+/* ===== V9 (repurposed) — 头像态：点击头像进入/退出，iOS 风格微缩放 ===== */
+/* Round 148：点击头像动效已删（agent 态 1.05 缩放） */
+/* ===== V10 Search Component — pixel-reference from supplied 4 PNG states ===== */
+.search-pill.search-component{
+  position:absolute;
+  left:calc(var(--rail-w) + 8px);   /* Round 157：回退（sidebar 回到 60 起点） */
+  top:12px;
+  height:36px;                       /* Round 36：44 → 36 压缩高度 */
+  border:0;
+  border-radius:18px;                /* h/2 圆角 */
+  overflow:hidden;
+  cursor:text;
+  padding:0;
+  background-color:transparent;
+  background-repeat:no-repeat;
+  background-position:center;
+  background-size:100% 100%;
+  box-shadow:none;
+  animation:none !important;
+  transition:opacity .35s ease;
+  isolation:isolate;
+}
+
+/* Initial / start state = supplied State=Default.png */
+.search-pill.search-component[data-state="default"]{
+  background-image:url('../assets/images/img-11.png');
+}
+
+/* Empty but focused = supplied State=Focused.png */
+.search-pill.search-component[data-state="focused"]{
+  background-image:url('../assets/images/img-12.png');
+}
+
+/* Typing / Filled use the same exact supplied shell with the text removed,
+   then real typed text is rendered above it. */
+.search-pill.search-component[data-state="typing"],
+.search-pill.search-component[data-state="filled"]{
+  background-image:url('../assets/images/img-13.png');
+}
+
+.search-pill.search-component .search-field{
+  position:absolute;
+  left:40px;
+  right:38px;                /* 右侧留给 ×(12~30)，38 起不重叠 */
+  top:0;
+  height:36px;               /* Round 36：44 → 36 压缩高度 */
+  line-height:36px;
+  margin:0;
+  padding:0;
+  border:0;
+  outline:0;
+  background:transparent;
+  box-shadow:none;
+  border-radius:0;
+
+  font-family:var(--font-ui);
+  font-style:normal;
+  font-weight:var(--fw-regular);
+  font-size:16px;
+  letter-spacing:.01em;
+
+  color:transparent;
+  caret-color:transparent;
+  text-rendering:geometricPrecision;
+  z-index:2;
+}
+
+/* Actual user text appears only after typing begins. */
+.search-pill.search-component[data-state="typing"] .search-field,
+.search-pill.search-component[data-state="filled"] .search-field{
+  color:rgb(199,199,208);
+}
+
+.search-pill.search-component[data-state="typing"] .search-field{
+  caret-color:rgb(199,199,208);
+}
+
+.search-pill.search-component[data-state="filled"] .search-field{
+  caret-color:transparent;
+}
+
+/* Transparent hit target aligned to the supplied clear-circle artwork. */
+/* (旧 .search-clear 规则已删除：基线版 × 定义见上方「清空 ×：参考 baseline v21」区块) */
+
+/* Completely disable legacy icon/placeholder/breathing rules. */
+.search-pill.search-component .search-ico{ display:none !important; }
+.search-pill.search-component.breathing{ animation:none !important; }
+.search-pill.search-component .search-field::placeholder{ color:transparent !important; }
+
+.frame.collapsed .search-pill.search-component{
+  opacity:0;
+  pointer-events:none;
+}
+
+
+/* ===== V11 Search cleanup: black 20%, Chinese placeholder, no embedded English ===== */
+.search-pill.search-component,
+.search-pill.search-component[data-state="default"],
+.search-pill.search-component[data-state="focused"],
+.search-pill.search-component[data-state="typing"],
+.search-pill.search-component[data-state="filled"]{
+  background-image:none !important;
+  background:rgba(0,0,0,0.20) !important;
+  box-shadow:var(--panel-shadow) !important;
+  border:0 !important;
+}
+
+.search-pill.search-component .search-ico-v11{
+  position:absolute;
+  left:13px;
+  top:50%;
+  width:18px;
+  height:18px;
+  transform:translateY(-50%);
+  display:block;
+  pointer-events:none;
+  z-index:3;
+}
+.search-pill.search-component .search-ico-v11 svg{
+  width:18px;
+  height:18px;
+  display:block;
+}
+
+.search-pill.search-component .search-field{
+  left:40px !important;
+  right:38px !important;        /* 右侧留给 ×(12~30)，与上方一致 */
+  color:rgba(255,255,255,0.90) !important;
+  caret-color:rgba(255,255,255,0.90) !important;
+  font-family:var(--font-ui) !important;
+  font-size:16px !important;
+  letter-spacing:0 !important;
+}
+
+.search-pill.search-component .search-field::placeholder{
+  color:rgba(255,255,255,0.48) !important;
+  opacity:1 !important;
+}
+
+.search-pill.search-component:focus-within .search-ico-v11 circle,
+.search-pill.search-component:focus-within .search-ico-v11 path{
+  stroke:rgba(255,255,255,0.90);
+}
+
+/* (旧第二条重复 .search-clear 规则已删除：基线版 × 定义见上方「清空 ×：参考 baseline v21」区块) */
+
+/* Focused empty state keeps normal placeholder; no English source text is ever rendered. */
+.search-pill.search-component[data-state="focused"] .search-clear{
+  display:none;
+}
+
+
+/* ===== V12 Workbench base fill ===== */
+.frame{
+  background:rgba(224,224,224,0.30) !important; /* #E0E0E0 / 30% */
+}
+
+
+/* ===== V13 Search icon slightly larger ===== */
+.search-pill.search-component .search-ico-v11{
+  width:20px !important;
+  height:20px !important;
+  left:12px !important;
+}
+.search-pill.search-component .search-ico-v11 svg{
+  width:20px !important;
+  height:20px !important;
+}
+
+
+/* ===== V14 Search corner radius ===== */
+.search-pill.search-component{
+  border-radius:14px !important;
+}
+
+
+/* ===== V15 visionOS chat bubble component ===== */
+
+/* User requested the search field to become a full pill again. */
+.search-pill.search-component{
+  border-radius:50px !important;
+}
+
+/* Conversation canvas: scales naturally with the current width of column 3. */
+.chat-stream{
+  left:0 !important;
+  right:0 !important;
+  top:62px !important;
+  bottom:196px !important;
+  padding:18px clamp(18px,3.2%,28px) 22px !important;
+  gap:14px !important;
+}
+
+/* One message = avatar + bubble. Width follows the available conversation width. */
+.msg-row{
+  width:100%;
+  display:flex;
+  align-items:flex-end;
+  gap:8px;
+  flex:0 0 auto;
+}
+
+.msg-row.ai{
+  justify-content:flex-start;
+}
+
+.msg-row.user{
+  justify-content:flex-end;
+}
+
+.msg-avatar{
+  width:32px;
+  height:32px;
+  flex:0 0 32px;
+  border-radius:50%;
+  overflow:hidden;
+  background:rgba(224,224,224,.88);
+  align-self:flex-end;
+}
+
+.msg-avatar img{
+  width:100%;
+  height:100%;
+  display:block;
+  object-fit:cover;
+}
+
+/* Reference Frame 1227 is 8× the logical UI size:
+   256px avatar -> 32px, 352px bubble -> 44px minimum height. */
+.msg{
+  position:relative;
+  display:flex;
+  align-items:center;
+  min-height:44px;
+  max-width:min(72%, 620px);
+  padding:10px 15px;
+  margin:0;
+  border-radius:14px;
+  color:rgba(255,255,255,.94);
+  font-family:var(--font-ui);
+  font-size:15px;
+  line-height:1.45;
+  font-weight:var(--fw-regular);
+  word-break:break-word;
+
+  /* Requested white 20% fill. */
+  background:rgba(255,255,255,.20) !important;
+  border:1px solid rgba(255,255,255,.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.10),
+    0 1px 8px rgba(0,0,0,.06);
+  -webkit-backdrop-filter:blur(22px) saturate(118%);
+  backdrop-filter:blur(22px) saturate(118%);
+}
+
+/* visionOS-like speech tail, scaled from the supplied reference. */
+.msg-row.ai .msg::before{
+  content:"";
+  position:absolute;
+  left:-7px;
+  bottom:1px;
+  width:14px;
+  height:13px;
+  background:rgba(255,255,255,.20);
+  border-bottom-left-radius:12px 10px;
+  transform:skewX(-28deg);
+  transform-origin:right bottom;
+  z-index:-1;
+}
+
+.msg-row.user .msg::after{
+  content:"";
+  position:absolute;
+  right:-7px;
+  bottom:1px;
+  width:14px;
+  height:13px;
+  background:rgba(255,255,255,.20);
+  border-bottom-right-radius:12px 10px;
+  transform:skewX(28deg);
+  transform-origin:left bottom;
+  z-index:-1;
+}
+
+/* Keep the reference composition: AI avatar at left, user avatar at right. */
+.msg-row.user .msg-avatar{
+  order:2;
+}
+
+.msg-row.user .msg{
+  order:1;
+}
+
+/* Thinking state stays inside the same visionOS bubble. */
+.msg.ai.thinking{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-width:58px;
+  gap:6px;
+}
+
+.msg.ai.thinking .tdot{
+  width:5px;
+  height:5px;
+  border-radius:50%;
+  background:rgba(255,255,255,.88);
+  animation:visionThink 1.15s ease-in-out infinite;
+}
+
+.msg.ai.thinking .tdot:nth-child(2){ animation-delay:.14s; }
+.msg.ai.thinking .tdot:nth-child(3){ animation-delay:.28s; }
+
+@keyframes visionThink{
+  0%,100%{ transform:translateY(0) scale(.88); opacity:.42; }
+  50%{ transform:translateY(-3px) scale(1); opacity:1; }
+}
+
+/* Proportional adaptation as column 3 becomes narrow. */
+@media (max-width:900px){
+  .msg{
+    max-width:76%;
+  }
+}
+
+@media (max-width:720px){
+  .chat-stream{
+    padding-left:16px !important;
+    padding-right:16px !important;
+  }
+  .msg-avatar{
+    width:30px;
+    height:30px;
+    flex-basis:30px;
+  }
+  .msg{
+    max-width:78%;
+    min-height:42px;
+    padding:9px 13px;
+  }
+}
+
+
+/* ===== V16 Restore previous desktop/workbench background style ===== */
+/* Round 147：底色层已删（用户裁决"不需要新设计"，L0 一并去掉）—— 恢复原 transparent */
+.frame{
+  background:transparent !important;
+}
+
+/* ===== Round 147：组件层最上（修 icon 消失） =====
+   根因：.menu-btn / .search-pill / .agent-chip / .rail-quick-add 是 .frame 的直接子元素（z-auto），
+   历史靠 DOM 顺序浮在列背景之上；Round 145 给列背景加了 z:4/z:5 后，z-auto 的 icon 被盖住。
+   修复：显式提到 z:7（高于列背景 4/5、组件 5、splitter 6）。 */
+.menu-btn,.agent-chip,.rail-quick-add,.search-pill,.tab{
+  z-index:7;
+}   /* Round 148/149：frame 级组件统一 z7（148 补 .tab 消息/联系人；149 见下） */
+
+/* Round 149：冻结组件反遮挡（组件本身不动，只修绘制层级）
+   · .hamburger（第一列底部设置 icon）z-auto 被 rail z4 盖住
+   · .agent-list（含切换后的智能体头像 .agent-chip）整组 z-auto 排在 rail 之下，
+     其子级 z7 被困在自身层叠上下文里出不来 → 整组提 z7 */
+.hamburger,.agent-list{
+  z-index:7 !important;   /* !important：.agent-list 在文件后段还有一条 z-index:3 的历史规则会盖掉普通声明 */
+}
+
+/* Round 152：内描边（原桌面注入层并入源文件）—— .frame 子元素，inset 4px 白 0.2，圆角 20，点击穿透，永远不被 stage 裁切 */
+.frame-internal-stroke{
+  position:absolute; inset:0;
+  border-radius:20px;
+  box-shadow:inset 0 0 0 4px rgba(255,255,255,0.2), inset 0 1px 0 rgba(255,255,255,0.18);   /* Round 158 玻璃拟态：顶缘 1px 微光受光面 */
+  pointer-events:none;
+  z-index:100;
+}
+
+
+/* ===== V17 Search component: hide "搜索" while typing ===== */
+.search-pill.search-component[data-state="typing"] .search-field::placeholder,
+.search-pill.search-component[data-state="filled"] .search-field::placeholder{
+  color:transparent !important;
+  opacity:0 !important;
+}
+
+

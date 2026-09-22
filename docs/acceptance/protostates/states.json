@@ -1,0 +1,182 @@
+[
+  {
+    "id": "S01",
+    "group": "A 列0 轨道",
+    "title": "默认（项目模式头像）",
+    "trigger": "打开原型即是",
+    "file": "protostates/S01.png",
+    "bytes": 46568,
+    "proof": "frame",
+    "note": "出厂默认；列0 顶部为紫渐变方块头像"
+  },
+  {
+    "id": "S02",
+    "group": "A 列0 轨道",
+    "title": "智能体头像模式",
+    "trigger": "点击列0 顶部头像 .menu-btn",
+    "file": "protostates/S02.png",
+    "bytes": 33500,
+    "proof": "frame agent collapsed",
+    "note": "frame 加上 .agent"
+  },
+  {
+    "id": "S03",
+    "group": "A 列0 轨道",
+    "title": "列0 智能体瓦片列表",
+    "trigger": "R201：头像切换到 agents 模式",
+    "file": "protostates/S03.png",
+    "bytes": 30973,
+    "proof": "frame rail-agents-mode agent collapsed tiles=3",
+    "note": "frame 加 .rail-agents-mode"
+  },
+  {
+    "id": "S04",
+    "group": "A 列0 轨道",
+    "title": "知识库 · 文档列表",
+    "trigger": "点击列0 知识库图标 #railKb",
+    "file": "protostates/S04.png",
+    "bytes": 43200,
+    "proof": "frame kb-open cards=4",
+    "note": "frame 加 .kb-open"
+  },
+  {
+    "id": "S05",
+    "group": "A 列0 轨道",
+    "title": "知识库 · 文档编辑",
+    "trigger": "知识库里点开一篇文档",
+    "file": "protostates/S05.png",
+    "bytes": 52336,
+    "proof": "kb-doc.hidden=false",
+    "note": "kb-list 隐藏 / kb-doc 显示"
+  },
+  {
+    "id": "S06",
+    "group": "B 列1 侧栏",
+    "title": "搜索中（带清除按钮）",
+    "trigger": "在侧栏搜索框输入关键词",
+    "file": "protostates/S06.png",
+    "bytes": 46883,
+    "proof": "clear=block",
+    "note": "search-clear 由 none 变 block"
+  },
+  {
+    "id": "S07",
+    "group": "B 列1 侧栏",
+    "title": "联系人任务态（进行中/完成）",
+    "trigger": "智能体后台跑任务时自动进入",
+    "file": "protostates/S07.png",
+    "bytes": 49522,
+    "proof": "3 running",
+    "note": "running=进行中 / done=完成"
+  },
+  {
+    "id": "S08",
+    "group": "B 列1 侧栏",
+    "title": "联系人选中态",
+    "trigger": "点击某个联系人",
+    "file": "protostates/S08.png",
+    "bytes": 46883,
+    "proof": "1 selected",
+    "note": "单选高亮"
+  },
+  {
+    "id": "S09",
+    "group": "B 列1 侧栏",
+    "title": "会话浮窗（拖出独立聊天）",
+    "trigger": "双击联系人，或长按 550ms 后拖出",
+    "file": "protostates/S09.png",
+    "bytes": 48163,
+    "proof": "0 float",
+    "note": "原型 openFloat()：dblclick 或长按 550ms"
+  },
+  {
+    "id": "S10",
+    "group": "B 列1 侧栏",
+    "title": "侧栏拖宽（拖 splitter）",
+    "trigger": "拖动列1/列2 之间分隔条",
+    "file": "protostates/S10.png",
+    "bytes": 46574,
+    "proof": "259px",
+    "note": "双击分隔条可复位到 270px"
+  },
+  {
+    "id": "S11",
+    "group": "C 列2 主区",
+    "title": "空态（无消息）",
+    "trigger": "刚打开 / 新建会话",
+    "file": "protostates/S11.png",
+    "bytes": 46568,
+    "proof": "容器待确认",
+    "note": ""
+  },
+  {
+    "id": "S12",
+    "group": "C 列2 主区",
+    "title": "输入栏已填 + 上下文 tray",
+    "trigger": "在输入栏打字",
+    "file": "protostates/S12.png",
+    "bytes": 48274,
+    "proof": "\"帮我分析一下这次的数据\"",
+    "note": ""
+  },
+  {
+    "id": "S13",
+    "group": "C 列2 主区",
+    "title": "附件 / 工具弹层",
+    "trigger": "点击输入栏最左侧 ＋ 按钮",
+    "file": "protostates/S13.png",
+    "bytes": 72196,
+    "proof": "attach-popup open items=5",
+    "note": ""
+  },
+  {
+    "id": "S14",
+    "group": "C 列2 主区",
+    "title": "语音输入条",
+    "trigger": "点击输入栏麦克风按钮",
+    "file": "protostates/S14.png",
+    "bytes": 45640,
+    "proof": "voice-bar open",
+    "note": ""
+  },
+  {
+    "id": "S15",
+    "group": "C 列2 主区",
+    "title": "富内容消息块（表格/文档/代码）",
+    "trigger": "AI 回复里含结构化内容块",
+    "file": "protostates/S15.png",
+    "bytes": 69719,
+    "proof": "table:done doc:done code:loading code:error",
+    "note": "为了拿到活着的消息容器，这里先进入双栏再注入消息块"
+  },
+  {
+    "id": "S16",
+    "group": "D 弹窗层",
+    "title": "智能体创建卡片（原型已隐藏）",
+    "trigger": "侧栏 ＋ → 新建智能体",
+    "file": "protostates/S16.png",
+    "bytes": 46568,
+    "proof": "agent-create display=none",
+    "note": "★ 原型里 .agent-create 带 display:none !important，正常交互点不出来"
+  },
+  {
+    "id": "S17",
+    "group": "D 弹窗层",
+    "title": "新建项目卡片",
+    "trigger": "列0 项目模式 → 新建项目",
+    "file": "protostates/S17.png",
+    "bytes": 49210,
+    "proof": "xyzcp-mask on",
+    "note": ""
+  },
+  {
+    "id": "S18",
+    "group": "D 弹窗层",
+    "title": "双栏对照（两个会话并排）",
+    "trigger": "有 ≥2 个智能体后点双栏入口",
+    "file": "protostates/S18.png",
+    "bytes": 60198,
+    "proof": "frame dual panes=2",
+    "note": "frame 加 .dual"
+  }
+]

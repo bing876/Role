@@ -1,0 +1,7 @@
+﻿PID=12924  Name=bash.exe  Parent=33512
+   Cmd="C:\Users\bing\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\bin\..\usr\bin\bash.exe" -c "__codebuddy_payload=$1; shift; __codebuddy_script=$(<\"$__codebuddy_payload\") || exit 125; unset __codebuddy_payload; eval \"$__codebuddy_script\"" C:\Users\bing\.workbuddy-ai\binaries\PortableGit\versions\1.2.0\bin\bash.exe /c/Users/bing/AppData/Local/Temp/codebuddy-shell-payload-21828-RvNW5s/script.sh
+PID=7404  Name=python.exe  Parent=12924
+   Cmd=C:\Users\bing\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe -u scripts/verify/run-pause-resume.py
+PID=23168  (已退出)
+PID=20008  Name=WorkBuddy.exe  Parent=14152
+   Cmd=J:\1\新建文件夹\WorkBuddy\WorkBuddy.exe J:\1\新建文件夹\WorkBuddy\resources\app.asar.unpacked\cli\bin\windows-child-process-containment.cjs --codebuddy-windows-job-launcher --parent-pid 14152 -- C:\WINDOWS\system32\cmd.exe /d /s /c "C:\Users\bing\.workbuddy\plugins\cache\workbuddy-builtin\weixinpay\1.6.109/bin/run-node.cmd C:\Users\bing\.workbuddy\plugins\cache\workbuddy-builtin\weixinpay\1.6.109/dist/mcp-server.mjs"

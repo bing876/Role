@@ -1,0 +1,163 @@
+/* rail —— 源自设计基准 workbench.work.html 第 1243-1404 行（原序切分，勿重排） */
+/* ---------- 3. 左侧玻璃栏 (Group 7 / Rectangle 2) — 无独立边框（外描边统一由 .stage::after 提供）；
+   右边缘做水平渐变到透明，与主玻璃区无缝贴合，第一/三列共享同一条外描边 ---------- */
+.rail{
+  position:absolute; left:0; top:0;
+  width:var(--rail-w); height:var(--frame-h);          /* Round 157：回退内缩 —— 恢复原宽度/布局（rail 0..60） */
+  z-index:4;   /* Round 145 图层重排：第一列背景层（玻璃之上、第二列背景之下） */
+  /* 左缘两个圆角 20px = 与 .frame 外描边 radius 20 对齐（右侧贴 sidebar 直角衔接） */
+  border-radius: 20px 0 0 20px;   /* Round 157：回退 */
+  /* Round 138：回滚 Round 137 深色参数 —— 恢复 Frame 42 浅色材质（只取背景渐变 + blur30；不取 77px 圆角 / 尺寸比例） */
+  background:linear-gradient(107.76deg, rgba(255,255,255,0.15) -1.16%, rgba(255,255,255,0.1) 100%);
+  -webkit-backdrop-filter:blur(30px);
+  backdrop-filter:blur(30px);
+}
+.ico{ position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; overflow:visible; }
+.menu-btn{
+  position:absolute; left:calc((var(--rail-w) - var(--rail-avatar)) / 2); top:14px;   /* Round 157：回退 */   /* 居中：60 - 38 = 22 → 11 */
+  width:var(--rail-avatar); height:var(--rail-avatar); border-radius:11px; border:0; cursor:pointer;   /* Round 107：恢复基线 r11（与 .agent-chip 同头像圆角 token；非星星）；Round 129：42 → 38 */
+  background:linear-gradient(135deg,#7c5cff 0%,#4f8bff 100%);
+  display:grid; place-items:center; overflow:hidden;
+  aspect-ratio:1 / 1;
+  /* Round 148：点击头像动效已删（transition） */
+}
+.menu-btn .user-avatar-ico{ color:#fff; font-weight:var(--fw-medium); font-size:16px; line-height:1; font-family:inherit; user-select:none; }   /* Round 129：42 → 38 同步缩字 18 → 16 */
+/* Round 93：menu-btn 有真人头像（灰色母版）时 —— 隐藏字母、背景由 JS 内联 url 铺满 */
+.menu-btn.has-photo .user-avatar-ico{ display:none; }
+/* Round 148：点击头像动效/背景已删（:active 缩放、selected 外圈） */
+/* 折叠态时头像方块变「抽屉按钮」(白色汉堡)，平时隐藏 */
+.menu-btn .drawer-ico{
+  display:none;
+  position:absolute;
+  width:22px;
+  height:18px;          /* Round 129：跟随 menu-btn 42→38 等比 25×20 → 22×18（约 0.88） */
+  left:50%;
+  top:50%;
+  transform:translate(-50%,-50%);
+  align-items:center;
+  justify-content:center;
+  pointer-events:none;
+  user-select:none;
+}
+.menu-btn .drawer-ico img{
+  display:block;
+  width:22px;
+  height:18px;
+  object-fit:contain;
+  image-rendering:auto;
+}
+.frame.collapsed .menu-btn .drawer-ico{ display:block; }
+/* 折叠 / 头像态：menu-btn 始终是用户头像（渐变圆），不再变透明、不再切抽屉 */
+/* Round 148：点击头像后的背景已删（collapsed 态紫蓝渐变） */
+/* Tab 按钮：34×34 区域，off 默认图 + on 图叠在 ::after 上做交叉淡入淡出
+   PNG 原始 136×136（按钮的 4×），background-size:34px 严格 1:1 还原。
+   选中态 = on 图淡入（0.35s）；取消选中 = on 图淡出（原本的慢慢退回去），无圆底无紫色。 */
+.tab{
+  position:absolute; left:calc((var(--rail-w) - 34px) / 2); width:34px; height:34px;   /* Round 157：回退 */   /* (rail-34)/2 居中：60 → 13 */
+  background-color:transparent !important;   /* 显式覆盖 <button> 默认 buttonface 灰底，确保 PNG 图标可见 */
+  background-size:34px 34px; background-repeat:no-repeat; background-position:center;
+  border:0; padding:0; cursor:pointer;
+  transition: opacity .28s ease, transform .35s ease;
+}
+.tab.selected{ transform: scale(1.06); }   /* 选中时轻微放大 */
+.tab:hover{ filter: brightness(1.18); }     /* 悬停提亮（不影响透明区） */
+/* 悬停高亮：图标背后圆润边角的正方形（squircle）高亮块，默认隐藏，hover 淡入 */
+.tab::before{
+  content:""; position:absolute; z-index:-1;
+  left:50%; top:50%; transform:translate(-50%,-50%);
+  width:42px; height:42px; border-radius:14px;          /* 圆润边角的正方形高亮 */
+  background:rgba(255,255,255,0.16);
+  opacity:0; transition:opacity .2s ease; pointer-events:none;
+}
+.tab:hover::before{ opacity:1; }
+/* off 图：各 tab 自身背景 */
+.tab-msg{     background-image:url('../assets/images/img-01.png'); }
+.tab-contact{ background-image:url('../assets/images/img-02.png'); }
+.tab-fav{     background-image:url('../assets/images/img-03.png'); }
+.tab-file{    background-image:url('../assets/images/img-04.png'); }
+.tab-moments{ background-image:url('../assets/images/img-05.png'); }
+/* on 图：叠在 ::after，默认透明，选中淡入；取消选中淡出（退回去） */
+.tab::after{
+  content:""; position:absolute; inset:0;
+  background-size:34px 34px; background-repeat:no-repeat; background-position:center;
+  background-color:transparent;
+  opacity:0; transition: opacity .35s ease; pointer-events:none;
+}
+.tab-msg::after{     background-image:url('../assets/images/img-06.png'); }
+.tab-contact::after{ background-image:url('../assets/images/img-07.png'); }
+.tab-fav::after{     background-image:url('../assets/images/img-08.png'); }
+.tab-file::after{    background-image:url('../assets/images/img-09.png'); }
+.tab-moments::after{ background-image:url('../assets/images/img-10.png'); }
+.tab.selected::after{ opacity:1; }
+/* 选中态：持续显示圆角方块高亮（hover 同款 squircle），让默认选中的「消息」一眼可辨 */
+/* 默认激活态不需要持续高亮（避免视觉过载；只有 hover 才有 squircle 反馈，选中态靠 ::after 彩色图标体现） */
+/* 微信风未读角标：右上角小红点（无数字，纯圆形），双层 ring 切出玻璃底色
+   - 内层细白圈让红点"浮"在任意背景之上
+   - 外层暗圈与玻璃底色无缝咬合，避免刺眼 */
+.tab .badge{
+  position:absolute; top:-3px; right:-3px;
+  width:10px; height:10px; border-radius:50%; background:#fa5151;
+  box-shadow:
+    0 0 0 1.5px rgba(255,255,255,.85),       /* 内圈：白环，反差突出红点 */
+    0 0 0 3px rgba(20,22,30,.55);            /* 外圈：暗环，咬合玻璃底色 */
+  pointer-events:none; z-index:2;
+}
+.tab .badge:empty{ /* 默认就是空 span，靠 background 单独成点 */ }
+/* 三条横线：锚定到工作台底部（左下区域），与第一列其他 icon 拉开距离，单独成一组 */
+.hamburger{ position:absolute; left:calc((var(--rail-w) - 20px) / 2); bottom:24px; width:20px; height:13.8px; cursor:pointer; }   /* Round 157：回退 */  /* (rail-20)/2 居中：60 → 20 */
+.hamburger span{ position:absolute; left:0; width:20px; height:2.6px; background:#fff; border-radius:1.3px; }
+.hamburger span:nth-child(1){ top:0; }
+.hamburger span:nth-child(2){ top:5.6px; }
+.hamburger span:nth-child(3){ top:11.2px; }
+
+/* 全屏（头像）态：agent-list 末尾的「快捷创建智能体」方块（与头像 / agent-chip 同规格 42×42 r11）
+   - 作为 .agent-list 的最后一个 flex 子项：之后每新建一个智能体，它自动往下退一格
+   - 随 .agent-list 一起显隐（非全屏态 agent-list 为 display:none，无需单独隐藏）
+   - 背部 白10 / 外圈描边 白55 / 中间白色「+」（伪元素绘制，3px 保证低 DPI 可见） */
+.rail-quick-add{
+  position:relative; flex:0 0 var(--rail-avatar);
+  width:var(--rail-avatar); height:var(--rail-avatar); box-sizing:border-box; border-radius:11px;   /* Round 129：与 menu-btn / agent-chip 同 42 → 38；r11 保持 */
+  background:rgba(255,255,255,0.10);
+  border:2px solid rgba(255,255,255,0.55);
+  cursor:pointer; padding:0; z-index:4;
+  display:grid; place-items:center;
+  transition:transform .12s ease, background .15s ease;
+}
+/* Round 127：+ 改由子元素绘制 —— [data-tip]::after 曾被全局 tooltip 占用（Round 131 已删，写法保留不回改），
+   伪元素竖线会被吞掉只剩横线（呈「—」），所以用 <i> 子元素替代 ::before/::after */
+.rail-quick-add .qadd-h,
+.rail-quick-add .qadd-v{
+  position:absolute; left:50%; top:50%;
+  background:rgba(255,255,255,0.92); border-radius:2px;
+  transform:translate(-50%,-50%);
+}
+.rail-quick-add .qadd-h{ width:13px; height:3px; }   /* Round 129：跟随尺寸缩 15 → 13（+ 横竖保持 3px 粗细保低 DPI 可见） */
+.rail-quick-add .qadd-v{ width:3px;  height:13px; }
+.rail-quick-add:hover{ background:rgba(255,255,255,0.18); }
+.rail-quick-add:active{ transform:scale(0.92); }
+
+/* 全屏态新建智能体：新方块 spring 弹入（与进入头像态的 chipSpring 同一条 .34,1.56,.64,1 曲线）
+   ＋ 方块因被新 chip 挤到下一格，布局自然下移一格，形成「刚建的就在 ＋ 上面」的因果感 */
+@keyframes agentChipPop{
+  0%   { transform:scale(0.5);  opacity:0; }
+  60%  { transform:scale(1.10); opacity:1; }
+  100% { transform:scale(1);    opacity:1; }
+}
+.agent-chip.agent-pop{ animation:agentChipPop .40s cubic-bezier(.34,1.56,.64,1) both; }
+
+/* 右侧关闭按钮：放大、置于最右上角（顶/右等距 18px）、默认完全隐藏、仅鼠标悬停在按钮自身才显示（不再随 .frame:hover 弹出） */
+.more-btn{
+  position:absolute; right:18px; top:18px; width:48px; height:48px;
+  background:transparent; border:0; cursor:pointer; border-radius:10px;
+  color:rgba(255,255,255,0.85); font-size:30px; line-height:48px; text-align:center;
+  opacity:0; transition:opacity .25s ease, color .2s ease, background .2s ease;
+  z-index:1000;
+}
+/* 只有鼠标直接悬停在 × 本身时才显现（避免鼠标在第三列任何位置都触发） */
+.more-btn:hover{ opacity:1; color:#fff; background:rgba(255,255,255,.08); }
+/* (已移除：语音按钮 voice-btn 及其音频竖条/发送/思考方块/取消/确认等状态) */
+/* (已移除：底部输入胶囊 input-pill / input-field) */
+  .search-pill{
+  position:absolute; left:calc(var(--rail-w) + 8px); top:12px; height:36px;   /* Round 157：回退 */
+  background:rgba(0,0,0,0.2); box-shadow:var(--panel-shadow); border-radius:18px; cursor:text;
+}

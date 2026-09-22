@@ -1,0 +1,38 @@
+{
+  "rect": {
+    "x": 173,
+    "y": 98
+  },
+  "r1": {
+    "hits": 1,
+    "any": 1,
+    "last": "t"
+  },
+  "r2": {
+    "hits": 1,
+    "any": 1,
+    "last": "t"
+  },
+  "r3": {
+    "hits": 1,
+    "any": 1,
+    "last": "t"
+  },
+  "r4": {
+    "hits": 1,
+    "any": 1,
+    "last": "t"
+  },
+  "lines": [
+    "webview guests: 1",
+    "目标中心（guest 内坐标）= {\"x\":173,\"y\":98}",
+    "  用例1 正常显示: {\"hits\":1,\"any\":1,\"last\":\"t\"}  -> OK 点到了",
+    "  用例2 pointer-events:none: {\"hits\":1,\"any\":1,\"last\":\"t\"}  -> OK 点到了",
+    "  用例3 恢复显示: {\"hits\":1,\"any\":1,\"last\":\"t\"}  -> OK 点到了",
+    "  用例4 display:none: {\"hits\":1,\"any\":1,\"last\":\"t\"}  -> OK 点到了",
+    "",
+    "=== 结论 ===",
+    "  pointer-events:none 时点击：仍然有效",
+    "  display:none 时点击：仍然有效"
+  ]
+}

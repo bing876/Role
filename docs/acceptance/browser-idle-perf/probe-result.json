@@ -1,0 +1,97 @@
+{
+  "phases": {
+    "p0": [
+      1789858371.684,
+      1789858411.684
+    ],
+    "p1": [
+      1789858419.819,
+      1789858494.82
+    ],
+    "p2": [
+      1789858496.959,
+      1789858536.959
+    ]
+  },
+  "summary": {
+    "p0": {
+      "n": 40,
+      "cpuMean": 0.097,
+      "cpuMax": 1.18,
+      "memMean": 570.0,
+      "perProc": {
+        "Browser|": {
+          "cpuMean": 0.056,
+          "cpuMax": 0.62
+        },
+        "GPU|": {
+          "cpuMean": 0.011,
+          "cpuMax": 0.03
+        },
+        "Utility|Network Service": {
+          "cpuMean": 0.001,
+          "cpuMax": 0.03
+        },
+        "Tab|": {
+          "cpuMean": 0.015,
+          "cpuMax": 0.92
+        }
+      }
+    },
+    "p1": {
+      "n": 74,
+      "cpuMean": 0.23,
+      "cpuMax": 0.62,
+      "memMean": 681.1,
+      "perProc": {
+        "Browser|": {
+          "cpuMean": 0.053,
+          "cpuMax": 0.45
+        },
+        "GPU|": {
+          "cpuMean": 0.01,
+          "cpuMax": 0.01
+        },
+        "Utility|Network Service": {
+          "cpuMean": 0.001,
+          "cpuMax": 0.04
+        },
+        "Tab|": {
+          "cpuMean": 0.055,
+          "cpuMax": 0.23
+        }
+      }
+    },
+    "p2": {
+      "n": 40,
+      "cpuMean": 0.063,
+      "cpuMax": 0.12,
+      "memMean": 677.7,
+      "perProc": {
+        "Browser|": {
+          "cpuMean": 0.053,
+          "cpuMax": 0.11
+        },
+        "GPU|": {
+          "cpuMean": 0.01,
+          "cpuMax": 0.01
+        },
+        "Utility|Network Service": {
+          "cpuMean": 0.0,
+          "cpuMax": 0.0
+        },
+        "Tab|": {
+          "cpuMean": 0.0,
+          "cpuMax": 0.01
+        }
+      }
+    }
+  },
+  "ipcCounts": {
+    "getTaskState": 0,
+    "browserThrottle": 0,
+    "resourceInstances": 0,
+    "t0": 1789858371641
+  },
+  "spanSec": 165.3
+}

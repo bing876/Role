@@ -1,0 +1,10 @@
+import { createRequire } from 'node:module';
+console.log('STEP1 require');
+const require = createRequire(import.meta.url);
+const { chromium } = require('C:/Users/bing/.workbuddy-ai/binaries/node/workspace/node_modules/playwright-core');
+console.log('STEP2 required ok, launching');
+const exe = 'C:/Users/bing/AppData/Local/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-win64/chrome-headless-shell.exe';
+const b = await chromium.launch({ executablePath: exe, headless: true, args: ['--no-sandbox'] });
+console.log('STEP3 launched');
+await b.close();
+console.log('PW_OK');

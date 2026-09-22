@@ -1,0 +1,37 @@
+{
+  "lines": [
+    "=== iframe 注入方式 × 人工点击（真鼠标事件）能不能穿透 ===",
+    "",
+    "  elementFromPoint 在主文档里永远只返回 IFRAME 本身 —— 所以它对\"能不能点进去\"",
+    "  **没有判断力**。唯一权威判据是：点完之后 iframe 内部的计数有没有涨。",
+    "",
+    "A. src=data:URL",
+    "    坐标=(30,311)  src=(空)",
+    "    contentDocument 可读? true   location=about:blank",
+    "    ★ 真鼠标点击后 iframe 内 hits = undefined   ★ 点不中",
+    "",
+    "B. srcdoc",
+    "    坐标=(90,311)  src=(空)",
+    "    contentDocument 可读? true   location=about:srcdoc",
+    "    ★ 真鼠标点击后 iframe 内 hits = 0   ★ 点不中",
+    "",
+    "C. src=blob:URL",
+    "    坐标=(150,311)  src=(空)",
+    "    contentDocument 可读? true   location=about:blank",
+    "    ★ 真鼠标点击后 iframe 内 hits = undefined   ★ 点不中",
+    "",
+    "D. document.write",
+    "    坐标=(210,311)  src=(空)",
+    "    contentDocument 可读? true   location=about:blank",
+    "    ★ 真鼠标点击后 iframe 内 hits = undefined   ★ 点不中",
+    "",
+    "=== 判据解读 ===",
+    "  四种注入方式里，人工点击能穿透的有 0/4 种",
+    "  ★ 存在点不中的注入方式 → **iframe 边界确实会挡人工点击**（至少在某些注入方式下）。",
+    "    这可能就是用户说的「视频点不了」：真实站点的播放器 iframe 恰好属于点不中的那一类。"
+  ],
+  "fails": 0,
+  "results": {
+    "f-srcdoc": 0
+  }
+}

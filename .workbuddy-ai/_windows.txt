@@ -1,0 +1,10 @@
+﻿17240	抖音	593x581	-61,463
+17240	Pinterest - (8) Pinterest	1400x1039	524,0
+17240	WorkBuddy AI	1695x934	571,461
+17240	Workbench Frame74 — Desktop Simulator	1488x988	561,860
+17240	AI 工作台	1180x760	614,105
+17240	设置	484x926	0,1
+17240	设置	500x935	197,67
+17240	Windows 输入体验	1920x1080	0,0
+17240	Program Manager	1920x1080	0,0
+count=9

@@ -1,0 +1,23 @@
+# 删除清单（走回收站，可恢复）  生成于 2026-09-20 02:59:28
+
+FAIL	C:\Users\bing\workbuddy-ai\work123\_rollback-backup-20260918\release-frameless
+FAIL	C:\Users\bing\workbuddy-ai\work123\_rollback-backup-20260918\release-ui15
+FAIL	C:\Users\bing\workbuddy-ai\work123\_e2e-profile
+OK	C:\Users\bing\workbuddy-ai\work123\_probe-profile-fresh
+OK	C:\Users\bing\workbuddy-ai\work123\NVIDIA Corporation
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__
+OK	C:\Users\bing\workbuddy-ai\work123\_rollback-backup-20260918\verify\__pycache__
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\cdp-probe.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\e2e-race-probe.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\e2e-revert-tests.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\live-demo.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\pause-resume-scenarios.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\pause-resume-tests.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\react-input-probe.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\run-task-e2e.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\send-ab-probe.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\send-gate-probe.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\scripts\verify\__pycache__\ui1-desktop-tests.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\_rollback-backup-20260918\verify\__pycache__\cdp-probe.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\_rollback-backup-20260918\verify\__pycache__\live-demo.cpython-313.pyc
+OK	C:\Users\bing\workbuddy-ai\work123\_rollback-backup-20260918\verify\__pycache__\ui1-desktop-tests.cpython-313.pyc

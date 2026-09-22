@@ -1,0 +1,491 @@
+/*
+ * 第 18 步 · 浏览器模块的样式（第 19 步「钉住的工作区好看一点」只改这个文件）。
+ *
+ * 边界：这里只管浏览器工作区（顶栏 tab + URL 栏 + 舞台），不碰左栏 / 聊天 / 输入条。
+ */
+
+/*
+ * 这一块是 .middle（纵向 flex）的**兄弟**节点，不在 .chat 的滚动区里 ——
+ * 这就是「钉住」：滚聊天不会把它滚没。
+ * 高度写死（不参与 flex 伸缩），免得被聊天内容挤成一条线。
+ */
+.browserPanel {
+  /* 第 25 步：面板是 .browserLayer 的 flex 子项，铺满整层
+     （层本身绝对定位铺满中栏会话区，见 src/styles.css 的 .browserLayer） */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #f7f7f8;
+}
+
+/* ---- 顶栏：当前智能体一张页一个 tab（第 20 步起没有数量上限）+ 「＋」+ 展开/收起 ---- */
+.browserPanel__tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+/* 这是谁的浏览器（第 20 步：一个智能体一套独立浏览器，得一眼看出切没切） */
+.browserPanel__who {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-weak);
+  padding: 2px 7px;
+  border: 1px solid #e2e2e4;
+  border-radius: 999px;
+  background: #fff;
+  white-space: nowrap;
+}
+
+.browserTab {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  /* 页数一多就按比例收窄（min-width 兜底），否则一排 tab 会把右边的「＋ / 收起」顶出可视区、
+     鼠标够不到。第 20 步取消了活页上限，所以这里只靠收窄扛住，不再有「顶掉最旧」。 */
+  flex: 0 1 auto;
+  min-width: 56px;
+  max-width: 190px;
+  padding: 3px 4px 3px 6px;
+  border: 1px solid #dcdcdc;
+  border-radius: 8px 8px 0 0;
+  background: #efeff1;
+}
+.browserTab--on {
+  background: #fff;
+  border-color: var(--accent);
+}
+
+.browserTab__label {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  /* min-width:0 才能让省略号真的生效（flex 子项的自动最小宽度是 min-content，
+     nowrap 文字会顶住不收窄）。 */
+  min-width: 0;
+  max-width: 140px;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* 驾驶员正在这张页上操作 */
+.browserTab__run {
+  color: #0a7;
+  font-size: 10px;
+}
+
+/*
+ * 休眠标记 —— 对齐 Chrome「内存节省模式」的样子。
+ *
+ * Chrome 的做法：页一休眠，就把**网站原本的 favicon 换掉**，改成一个灰色圆底 +
+ * 内存条图形的小徽标（内存条 = 一排小方块，旁边一条竖着的电容）。
+ * 尺寸与 favicon 一致（16px），所以标签宽度不会跳。
+ *
+ * 这里同样放在 favicon 的位置（label 最前面），而不是另起一个突兀的角标 ——
+ * 「这一页睡了」这件事在 Chrome 里就是靠图标位表达的。
+ */
+.browserTab__sleep {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+/* 浅休眠：图标浅一点（省了 CPU，但页面还活着） */
+.browserTab__sleep--shallow {
+  opacity: 0.55;
+}
+
+/* 深休眠：图标实一点（页面真的被卸载了） */
+.browserTab__sleep--deep {
+  opacity: 0.85;
+}
+
+/* 整张页处于休眠态时，标题也压暗一档，像 Chrome 那样「退到背景里」 */
+.browserTab--asleep .browserTab__label {
+  color: var(--text-weak);
+}
+
+/* 休眠页的底色略沉，与活跃页拉开层次 */
+.browserTab--asleep {
+  background: #e9e9ec;
+}
+.browserTab--asleep.browserTab--on {
+  background: #fff;
+}
+
+.browserTab__x {
+  border: none;
+  background: transparent;
+  color: var(--text-weak);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 4px;
+}
+.browserTab__x:hover {
+  background: #e5e5e6;
+  color: #b91c1c;
+}
+
+.browserTab__add {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #dcdcdc;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.browserTab__add:hover {
+  background: #f0f0f1;
+}
+
+.browserPanel__toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.browserPanel__toggle:hover {
+  background: #f0f0f1;
+}
+
+/* ---- URL 栏 ---- */
+.browserPanel__urlbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 6px;
+}
+.browserPanel__scheme {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+.browserPanel__url {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid #dcdcdc;
+  border-radius: 999px;
+  outline: none;
+}
+.browserPanel__url:focus {
+  border-color: var(--accent);
+}
+.browserPanel__count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-weak);
+}
+/* 休眠数：比页数更弱一档（它是补充信息，不该抢页数的注意力） */
+.browserPanel__asleep {
+  color: #9a9a9f;
+}
+
+/*
+ * 第 24 步：**自动休眠开关**。
+ *
+ * 视觉上刻意做得「很轻」—— 它是设了就不太动的偏好，不该和页数提示抢注意力。
+ * 关掉时压暗一档（一眼能看出"我现在没在省内存"）。
+ */
+.browserPanel__sleepToggle {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-family: inherit;
+  line-height: 1.5;
+  color: #7a7a82;
+  background: transparent;
+  border: 1px solid #e4e4e9;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.browserPanel__sleepToggle:hover {
+  color: #4a4a50;
+  border-color: #c9c9d0;
+  background: #f6f6f8;
+}
+/* 关掉状态：压暗 + 虚线边，和"开着"在余光里就能区分 */
+.browserPanel__sleepToggle--off {
+  color: #b0b0b6;
+  border-style: dashed;
+  border-color: #dcdce1;
+}
+/* 页数偏多的提示（第 20 步：只提示，不关页） */
+.browserPanel__warn {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #b45309;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+/*
+ * 舞台：**所有** tab 的 webview 都在这里铺满，只靠 z-index 分层。
+ * 切到后面那张必须仍然活着、仍然有真实尺寸——尺寸为 0 时驾驶在它上面点不中任何元素。
+ */
+/*
+ * 第 25 步：舞台**铺满**面板剩余高度（不再是固定的 180px / 56vh）。
+ *
+ * ★ 它是 webview 的尺寸来源（webview 用 inset:0 + 100% 铺满它），
+ *   所以必须**始终有真实高度** —— 任何情况下都不许变成 0：
+ *   驾驶的点击坐标来自页内 getBoundingClientRect，尺寸归零会让坐标全部失效。
+ *   "退出全屏"是通过整层 opacity:0 实现的（见 .browserLayer--bg），不经过这里。
+ */
+.browserPanel__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  background: #fff;
+}
+
+.browserPanel__empty {
+  padding: 12px;
+  color: var(--text-weak);
+}
+
+/*
+ * 注意：不要把 <webview> 设成 display:block —— Electron 的 webview 靠 flex 才能把
+ * guest 视图撑开，写成 block 会让 guest 卡在 150px 高（实测）。
+ */
+.browserPanel__view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  border: 0;
+  z-index: 1;
+}
+/* 当前那张放到最前面（切换 tab = 换 z-index，不新开 BrowserWindow） */
+.browserPanel__view--on {
+  z-index: 2;
+}
+/**
+ * 第 21 步：**别的智能体的页不露脸**。
+ * 只改 opacity / pointer-events —— **不动 display、不动尺寸、不卸载**，
+ * 所以那张页仍然活着、仍然有真实尺寸，它上面跑着的那一路驾驶照样点得中。
+ */
+.browserPanel__view--off {
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/*
+ * 第 24 步：**深休眠的占位卡**。
+ *
+ * 这张卡是**替代 <webview>** 出现的 —— 那一下 Electron 会把 guest 渲染进程收掉，
+ * 内存是真的还回去了（这也是"深休眠"存在的唯一理由）。
+ * 所以它必须是**不透明**的：底下已经没有任何页面了。
+ */
+.browserPanel__slept {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #fafafb;
+  color: #6b6b72;
+  text-align: center;
+  padding: 16px;
+}
+/* 别的智能体睡着的页同样不露脸（与 .browserPanel__view--off 一致的语义） */
+.browserPanel__slept--off {
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+.browserPanel__slept .browserTab__sleep {
+  color: #8e8e94;
+  opacity: 0.85;
+}
+.browserPanel__slept .browserTab__sleep svg {
+  /* 占位卡上的图标放大一档（标签上 14px 在这儿太小） */
+  width: 26px;
+  height: 26px;
+}
+.browserPanel__sleptTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: #4a4a50;
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.browserPanel__sleptHint {
+  font-size: 12px;
+  color: #9a9aa0;
+}
+.browserPanel__sleptBtn {
+  margin-top: 2px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #3c3c43;
+  background: #fff;
+  border: 1px solid #e0e0e5;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.browserPanel__sleptBtn:hover {
+  border-color: #c6c6cd;
+  background: #f6f6f8;
+}
+
+/* ===========================================================================
+ * 第 27 步 · 人工介入求助卡片
+ *
+ * 两块东西：① 求助卡模式（浏览器层怎么"只露出求助的那一张页"）；
+ *          ② 卡片本身（聊天流里的那张卡）。
+ * 边界：这里只改可见性与几何，**绝不碰 display:none 到 webview 上**（那会卸载 guest），
+ *      也绝不给 webview 任何 0×0 尺寸（那会让驾驶点击坐标全部失效）。
+ * =========================================================================== */
+
+/* ---- ① 求助卡模式：顶栏 / 地址栏让位，舞台透明 ---- */
+.browserPanel--embed {
+  /* 层已经透明了，面板自己也不能再铺底色（否则会把聊天整个盖住） */
+  background: transparent;
+}
+/* 顶栏与地址栏在求助卡模式下没有意义：它们是"浏览器工作区"的一部分，
+   而此刻用户看的是聊天卡片。它们不承载任何 guest，display:none 是安全的。 */
+.browserPanel--embed .browserPanel__tabs,
+.browserPanel--embed .browserPanel__urlbar {
+  display: none;
+}
+.browserPanel--embed .browserPanel__stage {
+  background: transparent;
+}
+/* 求助卡里那一块：几何由 HelpCard 量出来后内联写入，这里只定"它是个可交互的窗口" */
+.browserPanel__view--embed {
+  z-index: 3;
+  pointer-events: auto;
+  border-radius: 8px;
+  background: #fff;
+}
+
+/* ---- ② 卡片本体（渲染在聊天流里，跟着消息一起滚）---- */
+.helpCard {
+  margin: 8px 4px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  /* 蓝色系 = AI 主动求助（与"用户接管"的琥珀色系刻意区分开，这是本步的核心验收点） */
+  border: 1px solid #7f77dd;
+  background: #eeedfe;
+  color: #26215c;
+}
+.helpCard__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.helpCard__icon {
+  font-size: 15px;
+  line-height: 1;
+}
+.helpCard__title {
+  font-size: 13px;
+  font-weight: 500;
+}
+/* 「AI 发起」这四个字是给用户判断"谁在等谁"用的，不能省 */
+.helpCard__who {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: #eeedfe;
+  background: #534ab7;
+}
+.helpCard__kind {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: #3c3489;
+  background: #cecbf6;
+}
+.helpCard__body {
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.helpCard__hint {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #534ab7;
+}
+/*
+ * ★ 这块是"窗口"，不是输入区 —— 它必须是空 div。
+ * 高度写死，好让"页面那一小块"有稳定的落点（几何每帧跟着它走）。
+ */
+.helpCard__stage {
+  position: relative;
+  height: 320px;
+  margin: 8px 0;
+  border-radius: 8px;
+  border: 1px dashed #afa9ec;
+  background: #fff;
+  overflow: hidden;
+}
+.helpCard__stageHint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #888780;
+}
+.helpCard__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.helpCard__done {
+  background: #534ab7;
+  border-color: #534ab7;
+  color: #fff;
+}
+.helpCard__note {
+  color: #534ab7;
+}

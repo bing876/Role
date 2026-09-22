@@ -1,0 +1,24 @@
+{
+  "lines": [
+    "真 http 服务已起：A(宿主+同源)=127.0.0.1:53932   B(跨源)=localhost:53933",
+    "",
+    "C. 宿主页按钮      → 坐标=(84,506)   hits=1  点得中",
+    "A. 同源 iframe      → 坐标=(203,126)  内部就绪=1  有按钮=YES",
+    "                    真鼠标点击后 hits=1  内部 title=HITS-1  **点得中**",
+    "B. 跨源 iframe      → 坐标=(203,355)  主文档读 contentDocument = null",
+    "                    真鼠标点击后（从该帧自己的上下文读）hits=unreadable  （读不到或点不中）",
+    "                    找到的跨源执行上下文数 = 0",
+    "",
+    "=== 结论 ===",
+    "  基线（宿主页按钮）        hits = 1",
+    "  同源 iframe 内按钮        hits = 1",
+    "  跨源 iframe 内按钮        hits = unreadable",
+    "",
+    "  → 同源点得中、跨源存疑 → 需要用 CDP frame 级读取才能下定论。"
+  ],
+  "results": {
+    "host": 1,
+    "same": 1,
+    "cross": "unreadable"
+  }
+}

@@ -1,0 +1,462 @@
+{
+  "proto": {
+    "rail": {
+      "rect": {
+        "w": 60,
+        "h": 900,
+        "x": 44,
+        "y": 44
+      },
+      "background": "rgba(0, 0, 0, 0)",
+      "bgImage": "linear-gradient(rgb(42, 42, 42) 0%, rgb(42, 42, 42) 100%)",
+      "borderRight": "0px none",
+      "boxShadow": "none",
+      "backdropFilter": "blur(10px) saturate(1.2)",
+      "zIndex": "4",
+      "position": "absolute",
+      "borderRadius": "20px 0px 0px 20px"
+    },
+    "sb": {
+      "rect": {
+        "w": 270,
+        "h": 900,
+        "x": 104,
+        "y": 44
+      },
+      "background": "rgba(0, 0, 0, 0)",
+      "borderRight": "0px none",
+      "boxShadow": "rgb(47, 47, 48) -1px 0px 0px 0px",
+      "backdropFilter": "blur(14px) saturate(1.28)"
+    },
+    "row": {
+      "rect": {
+        "w": 264,
+        "h": 56,
+        "x": 106,
+        "y": 100
+      },
+      "height": "56px",
+      "padding": "0px 12px 0px 8px",
+      "margin": "2px 4px 2px 2px",
+      "gap": "11px",
+      "borderRadius": "14px",
+      "background": "rgb(69, 69, 74)"
+    },
+    "avatar": {
+      "rect": {
+        "w": 41,
+        "h": 41,
+        "x": 114,
+        "y": 107.5
+      },
+      "borderRadius": "10px"
+    },
+    "name": {
+      "fontSize": "16px",
+      "fontWeight": "600",
+      "lineHeight": "22px",
+      "color": "rgba(255, 255, 255, 0.92)"
+    },
+    "status": {
+      "fontSize": "13px",
+      "lineHeight": "16px",
+      "color": "rgba(255, 255, 255, 0.58)"
+    },
+    "railButtons": []
+  },
+  "react": {
+    "rail": {
+      "rect": {
+        "w": 60,
+        "h": 721,
+        "x": 0,
+        "y": 0
+      },
+      "background": "rgb(42, 42, 42)",
+      "bgImage": "none",
+      "borderRight": "0px none",
+      "boxShadow": "none",
+      "backdropFilter": "blur(10px) saturate(1.2)",
+      "zIndex": "20",
+      "position": "relative",
+      "borderRadius": "0px"
+    },
+    "sb": {
+      "rect": {
+        "w": 270,
+        "h": 721,
+        "x": 60,
+        "y": 0
+      },
+      "background": "rgb(47, 47, 48)",
+      "borderRight": "0px none",
+      "boxShadow": "rgb(47, 47, 48) -1px 0px 0px 0px",
+      "backdropFilter": "blur(14px) saturate(1.28)"
+    },
+    "row": {
+      "rect": {
+        "w": 246,
+        "h": 56,
+        "x": 74,
+        "y": 52
+      },
+      "height": "56px",
+      "padding": "0px 12px 0px 8px",
+      "margin": "2px 4px 2px 2px",
+      "gap": "11px",
+      "borderRadius": "14px",
+      "background": "rgb(69, 69, 74)"
+    },
+    "avatar": {
+      "rect": {
+        "w": 41,
+        "h": 41,
+        "x": 83,
+        "y": 59.5
+      },
+      "borderRadius": "10px"
+    },
+    "name": {
+      "fontSize": "16px",
+      "fontWeight": "600",
+      "lineHeight": "22px",
+      "color": "rgba(255, 255, 255, 0.92)"
+    },
+    "status": {
+      "fontSize": "13px",
+      "lineHeight": "16px",
+      "color": "rgba(255, 255, 255, 0.58)"
+    },
+    "icons": [
+      {
+        "key": "chat",
+        "box": {
+          "w": 41,
+          "h": 41
+        },
+        "svg": {
+          "w": 28,
+          "h": 28
+        },
+        "ratio": 68.3,
+        "iconVar": "28px",
+        "borderRadius": "10px"
+      },
+      {
+        "key": "knowledge",
+        "box": {
+          "w": 41,
+          "h": 41
+        },
+        "svg": {
+          "w": 28,
+          "h": 28
+        },
+        "ratio": 68.3,
+        "iconVar": "28px",
+        "borderRadius": "10px"
+      },
+      {
+        "key": "plugins",
+        "box": {
+          "w": 41,
+          "h": 41
+        },
+        "svg": {
+          "w": 28,
+          "h": 28
+        },
+        "ratio": 68.3,
+        "iconVar": "28px",
+        "borderRadius": "10px"
+      },
+      {
+        "key": "settings",
+        "box": {
+          "w": 41,
+          "h": 41
+        },
+        "svg": {
+          "w": 28,
+          "h": 28
+        },
+        "ratio": 68.3,
+        "iconVar": "28px",
+        "borderRadius": "10px"
+      }
+    ]
+  },
+  "table": [
+    {
+      "item": "列0 背景色",
+      "proto": "rgba(0, 0, 0, 0)",
+      "react": "rgb(42, 42, 42)",
+      "same": false,
+      "note": ""
+    },
+    {
+      "item": "列0 border-right",
+      "proto": "0px none",
+      "react": "0px none",
+      "same": true,
+      "note": "原型无分隔线"
+    },
+    {
+      "item": "列0 box-shadow",
+      "proto": "none",
+      "react": "none",
+      "same": true,
+      "note": "原型无内高光"
+    },
+    {
+      "item": "列0 backdrop-filter",
+      "proto": "blur(10px) saturate(1.2)",
+      "react": "blur(10px) saturate(1.2)",
+      "same": true,
+      "note": "blur 10px"
+    },
+    {
+      "item": "列0 z-index",
+      "proto": "4",
+      "react": "20",
+      "same": false,
+      "note": "★保留 20"
+    },
+    {
+      "item": "列0 position",
+      "proto": "absolute",
+      "react": "relative",
+      "same": false,
+      "note": "★保留 flex"
+    },
+    {
+      "item": "列0 列宽",
+      "proto": "60",
+      "react": "60",
+      "same": true,
+      "note": "60px"
+    },
+    {
+      "item": "列0 宽×高",
+      "proto": "60x900",
+      "react": "60x721",
+      "same": false,
+      "note": ""
+    },
+    {
+      "item": "列1 背景色",
+      "proto": "rgba(0, 0, 0, 0)",
+      "react": "rgb(47, 47, 48)",
+      "same": false,
+      "note": ""
+    },
+    {
+      "item": "列1 border-right",
+      "proto": "0px none",
+      "react": "0px none",
+      "same": true,
+      "note": "原型无分隔线"
+    },
+    {
+      "item": "列1 box-shadow",
+      "proto": "rgb(47, 47, 48) -1px 0px 0px 0px",
+      "react": "rgb(47, 47, 48) -1px 0px 0px 0px",
+      "same": true,
+      "note": "同色 1px 收边"
+    },
+    {
+      "item": "列1 backdrop-filter",
+      "proto": "blur(14px) saturate(1.28)",
+      "react": "blur(14px) saturate(1.28)",
+      "same": true,
+      "note": "blur 14px"
+    },
+    {
+      "item": "列1 列宽",
+      "proto": "270",
+      "react": "270",
+      "same": true,
+      "note": "270px"
+    },
+    {
+      "item": "列1 宽×高",
+      "proto": "270x900",
+      "react": "270x721",
+      "same": false,
+      "note": ""
+    },
+    {
+      "item": "行 高",
+      "proto": "56px",
+      "react": "56px",
+      "same": true,
+      "note": "56px"
+    },
+    {
+      "item": "行 padding",
+      "proto": "0px 12px 0px 8px",
+      "react": "0px 12px 0px 8px",
+      "same": true,
+      "note": "0 12px 0 8px"
+    },
+    {
+      "item": "行 margin",
+      "proto": "2px 4px 2px 2px",
+      "react": "2px 4px 2px 2px",
+      "same": true,
+      "note": "2px 4px 2px 2px"
+    },
+    {
+      "item": "行 gap",
+      "proto": "11px",
+      "react": "11px",
+      "same": true,
+      "note": "11px"
+    },
+    {
+      "item": "行 圆角",
+      "proto": "14px",
+      "react": "14px",
+      "same": true,
+      "note": "14px"
+    },
+    {
+      "item": "头像 尺寸",
+      "proto": "41x41",
+      "react": "41x41",
+      "same": true,
+      "note": "41px"
+    },
+    {
+      "item": "头像 圆角",
+      "proto": "10px",
+      "react": "10px",
+      "same": true,
+      "note": "10px"
+    },
+    {
+      "item": "名称 字号",
+      "proto": "16px",
+      "react": "16px",
+      "same": true,
+      "note": "16px"
+    },
+    {
+      "item": "名称 字重",
+      "proto": "600",
+      "react": "600",
+      "same": true,
+      "note": "600"
+    },
+    {
+      "item": "名称 行高",
+      "proto": "22px",
+      "react": "22px",
+      "same": true,
+      "note": "22px"
+    },
+    {
+      "item": "状态 字号",
+      "proto": "13px",
+      "react": "13px",
+      "same": true,
+      "note": "13px"
+    },
+    {
+      "item": "状态 行高",
+      "proto": "16px",
+      "react": "16px",
+      "same": true,
+      "note": "16px"
+    },
+    {
+      "item": "状态 颜色",
+      "proto": "rgba(255, 255, 255, 0.58)",
+      "react": "rgba(255, 255, 255, 0.58)",
+      "same": true,
+      "note": ""
+    }
+  ],
+  "same": 21,
+  "total": 27,
+  "equivalent": [
+    "列0 背景色",
+    "列0 z-index",
+    "列0 position",
+    "列0 宽×高",
+    "列1 背景色",
+    "列1 宽×高"
+  ],
+  "diffs": [],
+  "equivalentReasons": {
+    "列0 背景色": "原型 background-image 渐变铺色 + background-color 透明；React 直接实色。渲染像素相同。",
+    "列1 背景色": "同上：原型渐变铺色 vs React 实色。渲染像素相同。",
+    "列0 z-index": "★用户裁决保留 20（不照抄原型 4）—— 照抄会复现 UI-1「新建项目按钮点不到」。",
+    "列0 position": "★用户裁决保留 flex 子项（不照抄 absolute）—— 同上。",
+    "列0 宽×高": "高度由窗口决定：原型是 900px 浮动 frame，React 是全高应用窗口。列宽 60 一致。",
+    "列1 宽×高": "同上：原型 900px frame vs React 全高窗口。列宽 270 一致。",
+    "列0 图标": "载体不同：原型是位图 PNG（background-size 34px / 22×20），React 是 24-viewBox 描边 SVG。按用户裁决统一 28px（68.3%），已确认。"
+  },
+  "checks": [
+    {
+      "name": "UI-1.5 专用端口全部空闲",
+      "ok": true,
+      "detail": "8799/8899/5274/9334 都没人听"
+    },
+    {
+      "name": "vite 入口存在",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\node_modules\\vite\\bin\\vite.js"
+    },
+    {
+      "name": "start-electron.mjs 存在",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\apps\\desktop\\scripts\\start-electron.mjs"
+    },
+    {
+      "name": "原型文件 A 存在",
+      "ok": true,
+      "detail": "C:/Users/bing/WorkBuddy/WorkbenchApp/workbench.html"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "{\"ok\": true, \"fake\": true, \"delayMs\": 1200, \"steps\": 4}"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "{\"ok\": true, \"service\": \"ai-workbench-server\", \"db\": \"up\", \"sms\": \"mock\", \"llm\": \"configured\", \"llmCalls\": 0, \"liveLoops\": 0, \"loopMaxSteps\": 10, \"pageStates\": 0, \"time\": \"2026-09-18T01:28:46.226Z\"}"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "CDP :9334"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "HTTP 200 {\"sent\": true, \"expires_in\": 300}"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "code=318983"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "HTTP 200 user=XYZ85635"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "耗时 2s"
+    },
+    {
+      "name": true,
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\docs\\acceptance\\ui1_5\\05a-原型度量.json"
+    }
+  ]
+}

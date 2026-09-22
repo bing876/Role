@@ -1,0 +1,22 @@
+{
+  "lines": [
+    "=== 1. 用**现有** find()（只看主文档）去找三类按钮 ===",
+    "  「主文档按钮（基线）」→ 找到 BUTTON#main-btn",
+    "  「▶ 播放」→ ★ 找不到（notfound）",
+    "  「Shadow DOM 按钮」→ ★ 找不到（notfound）",
+    "",
+    "=== 2. 用**穿透版** findDeep()（进 iframe + shadow root） ===",
+    "  「主文档按钮（基线）」→ 找到 BUTTON#main-btn  坐标=(90,193)  路径=>BUTTON#main-btn",
+    "  「▶ 播放」→ ★ 找不到",
+    "  「Shadow DOM 按钮」→ 找到 BUTTON#shadow-btn  坐标=(87,256)  路径=>DIV#sd::shadow>BUTTON#shadow-btn",
+    "",
+    "=== 3. 真鼠标点击：iframe 里的播放按钮（用穿透坐标 + guest 内点击） ===",
+    "  iframe contentDocument 可访问? {\"hasContentDocument\":false,\"err\":\"\",\"src\":\"data:text/html;charset=utf-8,%3C!doctype\"}",
+    "  主文档按钮点击 -> host hits=1 OK",
+    "  Shadow DOM 按钮点击 -> shadow hits=1 OK",
+    "",
+    "=== 结论 ===",
+    "  现有 find() 只看主文档 → iframe / shadow DOM 里的元素**找不到** = notfound",
+    "  「点了没反应」的一种真实成因：**没找到元素**，而不是点击本身失败。"
+  ]
+}

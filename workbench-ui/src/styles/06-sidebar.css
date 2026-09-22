@@ -1,0 +1,270 @@
+/* sidebar —— 源自设计基准 workbench.work.html 第 974-1242 行（原序切分，勿重排） */
+/* ---------- 2b. 第二列联系人列表（Round 51：去「空 / AI 感」密度重构）----------
+   AI 感的三个真实病因，逐条对症：
+   ① 没有「行的秩序」→ 整片文字漂浮 → 加极淡渐变分隔线（hover/选中时该行上下两条线一起隐藏）
+   ② 字号层级太接近（name 14 / msg 13 只差 1px）→ 两段看起来一样大 → 拉开到 15 / 12
+   ③ 中文加了正字间距（+0.1~0.2px）→ 字被撑散、发虚 → 中文一律归零，只有小号英文数字留松动
+   同时：行高 62→58、头像 42→40、上下留白减少，信息密度向真实 IM 产品靠拢 */
+.contact-list{
+  /* Round 63：回滚 Round 62 的「选中态 translateY(-2px)」——那不是要的设计。
+     用户本意 = **整个联系人列表**向上移动一点点（不是选中项单独浮起）。
+     top:64 → 56（上移 8px），首条到搜索框间距 18 → 10 */
+  position:absolute; left:0; right:0; top:56px; bottom:0;
+  display:flex; flex-direction:column; padding:2px 0;
+  overflow-y:auto; overflow-x:hidden;
+}
+.contact-list::-webkit-scrollbar{ width:6px; }
+.contact-list::-webkit-scrollbar-thumb{ background:rgba(255,255,255,0.16); border-radius:3px; }
+/* Round 117：联系人 hover 恢复为克制轻量（仅背景极淡提亮，无 transition / 无按压 / 无缩放）
+   点击切换会话；选中态 .active 作为当前会话指示 */
+.contact-item{
+  position:relative;                          /* 分隔线 ::before 的定位父级 */
+  display:flex; align-items:center; gap:10px;
+  height:58px; margin:2px 4px; padding:0 12px 0 8px;   /* Round 131：左右边距固定 4px —— 原 --sb-side 等比自适应在 sw 过阈值时整列跳 1px = 伸缩晃动根因；传统伸缩比例恒定 */
+  border:0; box-sizing:border-box; font-family:inherit; text-align:left;   /* <button> 复位 */
+  border-radius:12px; cursor:pointer;
+  background:transparent;
+  flex:0 0 auto;
+  /* Round 137：联系人交互升级 —— 背景/位移/头像外环统一过渡；点击有微缩反馈 */
+  transition:background .18s ease, transform .12s ease;
+}
+/* Round 137：联系人入场级联（仅首次渲染，backwards 保持终态；30ms×n ≤ 195ms 快速扫过） */
+@keyframes contactEnter{
+  from{ opacity:0; transform:translateY(6px); }
+  to  { opacity:1; transform:translateY(0); }
+}
+.contact-list .contact-item{
+  animation: contactEnter .32s cubic-bezier(.22,.8,.24,1) backwards;
+}
+.contact-list .contact-item:nth-child(1){ animation-delay: 0ms; }
+.contact-list .contact-item:nth-child(2){ animation-delay: 30ms; }
+.contact-list .contact-item:nth-child(3){ animation-delay: 60ms; }
+.contact-list .contact-item:nth-child(4){ animation-delay: 90ms; }
+.contact-list .contact-item:nth-child(5){ animation-delay: 120ms; }
+.contact-list .contact-item:nth-child(6){ animation-delay: 150ms; }
+.contact-list .contact-item:nth-child(7){ animation-delay: 180ms; }
+.contact-list .contact-item:nth-child(8){ animation-delay: 210ms; }
+/* Round 138：联系人交互再优化（仍克制、保持动态）
+   选中/悬停状态落在「行内」（智能体下方列表），不再落在头像上（头像 1.5px 白环已移除 → 消除 hover 时
+   头像视觉放大=文字被挤/缩放的错觉）。hover 保留：底色 0.11 + 名字/预览提亮纯白 + 头像 brightness(1.08)；
+   active 保留：底色 0.16 + 内嵌高光「卡入」+ 整行 0.985 微缩点击反馈（仅按下时，非 hover）。 */
+.contact-item:hover{ background:rgba(255,255,255,0.11); }
+.contact-item:hover .contact-name{ color:#FFFFFF; }
+.contact-item:hover .contact-msg{ color:rgba(255,255,255,0.82); }
+.contact-item:hover .contact-avatar{ filter:brightness(1.08); }
+.contact-item:active{ transform:scale(0.985); }
+.contact-item.active{
+  background:rgba(255,255,255,0.16);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,0.06);   /* Round 137/138：轻微内嵌高光，让选中态「卡入」更明确（落在行内，非头像） */
+}
+.contact-item.active .contact-name{ color:#FFFFFF; }
+.contact-item.active .contact-msg{ color:rgba(255,255,255,0.86); }
+/* Round 120：删除联系人 active 左侧竖线（用户明确不要） */
+
+/* 行分隔线：两端透明的极淡渐变，只占 1px —— 建立「行的秩序」
+   选中态 / 刚创建 时：本行顶线 + 下一行顶线（= 本行底线）一起隐藏，避免线穿过胶囊。 */
+.contact-item + .contact-item::before{
+  content:''; position:absolute; left:14px; right:14px; top:-2px; height:1px;
+  background:linear-gradient(90deg,
+    transparent 0%, rgba(255,255,255,0.12) 14%, rgba(255,255,255,0.12) 86%, transparent 100%);
+  pointer-events:none;
+}
+.contact-item.active::before,
+.contact-item.just-added::before,
+.contact-item.active + .contact-item::before,
+.contact-item.just-added + .contact-item::before{ opacity:0; }
+/* 新创建联系人：1.4s 脉冲高亮 + 自动 active 选中 */
+@keyframes justAddedPulse{
+  0%   { background:rgba(124,92,255,0.55); box-shadow:0 0 0 0 rgba(124,92,255,0.6); }
+  35%  { background:rgba(124,92,255,0.35); box-shadow:0 0 0 6px rgba(124,92,255,0); }
+  100% { background:rgba(255,255,255,0.13); box-shadow:0 0 0 0 rgba(124,92,255,0); }
+}
+.contact-item.just-added{ animation:justAddedPulse 1.4s ease-out forwards; }
+
+/* Round 104：联系人 = 圆形背景（DIM 软星形头像池；与 chip / menu-btn 的方形容器区分） */
+.contact-avatar{
+  position:relative; flex:0 0 40px;
+  width:40px; height:40px; border-radius:11px; overflow:visible; flex-shrink:0;  /* Round 107：方形 r11 + 白底，星标头像成为独立方块（星星底色改白） */
+  /* Round 108：淡底+彩星 —— 背景取品牌色 c1 的浅淡底（约 16%），彩色星形头像铺在上面，色差突出星星（背景不重设计） */
+  background-color: color-mix(in srgb, var(--c1) 16%, #ffffff);
+  background-image:var(--av, none);
+  background-size:contain; background-position:center; background-repeat:no-repeat;
+  color: color-mix(in srgb, var(--c1) 70%, #1a1a22); font-weight:var(--fw-medium); font-size:14px; line-height:1; font-family:inherit;
+  display:grid; place-items:center;
+  /* Round 138：头像仅保留 brightness 过渡（hover 提亮）；白外环已移除 */
+  transition:filter .18s ease;
+}
+.contact-avatar.has-photo{ color:transparent; }
+
+/* Round 125i：删除智能体头像右下角状态点（用户明确不要）
+   之前 .contact-status 是 4 色状态点（green/gray/yellow/red）嵌在头像角；已全部移除。
+   HTML 也不再渲染 `<i class="contact-status">`，CONTACTS 的 `status` 字段同步删除。 */
+
+/* 已删除 `.contact-badge`（红点未读角标）：用户明确"不需要"，HTML 和 CSS 都清除 */
+
+/* 中间文字区域：两行 21 + 3 + 16 = 40 → 与头像 40 严格等高，垂直重心对齐 */
+.contact-body{ flex:1 1 auto; min-width:0; overflow:hidden; }
+.contact-line{
+  display:flex; align-items:center; gap:8px;
+  height:21px; line-height:21px;
+}
+.contact-line + .contact-line{ margin-top:3px; height:16px; line-height:16px; }
+.contact-name{
+  flex:1 1 auto; min-width:0;
+  font-size:15px; font-weight:var(--fw-semibold); color:rgba(255,255,255,0.94);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  letter-spacing:0;                     /* 中文标题不加字间距，加了会散、发虚 → AI 感来源之一 */
+  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+}
+.contact-time{
+  flex:0 0 auto; margin-left:10px;
+  font-size:11px; font-weight:var(--fw-regular); color:rgba(255,255,255,0.38);
+  font-variant-numeric:tabular-nums; letter-spacing:0.3px;   /* 小号英文数字稍松才不挤 */
+}
+.contact-msg{
+  flex:1 1 auto; min-width:0;
+  font-size:12px; font-weight:var(--fw-regular); color:rgba(255,255,255,0.46);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  letter-spacing:0;
+}
+
+/* Round 115：QR 重新可点击（仅点击 QR icon 才生成 QR 卡片），点击联系人其余部分仅切换会话 */
+.contact-qr-wrap{
+  position:absolute; right:12px; top:31px;
+  width:20px; height:20px; display:grid; place-items:center;
+}
+.contact-qr{
+  width:20px; height:20px; border-radius:50%;
+  display:grid; place-items:center;
+  color:rgba(255,255,255,0.55); cursor:pointer;
+  transition:transform .12s ease, color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.contact-qr:hover{
+  color:#FFFFFF;
+  background:rgba(255,255,255,0.10);                    /* Round 125f：hover 背景圆形高亮 */
+  box-shadow: 0 0 0 6px rgba(255,255,255,0.06);        /* 柔和外圈扩散 */
+}
+.contact-qr:active{ transform:scale(0.82); }     /* Round 115：QR icon 按压微缩反馈 */
+.contact-qr svg{ width:18px; height:18px; }
+
+/* Round 125i：上下文记忆圆圈 —— 仅执行任务时显示，默认隐藏；「我的助手」也参与此态。
+   传统上下文进度环（SVG 描边，非 conic-gradient —— 只有 SVG 能做出圆角端点）：
+   底部 track = 白色 25% / 内部进度 = 白色 100% / 描边宽 2px / 端点圆角 stroke-linecap:round
+   尺寸与二维码 icon 一致：18×18（wrap 仍 20×20 与 QR 同槽位）
+   done 过渡：环轻微收拢淡出 + 中心 · 轻微放大浮现（overshoot spring，克制不夸张） */
+.contact-memory-wrap{
+  position:absolute; right:12px; top:31px;
+  width:20px; height:20px; display:grid; place-items:center;
+  opacity:0; visibility:hidden;
+  transition:opacity .18s ease, visibility .18s ease;
+}
+.contact-memory{
+  width:18px; height:18px; border-radius:50%;
+  position:relative; display:grid; place-items:center;
+}
+.contact-memory svg{
+  width:18px; height:18px; display:block;
+  transform:rotate(-90deg);                       /* 进度从正上方起算 */
+  transition:opacity .28s ease, transform .28s ease;
+}
+.mem-track{ fill:none; stroke:rgba(255,255,255,0.25); stroke-width:2; }        /* 底部描边 白色25 */
+.mem-fill{
+  fill:none; stroke:rgba(255,255,255,1); stroke-width:2;                       /* 内部进度 白色100 */
+  stroke-linecap:round;                                                        /* 圆角端点 */
+  stroke-dasharray:50.265;                                                     /* 2π·r(8) */
+  stroke-dashoffset:var(--off, 11.06);                                         /* 默认 ~78% */
+  transition:stroke-dashoffset .35s ease;
+}
+.contact-item.running .contact-memory-wrap{ opacity:1; visibility:visible; }
+/* Round 125i：执行时 QR 让位给记忆圆（「我的助手」两者同槽位） */
+.contact-item.running .contact-qr-wrap{
+  opacity:0; visibility:hidden;
+  transition:opacity .18s ease, visibility .18s ease;
+}
+/* done：环轻微收拢并淡出 */
+.contact-item .contact-memory.done svg{
+  opacity:0; transform:rotate(-90deg) scale(.72);
+}
+/* done：中心 · 轻微放大浮现（0.2 → 1.18 → 1） */
+.contact-item .contact-memory.done::after{
+  content:''; position:absolute; left:50%; top:50%;
+  width:6px; height:6px; border-radius:50%; background:rgba(255,255,255,1);
+  animation:memDotIn .34s cubic-bezier(.34,1.4,.64,1) both;
+}
+@keyframes memDotIn{
+  0%   { opacity:0; transform:translate(-50%,-50%) scale(.2);  }
+  60%  { opacity:1; transform:translate(-50%,-50%) scale(1.18); }
+  100% { opacity:1; transform:translate(-50%,-50%) scale(1);    }
+}
+/* done 圆点可点击（提示用户「点一下结束」） */
+.contact-item .contact-memory.done{ cursor:pointer; }
+
+/* Round 101：弹卡整体缩小（180×220 等比 ~0.476）→ 二维码实际像素变小 */
+.qr-lightbox{
+  position:fixed; inset:0; z-index:1300;
+  display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,0.75);
+  -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+  cursor:zoom-out;
+}
+.qr-lightbox.open{ display:flex; }
+.qr-lightbox img{
+  display:block; max-width:70vmin; max-height:70vmin;
+  border-radius:12px; background:#fff; padding:12px;
+}
+.message-bubble.qr-bubble{
+  background:rgba(255,255,255,0.2) !important;
+  padding:12px; border-radius:12px;
+  cursor:pointer;
+}
+.qr-image{
+  display:block; width:132px; height:132px; border-radius:6px;
+  cursor:zoom-in;
+}
+/* Round 113：AI 消息中的设计稿风格二维码卡片 */
+.ai-qr-card{
+  display:block; width:240px; height:auto; max-width:100%;
+  margin-top:12px; border-radius:12px;
+  cursor:pointer;
+  box-shadow:0 4px 16px rgba(0,0,0,0.25);
+}
+
+/* 2↔3 列可拖动分隔条：透明，hover/拖动时显细线；pointer-events 由内部细线处理 */
+.splitter{
+  position:absolute; top:0; left:calc(var(--rail-w) + var(--sb-w) - 4px); width:8px; height:var(--frame-h);   /* Round 157：回退 */
+  cursor:col-resize; background:transparent; z-index:6; touch-action:none;
+}
+.splitter::after{
+  content:""; position:absolute; left:50%; top:0; bottom:0;
+  width:2px; transform:translateX(-50%);
+  background:transparent; transition:background .15s ease;
+}
+/* 拖动中：保留极淡引导线（平时完全透明 → 第二/三列视觉上贴合无缝隙） */
+.splitter.dragging::after{ background:rgba(255,255,255,0.35); }
+/* hover / 键盘聚焦：极淡预览线（企业级 affordance，拖动前可发现可点） */
+.splitter:hover::after,
+.splitter:focus-visible::after{ background:rgba(255,255,255,0.18); }
+/* 折叠/展开过渡：仅 .animating 时启用；拖动时不加过渡 → 即时跟随光标、不卡顿 */
+.frame.animating .sidebar,
+.frame.animating .main-area{
+  transition: width .35s ease, left .35s ease, opacity .35s ease;
+}
+.frame.animating .splitter{
+  transition: left .35s ease, opacity .35s ease;
+}
+.frame.animating .search-pill,
+.frame.animating .add-btn{
+  transition: opacity .35s ease;
+}
+/* 折叠态：第二列收起，搜索/＋淡出，分隔条不可点 */
+.frame.collapsed .search-pill,
+.frame.collapsed .add-btn{ opacity:0; pointer-events:none; }
+.frame.collapsed .splitter{ opacity:0; pointer-events:none; }
+/* 拖动中（Round 131 传统伸缩）：不改任何视觉属性，仅合成层提升；
+   并全量禁过渡 —— 拖动 = 直接跟手改宽度，任何 transition 都是缓动/拖泥带水 */
+.frame.resizing .sidebar,
+.frame.resizing .main-area{ will-change:width,left; }
+.frame.resizing .sidebar,
+.frame.resizing .main-area,
+.frame.resizing .search-pill,
+.frame.resizing .add-btn{ transition:none !important; }

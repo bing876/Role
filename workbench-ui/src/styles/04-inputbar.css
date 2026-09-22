@@ -1,0 +1,350 @@
+/* inputbar —— 源自设计基准 workbench.work.html 第 175-523 行（原序切分，勿重排） */
+/* ---------- 3a. 底部输入栏（1:1 复刻 Group 7 设计参数；宽度自适应第三列） ---------- */
+/* Rectangle 1：rgba(0,0,0,0.2) / 内外双层阴影 / border-radius:50px
+   三边【视觉】间距统一 12px：
+     - 左 / 右 = 12px
+     - 下 = 15px（12 + 3 补偿）—— Figma 规范的 box-shadow「0px 2px 2px rgba(255,255,255,0.25)」
+       是向下偏移 2px 的白色外发光，会在 bar 底边多渲染出约 3px 亮边；
+       不补偿的话，底边间距看起来会比左右两侧窄 3px（这就是"三边不一样"的根因）。
+   整体较最初的 24px 更靠下、更宽；高度仍取 Figma 精确 54px */
+.inputbar{
+  position:absolute; left:12px; right:183px; bottom:15px; height:47px;   /* 右侧让位：3×47 圆 + 2×10 圆间距 + 10 输入框间距 + 12 右边距 */
+  display:flex; align-items:center;
+  padding:0 8px;                     /* 实测 pill 缘→左圆 8px，右圆→pill 缘 8px */
+  background:rgba(0,0,0,0.2);
+  box-shadow:0px 2px 2px rgba(255,255,255,0.25);         /* Round 125h：去掉顶部 inset 阴影 */
+  border-radius:50px;
+  z-index:2;
+}
+
+/* Group 2 / Rectangle 3：左「+」圆 36×36（47 栏等比 → 31×31），rgba(255,255,255,0.2) */
+.inputbar-btn.attach{
+  flex:0 0 31px; width:31px; height:31px;
+  background:transparent; border-radius:15.5px;  /* Round 37：默认无背景，悬停时显示圆底 */
+  border:0; cursor:pointer; padding:0;
+  display:grid; place-items:center;
+  transition:background .15s ease;
+}
+.inputbar-btn.attach:hover{ background:rgba(255,255,255,0.2); }
+/* ＋/× 图标：默认 +，点击切 .active → ×；完整定义见下方 Group 1（.inputbar-btn.attach .plus 区块） */
+
+/* ＋ 点击后从上方展开的工具弹层（紧贴输入框上沿，宽度与输入框一致）
+   - 作为 .inputbar 的子元素（absolute 定位不参与 flex；left/right:0 继承输入框宽度）
+   - 玻璃磨砂 + 5 行图标+标题+描述（参考截图：无右侧 icon） */
+.attach-popup{
+  position:absolute; left:0; right:0; bottom:calc(100% + 12px);
+  display:flex; flex-direction:column; gap:1px;
+  padding:6px;
+  background:rgba(0,0,0,0.2);           /* Round 83：与 inputbar 同底 rgba(0,0,0,0.2) */
+  -webkit-backdrop-filter:blur(16px); backdrop-filter:blur(16px);
+  /* Round 57：去掉描边（你说的「直接背景就够了」）；改用 B 站主题切换的径向展开
+     从左「＋」按钮中心 (23.5px, 100%+35.5px) 起，scale 0.05 + border-radius 50% 一同
+     缓动到 scale 1 + border-radius 14px，配合 1.56 overshoot spring */
+  border-radius:50%;
+  opacity:0; transform:scale(0.05); pointer-events:none;
+  transform-origin:23.5px calc(100% + 35.5px);
+  transition:
+    transform .36s cubic-bezier(.34,1.56,.64,1),
+    border-radius .36s cubic-bezier(.34,1.56,.64,1),
+    opacity .22s ease;
+  z-index:5;
+}
+.attach-popup.open{
+  opacity:1; transform:scale(1); border-radius:14px; pointer-events:auto;
+}
+.attach-popup .item{
+  display:flex; align-items:center; gap:12px;
+  padding:8px 14px; border:0; border-radius:10px;
+  background:transparent; cursor:pointer; width:100%; box-sizing:border-box;
+  font-family:inherit; text-align:left; color:inherit;
+}
+.attach-popup .item:hover{ background:rgba(255,255,255,0.08); }
+/* Round 60：彻底删除 .ico 图标列（不再渲染 paperclip/folder/image/globe/magnifier SVG，
+   这些 28×28 灰白圆角盒在 popup 顶左形成"小一团"的视觉杂质） */
+.attach-popup .ico{ display:none; }
+.attach-popup .txt{
+  display:flex; align-items:baseline; gap:14px; flex:1; min-width:0; overflow:hidden;
+  padding-left:14px;    /* 补偿删除图标后标题相对左边的距离，保持视觉留白与之前一致 */
+}
+.attach-popup .t{ font-size:14px; font-weight:var(--fw-semibold); color:rgba(255,255,255,0.92); white-space:nowrap; }
+.attach-popup .d{ font-size:13px; color:rgba(255,255,255,0.55); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Group 1：「+ / ×」图标 16×16 视觉框，线宽 2.5px（低 DPI 不消失）
+   - 默认 ＋：横竖两条 axis-aligned，外接 16×16，表观线宽 2.5
+   - 激活 ×：两条转 ±45°；斜 45° 会把线投影压细到 2.5/√2≈1.77，故 × 条实际加粗到
+     2.5/cos45°≈3.54px、条长调到 (L+3.54)/√2=16 → L≈19.09，使 × 外接仍=16、表观线宽仍=2.5
+     —— 落定后 ＋ 与 × 大小/粗细零差异，不放大、不缩细
+     （旧 scaleX(0.8175) 方案根因：切换时 × 条长到 16 比 ＋ 的 13.08 显大；旋转投影又让 × 线显细） */
+/* Round 71：＋/× 旋转-only，条尺寸恒定（16×2.8），彻底消除「切换成×就变大」
+   - 根因：Round 70 为让 × 旋转后外接=16，把条加长加粗到 19.09×3.535，width/height 从 16×2.5
+     动画到 19.09×3.535 的 0.22s 内出现「先变长变粗再转」的膨胀帧 → 用户看到 × 变大。
+   - 修法：＋ 与 × 用**完全相同的条**（16 长 × 2.8 厚），只 rotate 不同，width/height/margin 不再动画。
+     任意帧条尺寸恒定 → × 绝不会比 ＋ 大。× 旋转 45° 后外接=(16+2.8)/√2≈13.3（比 ＋ 小 2.7px，稳定不膨胀）。
+   - 条厚 2.8 保证 × 斜线投影=2.8×cos45≈1.98 仍清晰不发虚。 */
+.inputbar-btn.attach .plus{ position:relative; width:16px; height:16px; }
+.inputbar-btn.attach .plus::before,
+.inputbar-btn.attach .plus::after{
+  content:''; position:absolute; left:50%; top:50%;
+  width:16px; height:2.8px; margin-left:-8px; margin-top:-1.4px;
+  background:rgba(255,255,255,0.88); border-radius:1.4px;
+  transition:transform .2s cubic-bezier(.22,.8,.24,1);
+}
+.inputbar-btn.attach .plus::after{ transform:rotate(-90deg); }
+.inputbar-btn.attach.active .plus::before{ transform:rotate(45deg); }
+.inputbar-btn.attach.active .plus::after { transform:rotate(-45deg); }
+.inputbar-btn.attach.active{ background:rgba(0,0,0,0.2); }   /* Round 83：激活态 = inputbar 同底 */
+
+/* 声音圆（send）：缩小到 36×36 保持上下居中，不再占满 inputbar 的 54px 高度；white 0.3 圆底 + 内部 sparkle */
+.inputbar-btn.send{
+  flex:0 0 36px; width:36px; height:36px; margin-left:auto;
+  background:rgba(255,255,255,0.3); border-radius:18px;
+  border:0; cursor:pointer; padding:0;
+  display:grid; place-items:center; position:relative;
+  transition:background .15s ease, transform .15s ease;
+}
+.inputbar-btn.send:hover{ background:rgba(255,255,255,0.4); }
+.inputbar-btn.send:active{ transform:scale(0.94); }
+.send-sparkle, .send-stop{ width:22px; height:22px; display:block; }
+/* voice：恢复成一开始那个大小（30→40），与右侧 send 拉开层次；透明背景，仅 hover 显示白色 0.2 圆底 */
+.inputbar-btn.voice{
+  flex:0 0 40px; width:40px; height:40px; margin-right:6px;
+  background:transparent; border:0; cursor:pointer; padding:0;
+  display:grid; place-items:center; border-radius:20px;
+  transition:background .15s ease, transform .15s ease;
+}
+.inputbar-btn.voice:hover{ background:rgba(255,255,255,0.2); }
+.inputbar-btn.voice:active{ transform:scale(0.94); }
+.inputbar-btn.voice.active{ background:rgba(255,255,255,0.2); }
+
+.voice-ico{ width:22px; height:28px; display:block; }
+
+/* Round 109：语音输入状态条，覆盖普通输入栏（保留左侧 + 按钮）
+   - 从 attach 按钮右侧开始，右侧对齐声音/取消/确认
+   - 中间波形：36 段小圆点，1:1 复刻截图虚线声波
+   - 确认按钮用 #19B94D 绿底，取消按钮用白色 35% 描边透明底 */
+.voice-bar{
+  position:absolute; left:47px; right:8px; top:0; bottom:0;
+  display:none; align-items:center; gap:4px;
+  padding:0 0 0 6px;
+  border-radius:50px;
+  background:transparent;
+  z-index:3;
+}
+.voice-bar.open{ display:flex; }
+/* 进入语音态后隐藏 field / voice / send，保留 attach */
+.inputbar.voice-active .inputbar-field,
+.inputbar.voice-active .inputbar-btn.voice,
+.inputbar.voice-active .inputbar-btn.send{ visibility:hidden; }
+
+.voice-bar .voice-wave{
+  flex:1 1 auto; min-width:0; height:18px;
+  display:flex; align-items:center; justify-content:space-between;
+  padding:0 10px 0 6px;
+}
+.voice-bar .voice-wave i{
+  width:2px; height:2px; border-radius:1px;
+  background:rgba(255,255,255,0.28);
+}
+.voice-bar .voice-wave i.on{
+  background:rgba(255,255,255,0.92);
+}
+
+.voice-bar .voice-sound,
+.voice-bar .voice-cancel,
+.voice-bar .voice-confirm{
+  flex:0 0 32px; width:32px; height:32px;
+  border:0; border-radius:16px; padding:0; cursor:pointer;
+  display:grid; place-items:center;
+  transition:transform .15s ease, background .15s ease;
+}
+.voice-bar .voice-sound{ background:transparent; }
+.voice-bar .voice-cancel{ background:transparent; box-shadow:inset 0 0 0 1.5px rgba(255,255,255,0.35); }
+.voice-bar .voice-confirm{ background:#19B94D; }
+.voice-bar .voice-sound:active,
+.voice-bar .voice-cancel:active,
+.voice-bar .voice-confirm:active{ transform:scale(0.94); }
+.voice-bar .voice-cancel svg{ width:16px; height:16px; }
+.voice-bar .voice-confirm svg{ width:18px; height:18px; }
+
+/* Vector：箭头 17.4×17.4，rgba(255,255,255,0.88)
+   源图实测形状 = 横轴 + 右侧两条斜杠组成的「空心 chevron」(→)，不是实心三角：
+     - 横轴贯穿整个宽度，厚约 2.5px（stroke-width 3.4 / 24 viewBox → 2.47px 实际）
+     - 右侧两条斜杠从横轴右端分别斜向左上 / 左下，箭头内部是空的
+   状态：empty=朝右 → / typing=旋转朝上 ↑ / thinking=隐藏，换成停止方块 ■ */
+.send-arrow{
+  width:15px; height:15px; display:block;      /* 47 栏等比 17.4→15 */
+  transition:transform .18s cubic-bezier(.22,.8,.24,1);
+}
+.inputbar[data-state="typing"] .send-arrow{ transform:rotate(-90deg); }   /* → 转成 ↑ */
+.inputbar[data-state="thinking"] .send-arrow{ display:none; }
+
+/* 停止方块（思考中）：圆角正方形，与箭头同色 */
+.send-stop{ display:none; }
+.inputbar[data-state="thinking"] .send-sparkle{ display:none; }
+.inputbar[data-state="thinking"] .send-stop{ display:block; }
+.inputbar[data-state="thinking"] .inputbar-btn.send{ background:rgba(255,255,255,0.42); }
+
+/* Dictation：PingFang SC / 500 / 20px / line-height 22px / rgba(255,255,255,0.6)
+   文字靠左 + margin-left:13px → 紧跟 + 圆右侧，中间保持 13px 间隔 */
+.inputbar-field{
+  /* 高度/行高取 31 = 左「＋」圆直径，配合 .inputbar 的 align-items:center，
+     使文字的垂直中心与 ＋ 的中心严格重合（上下居中以 ＋ 的高度和位置为基准） */
+  flex:1 1 auto; min-width:0; height:31px; margin-left:7px;   /* ＋ 到文字 7px */
+  background:transparent; border:0; outline:none; padding:0;
+  font-family:inherit;
+  font-style:normal; font-weight:var(--fw-medium); font-size:17px; line-height:31px;
+  text-align:left;
+  color:rgba(255,255,255,0.9);
+  -webkit-user-select:text; user-select:text;   /* Round 125i：输入框需显式放行，否则继承 frame 的 none 会选不中 */
+}
+.inputbar-field::placeholder{ color:rgba(255,255,255,0.6); transition:color .15s ease; }
+/* 点击（聚焦）输入时占位文字立刻消失，不必等真正打字 */
+.inputbar-field:focus::placeholder{ color:transparent; }
+
+/* 第三列输入栏【外部】右侧：CL 权益额度 / 模型切换指示圆（用户提供 PNG logo）
+   外部 SVG 进度环：track 浅灰 + fill 亮白（白66）；额度越低白色越稀薄、外圈越像浅灰
+   内部：模型 logo（用户提供白色透明 PNG，base64 内联）+ running 时一个白色 dashed 圆持续旋转
+*/
+.token-outside{
+  position:absolute; right:12px; bottom:15px; height:47px;
+  display:flex; align-items:center; gap:10px;        /* 三圆等距 10：token + 2 个插件位 */
+}
+.inputbar-btn.token{
+  flex:0 0 47px; width:47px; height:47px; box-sizing:border-box;
+  background:transparent;                             /* Round 103：删掉模型背景白 20/28 */
+  border:0;                                           /* Round 125h：4px 白 0.9 描边 → 改由 SVG 进度环承担 */
+  border-radius:50%; padding:0; position:relative;
+  cursor:pointer;
+  display:block; overflow:visible;                    /* 旋转 dashed 圆允许溢出内圈 */
+  transition:transform .12s ease;
+}
+/* Round 125h：CL 进度环 —— 与上下文记忆环同一套语言：
+   底部 track 白色 25% + 内部进度 白色 100% + 4px 描边 + 圆角端点（stroke-linecap:round） */
+.tok-ring{
+  position:absolute; inset:0; width:47px; height:47px;
+  transform:rotate(-90deg); pointer-events:none;
+}
+.tok-track{ fill:none; stroke:rgba(255,255,255,0.25); stroke-width:4; }
+.tok-fill{
+  fill:none; stroke:rgba(255,255,255,1); stroke-width:4;
+  stroke-linecap:round;
+  stroke-dasharray:128.805;                           /* 2π·r(20.5)，4px 描边缩 r 留 1px 边距 */
+  stroke-dashoffset:0;
+  transition:stroke-dashoffset .35s ease;
+}
+.inputbar-btn.token:active{ transform:scale(0.94); }
+
+/* 模型 logo：品牌色 SVG（自带 fill/stroke），跟着 active 模型切换 */
+.tok-logo{
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  color:rgba(255,255,255,0.92);
+  pointer-events:none;
+}
+.tok-logo svg,
+.tok-logo img{ width:24px; height:24px; display:block; }   /* Round 89：logo 回缩（比 R85 的 27px 稍小） */
+
+/* running 状态：只保留「1 个浅色系旋转环」（浅色底环 + 稍亮领口，浅色滚动） */
+.tok-spinner{
+  position:absolute; top:50%; left:50%;
+  width:33px; height:33px; margin:-16.5px 0 0 -16.5px;   /* Round 85：环贴在 logo 与外描边正中间转动 */
+  border-radius:50%;
+  border:2.5px solid rgba(255,255,255,0.16);          /* 浅色系底环 */
+  border-top-color:rgba(255,255,255,0.55);            /* 浅色领口（旋转方向） */
+  opacity:0; pointer-events:none;
+  transition:opacity .18s ease;
+}
+.inputbar-btn.token[data-state="running"] .tok-spinner{
+  opacity:1; animation:tok-spin 1.0s linear infinite;
+}
+@keyframes tok-spin{ to{ transform:rotate(360deg); } }
+
+/* 插件位（后续接入插件）：与 token 圆同尺寸 47，背部 白15 + 中间白色「+」，无描边
+   Round 125h：+ 用子元素 <i> 画（不用 ::before/::after —— 历史上 [data-tip]::after 被全局 tooltip 占用；Round 131 tooltip 已删，此写法保留不回改） */
+.plug-btn{
+  position:relative; flex:0 0 47px; width:47px; height:47px; box-sizing:border-box;
+  border:0; border-radius:50%; cursor:pointer; padding:0;
+  background:rgba(255,255,255,0.15);
+  transition:background .15s ease;      /* Round 55：取消按压 transform */
+}
+.plug-btn:hover{ background:rgba(255,255,255,0.24); }
+.plug-btn i{
+  position:absolute; left:50%; top:50%; display:block;
+  background:rgba(255,255,255,0.92); border-radius:2px;
+  transform:translate(-50%,-50%);
+}
+.plug-btn .plug-h{ width:16px; height:3.5px; }   /* + 横 */
+.plug-btn .plug-v{ width:3.5px; height:16px; }   /* + 竖 */
+.inputbar-btn.token .tok-num{ position:relative; z-index:1; white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:clip; }
+/* 切换模型浮层（点击 token 圆弹出，仅交互、暂不配置） */
+.model-popup{
+  position:absolute; bottom:calc(100% + 12px); right:0;
+  min-width:184px; padding:4px;
+  background:rgba(0,0,0,0.2);           /* Round 83：与 inputbar 同底 */
+  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+  border-radius:12px;                     /* Round 86：去掉卡片描边（border + panel-shadow），纯玻璃卡片 */
+  display:flex; flex-direction:column; gap:2px;
+  opacity:0; transform:translateY(6px); pointer-events:none;
+  transition:opacity .16s ease, transform .16s ease;
+  z-index:6;
+}
+.model-popup.open{ opacity:1; transform:translateY(0); pointer-events:auto; }
+
+.model-popup .opt{
+  display:flex; align-items:center; gap:8px;
+  padding:0 12px; height:36px; flex:0 0 36px; box-sizing:border-box; border:0; border-radius:8px;
+  background:transparent; color:rgba(255,255,255,0.82);
+  font-family:inherit; font-size:14px; text-align:left;
+  cursor:pointer; width:100%;
+}
+.model-popup .opt:hover{ background:rgba(255,255,255,0.1); }
+.model-popup .opt.active{ color:#fff; background:rgba(124,92,255,0.22); }
+.model-popup .opt .dot{ width:8px; height:8px; border-radius:50%; background:rgba(255,255,255,0.3); flex:0 0 8px; }
+.model-popup .opt.active .dot{ background:linear-gradient(135deg,#7c5cff,#4f8bff); }
+/* Round 77：模型 logo（B&W SVG，currentColor）放选项里 */
+.model-popup .opt .opt-logo{
+  width:18px; height:18px; flex:0 0 18px;
+  display:flex; align-items:center; justify-content:center;
+  color:rgba(255,255,255,0.55);
+}
+.model-popup .opt.active .opt-logo{ color:#fff; }
+.model-popup .opt .opt-logo svg,
+.model-popup .opt .opt-logo img{ width:100%; height:100%; display:block; }   /* 官方 logo 自带 fill=#C0C0C0，勿覆盖为 currentColor */
+
+/* 头部：标题 + 智能模式开关 */
+.model-popup .mp-head{
+  display:flex; align-items:center; justify-content:space-between; gap:10px;
+  padding:6px 8px 6px 12px;
+}
+.model-popup .mp-title{ font-size:12px; color:rgba(255,255,255,0.5); }
+.model-popup .mp-toggle{
+  display:flex; align-items:center; gap:6px; position:relative;
+  padding:2px 2px 2px 4px; border:0; border-radius:8px; background:transparent;
+  font-family:inherit; font-size:12px; color:rgba(255,255,255,0.55);
+  cursor:pointer;
+}
+.model-popup .mp-toggle:hover{ color:rgba(255,255,255,0.9); background:rgba(255,255,255,0.08); }
+.model-popup .mp-switch{
+  position:relative; width:26px; height:15px; flex:0 0 26px;
+  border-radius:999px; background:rgba(255,255,255,0.18);
+  transition:background .18s ease;
+}
+.model-popup .mp-switch i{
+  position:absolute; top:2px; left:2px; width:11px; height:11px;
+  border-radius:50%; background:rgba(255,255,255,0.85);
+  transition:transform .18s ease;
+}
+.model-popup .mp-toggle[aria-pressed="true"] .mp-switch{ background:linear-gradient(135deg,#7c5cff,#4f8bff); }
+.model-popup .mp-toggle[aria-pressed="true"] .mp-switch i{ transform:translateX(11px); }
+/* Round 131：mp-tip（智能开关悬停介绍）已随 tooltip 系统一并删除，后续再配置 */
+/* 可滚动模型列表（可视 5 项，其余滚动） */
+.model-popup .mp-list{
+  display:flex; flex-direction:column; gap:2px;
+  overflow:visible;                       /* Round 86：取消 max-height，所有模型一次展示，无需手动滚动 */
+}
+/* 选项：主名 + 官方英文名（右侧淡色） */
+.model-popup .opt .opt-name{ flex:1; white-space:nowrap; }
+.model-popup .opt .opt-sub{
+  margin-left:8px; font-size:11px; color:rgba(255,255,255,0.42);
+  white-space:nowrap; letter-spacing:.2px;
+}
+

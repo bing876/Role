@@ -1,0 +1,95 @@
+/* search —— 源自设计基准 workbench.work.html 第 1405-1498 行（原序切分，勿重排） */
+/* 放大镜固定尺寸、靠左，不随胶囊拉伸变形（preserveAspectRatio 默认 meet） */
+.search-pill .search-ico{
+  position:absolute; left:13px; top:50%; transform:translateY(-50%);
+  width:18px; height:18px; pointer-events:none;
+}
+.search-pill .search-ico svg{ width:18px; height:18px; display:block; overflow:visible; }
+/* 真实可输入文本框，点击即聚焦打字；图标固定、文本随框延展 */
+.search-pill .search-field{
+  position:absolute; left:40px; right:38px; top:0; height:36px; line-height:36px;   /* left:40 给放大镜；right:38 给框内 ×(12~30) 留位；+ 已是独立圆按钮在框外 */
+  border:0; background:transparent; outline:none;
+  color:rgba(156,156,156,0.85); font-size:16px;                                     /* 参考 baseline：16px */
+  font-family:var(--font-ui);
+}
+.search-pill .search-field::placeholder{ color:rgba(156,156,156,0.85); }            /* 占位颜色同 icon */
+.search-pill .search-field:focus::placeholder{ color:transparent; }                  /* 点击聚焦时占位消失 */
+/* 聚焦输入：放大镜变白（呼吸感已按需求移除） */
+.search-pill:focus-within .search-ico svg path{ fill:#fff; }
+/* ＋ 按钮（参考 baseline v21：独立圆按钮，位于搜索框外；＋ 用 CSS 伪元素绘制，避免 SVG 在 headless/部分环境下不渲染） */
+.add-btn{
+  position:absolute; top:12px; left:auto; right:calc(var(--frame-w) - var(--rail-w) - var(--sb-w) + 8px); width:36px; height:36px;   /* Round 157：回退 */
+  background:rgba(0,0,0,0.2); box-shadow:var(--panel-shadow); border-radius:18px; border:0; cursor:pointer;
+  transition:opacity .2s ease, transform .12s ease;
+  z-index:5;
+}
+.add-btn::before, .add-btn::after{
+  content:""; position:absolute; left:50%; top:50%;
+  background:rgba(255,255,255,0.95); border-radius:1.5px;
+}
+.add-btn::before{ width:14px; height:3px; transform:translate(-50%,-50%); }   /* 横 */
+.add-btn::after { width:3px;  height:14px; transform:translate(-50%,-50%); }  /* 竖 */
+.add-btn:hover{ opacity:.75; }
+.add-btn:active{ transform:scale(.9); }
+
+/* 清空 ×：参考 baseline v21（右侧 12px，浅色圆 + 深色 X；与文件一致不写 transform-origin） */
+.search-pill.search-component .search-clear{
+  position:absolute;
+  right:12px;
+  top:9px;                     /* (36-18)/2 → 36px 高内垂直居中 */
+  width:18px;
+  height:18px;
+  border:0;
+  border-radius:50%;
+  padding:0;
+  margin:0;
+  background:rgba(255,255,255,0.72);
+  cursor:pointer;
+  z-index:4;
+  display:none;
+}
+.search-pill.search-component[data-state="focused"] .search-clear,
+.search-pill.search-component[data-state="typing"] .search-clear,
+.search-pill.search-component[data-state="filled"] .search-clear{
+  display:block;
+}
+.search-pill.search-component .search-clear:active{ transform:scale(.9); }
+.search-pill.search-component .search-clear::before,
+.search-pill.search-component .search-clear::after{
+  content:"";
+  position:absolute;
+  left:8px;
+  top:4px;
+  width:2px;
+  height:10px;
+  background:rgba(0,0,0,0.72);
+  border-radius:1px;
+}
+.search-pill.search-component .search-clear::before{ transform:rotate(45deg); }
+.search-pill.search-component .search-clear::after{ transform:rotate(-45deg); }
+
+/* ===== 搜索框呼吸感（幅度小） ===== */
+@keyframes breathe{
+  0%,100%{ box-shadow: var(--panel-shadow); }
+  50%{ box-shadow: var(--panel-shadow), 0 0 18px rgba(255,255,255,0.10); }
+}
+.search-pill.breathing{ animation: breathe 2.6s ease-in-out infinite; }
+
+/* ===== 添加弹层（由 ＋ 按钮触发：透明、无阴影、文字卡片靠左） ===== */
+.add-popup{
+  position:absolute; top:46px; left:0; width:auto;                       /* 卡片宽度自适应文字宽度；top = 搜索框底(48) - 2 */
+  background:rgba(28,28,34,0.4);
+  -webkit-backdrop-filter:blur(26px); backdrop-filter:blur(26px);
+  border:1px solid rgba(255,255,255,0.14); border-radius:10px;
+  padding:3px; z-index:60;
+  opacity:0; transform:translateY(-6px) scale(.98); pointer-events:none;
+  transition:opacity .18s ease, transform .18s ease;
+}
+.add-popup.open{ opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
+.add-popup .opt{
+  display:flex; align-items:center; justify-content:flex-start;          /* 字体靠左 */
+  padding:7px 11px; border-radius:8px; cursor:pointer;
+  color:#fff; font-size:14px; user-select:none; white-space:nowrap;
+}
+.add-popup .opt:hover{ background:rgba(255,255,255,0.1); }
+

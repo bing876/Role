@@ -1,0 +1,45 @@
+{
+ "goal": "搜索下单：帮我在商城买一个无线鼠标",
+ "fakeSteps": "4",
+ "wcId": 3,
+ "A_before": {
+  "snap": {
+   "cpu": 0.05,
+   "mem": 714.8,
+   "nproc": 6
+  },
+  "frames": {
+   "n": 900,
+   "p50": 16.7,
+   "p95": 16.8,
+   "max": 18.2,
+   "over33": 0,
+   "fps": 60,
+   "longCount": 0,
+   "longMax": 0,
+   "driveBar": "临时测试条 暂停 继续 当前页：空闲 · wcId 3",
+   "hidden": false
+  },
+  "lanes": []
+ },
+ "B_after": {
+  "snap": {
+   "cpu": 0.5,
+   "mem": 706.5,
+   "nproc": 6
+  },
+  "frames": {
+   "n": 900,
+   "p50": 16.7,
+   "p95": 16.8,
+   "max": 17.4,
+   "over33": 0,
+   "fps": 60,
+   "longCount": 0,
+   "longMax": 0,
+   "driveBar": "临时测试条 暂停 继续 当前页：已完成 · wcId 3",
+   "hidden": false
+  },
+  "lanes": []
+ }
+}

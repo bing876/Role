@@ -1,0 +1,72 @@
+
+==============================================================================
+0. 环境自检
+==============================================================================
+  端口占用：无（干净）
+  起跑前 electron.exe：无
+
+==============================================================================
+1. 数据库
+==============================================================================
+  数据库可查询
+
+==============================================================================
+2. 起环境
+==============================================================================
+  后端就绪（db=up）
+  窗口出现：True（1061ms）
+
+==============================================================================
+3. 登录
+==============================================================================
+  进到工作台：True
+
+==============================================================================
+4. 开 1 张页 + 注入动画
+==============================================================================
+  内嵌页建起来：True（73ms）
+  注入动画：installed
+
+==============================================================================
+5. 重复测量（每轮：全屏 → 后台）
+==============================================================================
+  窗口初始状态：{"layerCls": "browserLayer", "wvOpacity": "1", "wvVisibility": "visible"}
+
+  ── 第 1 轮 ──
+  第1轮 全屏                             guest rAF   60.0/s  定时器   62.5/s  | guest visible/hidden=False/focus=False
+                                     主窗口 hidden/hidden=True/focus=False | 层=browserLayer wv.opacity=1 wv.visibility=visible
+  第1轮 后台                             guest rAF    1.1/s  定时器   61.2/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=False | 层=browserLayer browserLayer--bg wv.opacity=1 wv.visibility=visible
+  第1轮 后台(提前台)                        guest rAF    1.0/s  定时器   60.5/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=False | 层=browserLayer browserLayer--bg wv.opacity=1 wv.visibility=visible
+
+  ── 第 2 轮 ──
+  第2轮 全屏                             guest rAF    1.0/s  定时器   61.6/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=True | 层=browserLayer wv.opacity=1 wv.visibility=visible
+  第2轮 后台                             guest rAF    1.0/s  定时器   60.6/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=True | 层=browserLayer browserLayer--bg wv.opacity=1 wv.visibility=visible
+  第2轮 后台(提前台)                        guest rAF    1.0/s  定时器   60.6/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=True | 层=browserLayer browserLayer--bg wv.opacity=1 wv.visibility=visible
+
+  ── 第 3 轮 ──
+  第3轮 全屏                             guest rAF    1.0/s  定时器   61.5/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=True | 层=browserLayer wv.opacity=1 wv.visibility=visible
+  第3轮 后台                             guest rAF    1.0/s  定时器   61.1/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=True | 层=browserLayer browserLayer--bg wv.opacity=1 wv.visibility=visible
+  第3轮 后台(提前台)                        guest rAF    1.0/s  定时器   60.6/s  | guest hidden/hidden=True/focus=False
+                                     主窗口 hidden/hidden=True/focus=True | 层=browserLayer browserLayer--bg wv.opacity=1 wv.visibility=visible
+
+==============================================================================
+6. 汇总：后台态 rAF 到底降不降
+==============================================================================
+  轮次     全屏 rAF/s       后台 rAF/s       后台(提前台)        判定
+  1      60.0           1.1            1.0            降频
+  2      1.0            1.0            1.0            **没降**
+  3      1.0            1.0            1.0            **没降**
+
+  全屏 rAF：[60.0, 1.0, 1.0]
+  后台 rAF：[1.1, 1.0, 1.0]
+  后台(提前台) rAF：[1.0, 1.0, 1.0]
+
+  判读口径：全屏稳定在 60 附近；后台若也稳定在 60 ⇒ 没降频；若稳定在 1 附近 ⇒ 降了。
+            若同一状态在几轮里**时高时低** ⇒ 结论本身不确定，必须找出控制变量。

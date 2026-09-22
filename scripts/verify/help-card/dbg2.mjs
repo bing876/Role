@@ -1,0 +1,13 @@
+import { createRequire } from 'node:module';
+import http from 'node:http';
+const require = createRequire(import.meta.url);
+const { chromium } = require('C:/Users/bing/.workbuddy-ai/binaries/node/workspace/node_modules/playwright-core');
+const CHROME = 'C:/Users/bing/AppData/Local/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-win64/chrome-headless-shell.exe';
+const srv = http.createServer((q, r) => { r.writeHead(200, {'content-type':'text/html'}); r.end('<h1 id=x>hi</h1>'); });
+await new Promise((r) => srv.listen(5201, '127.0.0.1', r));
+const b = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox'] });
+const p = await b.newPage();
+await p.addInitScript(() => { window.__hello = 'yes'; });
+await p.goto('http://127.0.0.1:5201/');
+console.log('HELLO=' + (await p.evaluate(() => typeof window.__hello)));
+process.exit(0);

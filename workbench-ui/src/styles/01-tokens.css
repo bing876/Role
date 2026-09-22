@@ -1,0 +1,59 @@
+/* tokens —— 源自设计基准 workbench.work.html 第 22-79 行（原序切分，勿重排） */
+<style>
+/* Round 74：Inter（SF Pro 的开源替身）—— Latin 子集，可变字重 100-900，base64 内联保证单文件自洽离线可用
+   - unicode-range 仅覆盖 Latin，中文字形自动回落到 Microsoft YaHei（不会被 Inter 顶掉）
+   - Mac/iOS 上 -apple-system / SF Pro / PingFang 优先命中，Inter 不会被用到（真机仍是真·苹果字体）
+   - Windows 上苹果字体缺失 → Latin 由 Inter 接管，得到 SF Pro 级别的观感 */
+@font-face{
+  font-family:'Inter';
+  font-style:normal;
+  font-weight:100 900;
+  font-display:swap;
+  src:url('../assets/fonts/inter-latin.woff2') format('woff2');
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
+:root{
+  /* Round 73：全站唯一字体 —— 苹果优先（不依赖任何外链 webfont，保证单文件自洽离线可用）
+     解析规则：浏览器按「字符」逐个回退。
+       · macOS / iOS：-apple-system → SF Pro（Latin）+ PingFang SC（中文）= 真·苹果字体
+       · Windows：-apple-system / SF / Helvetica / PingFang 均未安装 → 自动跳过，
+                  Latin 落到 Segoe UI，中文落到 Microsoft YaHei（视觉上最接近的可用组合）
+     顺序要点：苹果系全部排在 Segoe UI / 雅黑之前，保证在 Mac 上一定命中真苹果字体；
+               Segoe UI 排在雅黑之前，保证 Windows 上 Latin 用更精致的 Segoe UI 而非雅黑自带 Latin。 */
+  --font-ui: -apple-system, BlinkMacSystemFont,
+             "SF Pro Text", "SF Pro Display", "SF Pro SC", "Helvetica Neue", "PingFang SC", "Hiragino Sans GB",
+             "Inter",                          /* Round 74：Windows 上的 SF 替身（内联，可变字重 100-900，仅 Latin） */
+             "Segoe UI Variable Display", "Segoe UI",
+             "HarmonyOS Sans SC", "MiSans", "Source Han Sans SC", "Noto Sans CJK SC",
+             "Microsoft YaHei UI", "Microsoft YaHei", Roboto, Arial, sans-serif;
+
+  /* Round 73：苹果字重刻度（对齐 SF Pro / PingFang SC）
+     SF Pro：400 Regular / 500 Medium / 590 Semibold / 700 Bold
+     PingFang SC：400 Regular / 500 Medium / 600 Semibold
+     取 600 作 Semibold 通用值（SF 的 590 与 PingFang 的 600 视觉等价，且所有回退字体都有 600） */
+  --fw-regular:  400;   /* 正文/消息气泡/次要信息 */
+  --fw-medium:   500;   /* 头像首字母、次级强调（苹果几乎不用 700） */
+  --fw-semibold: 600;   /* 标题、联系人名、按钮 */
+  --fw-bold:     700;   /* 极少数强强调，默认不用 */
+  --panel-shadow: 0 2px 1px rgba(255,255,255,0.25), inset 0 2px 2px rgba(0,0,0,0.1);
+  /* 工作台外描边 = 3px solid rgba(255,255,255,0.2)，定义于 .frame::after（已内联，不再用变量） */
+
+  /* ---------- 三列布局主尺寸（唯一权威来源，改这里即可整列联动）----------
+     - 第一列 rail       = 60px
+     - 第二列 sidebar    = 270px
+     - 第三列 main-area  = 1200 - 60 - 270 = 870px
+     注意：JS applySplit 里的 GAP / MIN_W 必须与 --rail-w / --sb-w 保持一致，
+           否则拖动分隔条会跳变（JS 用内联 style 覆盖第三列的 left/width）。 */
+  --rail-w: 60px;
+  --sb-w:   250px;   /* Round 147：270 → 250（按微信桌面端 1200×800 实测比例：col2=250/1200） */
+  /* ---------- 第一列头像方块尺寸（顶部 menu-btn / 全屏 agent-chip / ＋rail-quick-add 三处共用）----------
+     居中公式统一走 `calc((var(--rail-w) - var(--rail-avatar)) / 2)`，
+     改这一个变量三处联动。当前 38（原 42）。 */
+  --rail-avatar: 38px;
+}
+*{ box-sizing: border-box; }
+/* 字体统一：表单控件默认不继承 font-family（UA 给的是系统默认），显式 inherit 才能吃到 --font-ui */
+button, input, select, textarea, optgroup{ font-family:inherit; font-weight:inherit; }
+html, body{ margin:0; padding:0; height:100%; }
+

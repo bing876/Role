@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# pre-commit —— 提交**之前**也复查一次 ref。
+#
+# 为什么 post-commit 之外还要这个（不是重复劳动）：
+#   post-commit 能修"提交那一刻丢的"，但如果哪次故障形态变成"提交后才丢"，
+#   那次 post-commit 会看到一切正常、什么也不做。
+#   下一次提交前跑一遍 pre-commit，就能在**下一次操作**把上次丢的补回来 ——
+#   代价只有一次几十毫秒的文件读，属于便宜的兜底。
+#
+# 安全性：pre-commit 在 amend / rebase / merge 后提交时也会跑。
+#   - amend：HEAD 就是要改的那个提交，reflog 末行与 ref 一致 → 不动
+#   - rebase 中途：HEAD 处于 detached → ref-guard 直接跳过（不误改）
+#   - merge 冲突后提交：HEAD 仍在分支上，ref 与末行一致 → 不动
+#
+# ⚠️ 只做"补回丢失的 ref"，**绝不改历史**（不做 reset / rebase / 改父提交）。
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+GUARD="$ROOT/scripts/git/ref-guard.sh"
+[ -f "$GUARD" ] || exit 0
+
+sh "$GUARD" --quiet
+# 即使守卫报"修复失败"也不阻断提交本身 —— 提交已经由 git 准备好了，
+# 拦下来只会让用户困惑；真正的处理是让那条 stderr 报警被看见。
+exit 0

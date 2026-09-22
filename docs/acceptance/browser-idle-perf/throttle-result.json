@@ -1,0 +1,80 @@
+{
+  "res": {
+    "fullscreen": {
+      "raf_fps": 60.0,
+      "iv_fps": 62.5,
+      "visibilityState": "visible",
+      "hidden": false
+    },
+    "fullscreen_main": {
+      "raf_fps": 0.0,
+      "iv_fps": 1.1,
+      "visibilityState": "hidden",
+      "hidden": true
+    },
+    "background": {
+      "raf_fps": 60.0,
+      "iv_fps": 62.5,
+      "visibilityState": "visible",
+      "hidden": false
+    },
+    "background_main": {
+      "raf_fps": 0.0,
+      "iv_fps": 0.0,
+      "visibilityState": "hidden",
+      "hidden": true
+    },
+    "cpu": {
+      "full": {
+        "n": 30,
+        "cpuMean": 0.8,
+        "cpuMax": 1.99,
+        "memMean": 692.0,
+        "byType": {
+          "Browser": 0.09,
+          "GPU": 0.13,
+          "Utility": 0.0,
+          "Tab": 0.2
+        }
+      },
+      "bg": {
+        "n": 30,
+        "cpuMean": 0.73,
+        "cpuMax": 1.29,
+        "memMean": 683.0,
+        "byType": {
+          "Browser": 0.07,
+          "GPU": 0.12,
+          "Utility": 0.0,
+          "Tab": 0.18
+        }
+      },
+      "quiet": {
+        "n": 15,
+        "cpuMean": 0.48,
+        "cpuMax": 0.58,
+        "memMean": 682.0,
+        "byType": {
+          "Browser": 0.04,
+          "GPU": 0.13,
+          "Utility": 0.0,
+          "Tab": 0.1
+        }
+      }
+    }
+  },
+  "marks": {
+    "full": [
+      1789858683.836,
+      1789858713.841
+    ],
+    "bg": [
+      1789858716.914,
+      1789858746.917
+    ],
+    "quiet": [
+      1789858748.918,
+      1789858763.919
+    ]
+  }
+}

@@ -1,0 +1,229 @@
+/* chat-bubbles —— 源自设计基准 workbench.work.html 第 2068-2295 行（原序切分，勿重排） */
+/* ===== V19 Third-column message bubbles → WeChat-like style ===== */
+/* 只改消息气泡，不改第三列背景 */
+
+.chat-stream{
+  padding:16px 18px 22px !important;
+  gap:14px !important;
+}
+
+.msg-row{
+  width:100%;
+  display:flex;
+  align-items:flex-end;
+  gap:10px;
+  flex:0 0 auto;
+}
+
+.msg-row.ai{
+  justify-content:flex-start;
+}
+
+.msg-row.user{
+  justify-content:flex-end;
+}
+
+.msg-avatar{
+  width:30px;
+  height:30px;
+  flex:0 0 30px;
+  border-radius:6px;
+  overflow:hidden;
+  background:rgba(255,255,255,0.14);
+  box-shadow:none;
+  align-self:flex-start;
+}
+
+.msg-avatar img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+/* 右侧自己的头像稍小一点，接近参考图右侧量感 */
+.msg-row.user .msg-avatar{
+  width:22px;
+  height:22px;
+  flex-basis:22px;
+  border-radius:50%;
+  background:rgba(255,255,255,0.14);
+  order:2;
+  align-self:center;
+}
+
+.msg-row.user .msg{
+  order:1;
+}
+
+.msg{
+  position:relative;
+  min-height:38px;
+  max-width:min(72%, 520px);
+  padding:10px 14px;
+  margin:0;
+  border:none !important;
+  border-radius:8px !important;
+  box-shadow:none !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+  font-family:var(--font-ui);
+  font-size:15px;
+  line-height:1.45;
+  font-weight:var(--fw-regular);
+  word-break:break-word;
+  color:#111111;
+  background:#ECECEC !important;
+}
+
+/* 左侧消息气泡小尾巴 */
+.msg-row.ai .msg::before{
+  content:"";
+  position:absolute;
+  left:-5px;
+  top:12px;
+  width:10px;
+  height:10px;
+  background:#ECECEC;
+  clip-path:polygon(100% 0, 100% 100%, 0 50%);
+}
+
+/* 右侧绿色气泡 */
+.msg-row.user .msg{
+  background:#95EC69 !important;
+  color:#111111;
+}
+
+/* 右侧消息小尾巴 */
+.msg-row.user .msg::after{
+  content:"";
+  position:absolute;
+  right:-5px;
+  top:12px;
+  width:10px;
+  height:10px;
+  background:#95EC69;
+  clip-path:polygon(0 0, 100% 50%, 0 100%);
+}
+
+/* AI thinking 也放进同一套气泡体系 */
+.msg.ai.thinking{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-width:54px;
+  gap:6px;
+}
+
+.msg.ai.thinking .tdot{
+  width:5px;
+  height:5px;
+  border-radius:50%;
+  background:rgba(0,0,0,.48);
+  animation:wechatThink 1.15s ease-in-out infinite;
+}
+.msg.ai.thinking .tdot:nth-child(2){ animation-delay:.14s; }
+.msg.ai.thinking .tdot:nth-child(3){ animation-delay:.28s; }
+
+@keyframes wechatThink{
+  0%,100%{ transform:translateY(0); opacity:.35; }
+  50%{ transform:translateY(-3px); opacity:1; }
+}
+
+/* 窄一些时自动适应第三列宽度 */
+@media (max-width:760px){
+  .chat-stream{
+    padding-left:14px !important;
+    padding-right:14px !important;
+  }
+  .msg{
+    max-width:78%;
+    font-size:14px;
+  }
+}
+
+
+/* ===== V20 AI reply UI — pixel-style replica from supplied ZIP ===== */
+.msg-row.ai{
+  gap:12px;
+  align-items:flex-end;
+}
+
+.msg-row.ai .msg-avatar{
+  width:42px;
+  height:42px;
+  flex:0 0 42px;
+  border-radius:50%;
+  overflow:hidden;
+  background:transparent;
+}
+
+.msg-row.ai .msg-avatar img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+
+.msg-row.ai .msg{
+  position:relative;
+  max-width:min(76%, 560px);
+  min-height:54px;
+  padding:16px 22px 16px 24px;
+  border:none !important;
+  border-radius:28px !important;
+  background:transparent !important;
+  box-shadow:none !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+  color:#111111;
+  font-family:var(--font-ui);
+  font-size:15px;
+  line-height:1.5;
+  font-weight:var(--fw-regular);
+  overflow:visible;
+}
+
+.msg-row.ai .msg::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background-image:url('../assets/images/img-14.png');
+  background-repeat:no-repeat;
+  background-size:100% 100%;
+  background-position:center;
+  z-index:-1;
+  border-radius:28px;
+}
+
+.msg-row.ai .msg::after{
+  display:none !important;
+}
+
+.msg-row.ai .msg.ai.thinking{
+  min-width:76px;
+  justify-content:flex-start;
+}
+
+.msg-row.ai .msg.ai.thinking .tdot{
+  background:rgba(0,0,0,.50);
+}
+
+@media (max-width:760px){
+  .msg-row.ai .msg-avatar{
+    width:38px;
+    height:38px;
+    flex-basis:38px;
+  }
+  .msg-row.ai .msg{
+    max-width:80%;
+    padding:14px 18px 14px 20px;
+    font-size:14px;
+  }
+}
+
+.chat-stream{
+  top:64px !important;
+}
+
+

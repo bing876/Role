@@ -1,0 +1,205 @@
+﻿
+
+Name            : conhost.exe
+ProcessId       : 7952
+ParentProcessId : 7044
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 10424
+ParentProcessId : 19788
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 20904
+ParentProcessId : 19280
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 22584
+ParentProcessId : 13660
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 17356
+ParentProcessId : 13160
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : cmd.exe
+ProcessId       : 29764
+ParentProcessId : 20008
+CommandLine     : C:\WINDOWS\system32\cmd.exe /d /s /c "C:\Users\bing\.workbudd
+                  y\plugins\cache\workbuddy-builtin\weixinpay\1.6.109/bin/run-n
+                  ode.cmd C:\Users\bing\.workbuddy\plugins\cache\workbuddy-buil
+                  tin\weixinpay\1.6.109/dist/mcp-server.mjs"
+
+Name            : conhost.exe
+ProcessId       : 26500
+ParentProcessId : 29764
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 26872
+ParentProcessId : 29876
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 4400
+ParentProcessId : 29704
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : cmd.exe
+ProcessId       : 27576
+ParentProcessId : 6924
+CommandLine     : C:\WINDOWS\system32\cmd.exe /d /s /c "C:\Users\bing\.workbudd
+                  y-ai\plugins\cache\workbuddy-builtin\weixinpay\1.6.109\bin\ru
+                  n-node ^"C:\Users\bing\.workbuddy-ai\plugins\cache\workbuddy-
+                  builtin\weixinpay\1.6.109/dist/mcp-server.mjs^""
+
+Name            : conhost.exe
+ProcessId       : 9788
+ParentProcessId : 27576
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 26116
+ParentProcessId : 30492
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 24728
+ParentProcessId : 29136
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : cmd.exe
+ProcessId       : 30464
+ParentProcessId : 21828
+CommandLine     : C:\WINDOWS\system32\cmd.exe /d /s /c "C:\Users\bing\.workbudd
+                  y-ai\plugins\cache\workbuddy-builtin\weixinpay\1.6.109\bin\ru
+                  n-node ^"C:\Users\bing\.workbuddy-ai\plugins\cache\workbuddy-
+                  builtin\weixinpay\1.6.109/dist/mcp-server.mjs^""
+
+Name            : conhost.exe
+ProcessId       : 27632
+ParentProcessId : 30464
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 23216
+ParentProcessId : 27400
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 4716
+ParentProcessId : 29652
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : cmd.exe
+ProcessId       : 14716
+ParentProcessId : 34652
+CommandLine     : C:\WINDOWS\system32\cmd.exe /d /s /c "C:\Users\bing\.workbudd
+                  y-ai\plugins\cache\workbuddy-builtin\weixinpay\1.6.109\bin\ru
+                  n-node ^"C:\Users\bing\.workbuddy-ai\plugins\cache\workbuddy-
+                  builtin\weixinpay\1.6.109/dist/mcp-server.mjs^""
+
+Name            : conhost.exe
+ProcessId       : 21600
+ParentProcessId : 14716
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 33552
+ParentProcessId : 24392
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 8644
+ParentProcessId : 26044
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : conhost.exe
+ProcessId       : 33288
+ParentProcessId : 25096
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : python.exe
+ProcessId       : 7404
+ParentProcessId : 12924
+CommandLine     : C:\Users\bing\.workbuddy-ai\binaries\python\envs\default\Scri
+                  pts\python.exe -u scripts/verify/run-pause-resume.py
+
+Name            : python.exe
+ProcessId       : 28848
+ParentProcessId : 7404
+CommandLine     : C:\Users\bing\.workbuddy-ai\binaries\python\envs\default\Scri
+                  pts\python.exe -u scripts/verify/run-pause-resume.py
+
+Name            : postgres.exe
+ProcessId       : 1892
+ParentProcessId : 23168
+CommandLine     : "C:\Users\bing\workbuddy-ai\pg2\pg\bin\postgres.exe"  -D "C:\
+                  Users\bing\workbuddy-ai\pg2\data"
+
+Name            : conhost.exe
+ProcessId       : 17560
+ParentProcessId : 1892
+CommandLine     : \??\C:\WINDOWS\system32\conhost.exe 0x4
+
+Name            : postgres.exe
+ProcessId       : 16900
+ParentProcessId : 1892
+CommandLine     : "C:/Users/bing/workbuddy-ai/pg2/pg/bin/postgres.exe" "--forka
+                  ux" "5740" "3"
+
+Name            : postgres.exe
+ProcessId       : 32736
+ParentProcessId : 1892
+CommandLine     : "C:/Users/bing/workbuddy-ai/pg2/pg/bin/postgres.exe" "--forka
+                  ux" "5792" "1"
+
+Name            : postgres.exe
+ProcessId       : 26896
+ParentProcessId : 1892
+CommandLine     : "C:/Users/bing/workbuddy-ai/pg2/pg/bin/postgres.exe" "--forka
+                  ux" "5696" "4"
+
+Name            : postgres.exe
+ProcessId       : 19640
+ParentProcessId : 1892
+CommandLine     : "C:/Users/bing/workbuddy-ai/pg2/pg/bin/postgres.exe" "--forka
+                  vlauncher" "5660"
+
+Name            : postgres.exe
+ProcessId       : 33684
+ParentProcessId : 1892
+CommandLine     : "C:/Users/bing/workbuddy-ai/pg2/pg/bin/postgres.exe" "--forkb
+                  gworker=0" "5620"
+
+Name            : postgres.exe
+ProcessId       : 28252
+ParentProcessId : 1892
+CommandLine     : "C:/Users/bing/workbuddy-ai/pg2/pg/bin/postgres.exe" "--forkb
+                  ackend" "5560"
+
+Name            : python.exe
+ProcessId       : 2748
+ParentProcessId : 28848
+CommandLine     : C:\Users\bing\.workbuddy-ai\binaries\python\envs\default\Scri
+                  pts\python.exe -u C:\Users\bing\workbuddy-ai\work123\scripts\
+                  verify\pause-resume-tests.py
+
+Name            : python.exe
+ProcessId       : 30920
+ParentProcessId : 2748
+CommandLine     : C:\Users\bing\.workbuddy-ai\binaries\python\envs\default\Scri
+                  pts\python.exe -u C:\Users\bing\workbuddy-ai\work123\scripts\
+                  verify\pause-resume-tests.py
+
+Name            : conhost.exe
+ProcessId       : 22828
+ParentProcessId : 26044
+CommandLine     : \\?\C:\WINDOWS\system32\conhost.exe --headless --width 80 --h
+                  eight 30 --signal 0x344 --server 0x2e0
+
+
+

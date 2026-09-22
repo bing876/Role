@@ -1,0 +1,155 @@
+{
+  "base": {
+    "avatar": {
+      "background": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, transform",
+      "transitionDuration": "0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "chat": {
+      "background": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "transform": "none",
+      "boxShadow": "rgba(255, 255, 255, 0.14) 0px 0px 0px 1.5px inset, rgba(255, 255, 255, 0.1) 0px 1px 0px 0px inset",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "knowledge": {
+      "background": "rgba(0, 0, 0, 0)",
+      "color": "rgba(255, 255, 255, 0.58)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "plugins": {
+      "background": "rgba(0, 0, 0, 0)",
+      "color": "rgba(255, 255, 255, 0.58)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "settings": {
+      "background": "rgba(0, 0, 0, 0)",
+      "color": "rgba(255, 255, 255, 0.58)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "back": null,
+    "row": {
+      "background": "rgb(69, 69, 74)",
+      "color": "rgba(255, 255, 255, 0.92)",
+      "transform": "none",
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px",
+      "transitionProperty": "background, box-shadow, border-color",
+      "transitionDuration": "0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    }
+  },
+  "hover": {
+    "avatar": {
+      "background": "rgba(255, 255, 255, 0.16)",
+      "color": "rgb(255, 255, 255)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, transform",
+      "transitionDuration": "0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "chat": {
+      "background": "rgba(0, 0, 0, 0)",
+      "color": "rgb(255, 255, 255)",
+      "transform": "none",
+      "boxShadow": "rgba(255, 255, 255, 0.14) 0px 0px 0px 1.5px inset, rgba(255, 255, 255, 0.1) 0px 1px 0px 0px inset",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "knowledge": {
+      "background": "rgba(255, 255, 255, 0.16)",
+      "color": "rgba(255, 255, 255, 0.92)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "plugins": {
+      "background": "rgba(255, 255, 255, 0.16)",
+      "color": "rgba(255, 255, 255, 0.92)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "settings": {
+      "background": "rgba(255, 255, 255, 0.16)",
+      "color": "rgba(255, 255, 255, 0.92)",
+      "transform": "none",
+      "boxShadow": "none",
+      "transitionProperty": "background, color, border-color, transform",
+      "transitionDuration": "0.26s, 0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    },
+    "row": {
+      "background": "rgb(69, 69, 74)",
+      "color": "rgba(255, 255, 255, 0.92)",
+      "transform": "none",
+      "boxShadow": "rgba(255, 255, 255, 0.14) 0px 0px 0px 1.5px inset",
+      "transitionProperty": "background, box-shadow, border-color",
+      "transitionDuration": "0.26s, 0.26s, 0.26s",
+      "outlineStyle": "none",
+      "outlineWidth": "0px"
+    }
+  },
+  "selectedIcon": "chat",
+  "focus": {
+    "avatar": {
+      "matched": true,
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px"
+    },
+    "chat": {
+      "matched": true,
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px"
+    },
+    "knowledge": {
+      "matched": true,
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px"
+    },
+    "plugins": {
+      "matched": true,
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px"
+    },
+    "settings": {
+      "matched": true,
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px"
+    },
+    "back": null,
+    "row": {
+      "matched": true,
+      "boxShadow": "rgba(255, 255, 255, 0.4) 0px 0px 0px 2px"
+    }
+  }
+}

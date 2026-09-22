@@ -1,0 +1,451 @@
+/* chat —— 源自设计基准 workbench.work.html 第 524-973 行（原序切分，勿重排） */
+/* ---------- Round 57：第三列 AI 对话流（WeChat 式：左 AI 气泡 + 右用户气泡）---------- */
+/* 顶部标题栏：64px 预留，Glass 渐变分隔线下边缘 */
+
+
+/* ---------- Round 75：对话区 1:1 像素级复刻 Frame 69.svg（740×540，WhatsApp 风格）----------
+   用 getBBox() 实测出的设计真值（未缩放，SVG 内容宽 684 < 我们对话框内宽 803，可直接 1:1 落地）：
+     · 头像        rect(28,12) 60×60  rx=10
+     · 头像↔气泡   气泡 x=100 − 头像右边 88 = 12
+     · 消息纵向间距 96−72 = 180−156 = 427−403 = 24
+     · 气泡圆角    rx=10，四角统一（SVG 无缺角，故去掉原来的 4px 单角切角）
+     · 气泡内边距  墨迹左距 121.12−100 = 21.1；上距 33.11−12 = 21.1
+     · 单行气泡高  60 = 17(上) + 26(行高) + 17(下)
+     · 接收气泡    白 10%（fill=white fill-opacity=0.1）
+     · 发送气泡    #19B94D（WhatsApp 绿）
+     · 状态对勾    在气泡内部右端 22×22（x=598，气泡右 640 → 右距 20），与文字垂直居中
+     · 内嵌图      内缩 20、rx=8，图下说明居中
+   Round 75：移除 msgIn 入场动画 —— 用户要求「切换对话不需要交互效果，直接固定住，切换只是换对话内容」 */
+
+.message{
+  display:flex; gap:12px; max-width:78%;
+  align-items:flex-end;       /* 气泡与头像底部对齐 */
+}
+.message.ai{ align-self:flex-start; flex-direction:row; align-items:flex-start; }   /* Round 95：头像与文字顶部对齐（chat.svg） */
+.message.user{ align-self:flex-end; flex-direction:row-reverse; }
+
+/* Round 95：AI 头像改用 chat.svg 27px 圆形 OpenAI logo；用户消息不显示头像 */
+.message-avatar{
+  flex:0 0 27px; width:27px; height:27px; border-radius:50%;
+  background-size:cover; background-position:center; background-repeat:no-repeat;
+  flex-shrink:0;
+}
+.message.user .message-avatar{ display:none; }
+
+/* Round 96：AI 头像列只保留头像，模型来源移到消息气泡下方 footer */
+.message-avatar-col{ display:flex; flex-direction:column; align-items:center; flex:0 0 auto; align-self:flex-start; }
+
+/* Round 106：AI 消息只含嵌入 Group 3.svg（删掉 ChatGPT 头像和 6 icon 互动，SVG 内已有这些视觉） */
+.message.ai{
+  align-self:flex-start; flex-direction:column; gap:0;
+  width:100%; max-width:100%;                 /* Round 107：覆盖基线 78% 限制，让 SVG 撑满整列按原比例放大 */
+}
+/* Round 108：AI 消息 = 真实文字 + 底部 6 icon（1:1 模板化，整列 flex 竖排，消除文字/icon 拉太远） */
+.ai-msg-svg-wrap{
+  width:100%; max-width:100%;
+  border-radius:8px; overflow:hidden;
+}
+.ai-msg-svg-wrap:not(.ai-thinking){
+  display:flex; flex-direction:column; gap:0;
+}
+.ai-msg-svg-wrap.ai-thinking{ display:flex; align-items:center; gap:7px; padding:6px 2px; }
+.ai-msg-text{
+  color:rgba(255,255,255,0.92); font-size:15px; line-height:1.7;
+  padding:3px 2px 0; white-space:pre-wrap; word-break:break-word;
+}
+.ai-msg-icons{ margin-top:6px; width:100%; line-height:0; }
+.ai-msg-icons .ai-svg{ width:100%; height:auto; display:block; }
+.ai-svg{
+  display:block; width:100%; height:auto;
+}
+/* 各 icon 对应动效：like/dislike=回弹，refresh=旋转，copy/分享/更多=弹跳 */
+@keyframes svgActSpin{ from{transform:rotate(0)} to{transform:rotate(360deg)} }
+@keyframes svgActBounce{ 0%{transform:scale(1)} 40%{transform:scale(1.28)} 100%{transform:scale(1)} }
+.ai-svg .svg-act.act-spin{ animation:svgActSpin .55s ease; }
+.ai-svg .svg-act.act-bounce{ animation:svgActBounce .35s ease; }
+/* Round 107：SVG 底部 6 个 icon 键可交互（复制 / 赞同 / 不赞同 / 重新生成 / 分享 / 更多） */
+.ai-svg .svg-act{
+  cursor:pointer;
+  transform-box:fill-box; transform-origin:center;
+  transition:transform .12s ease, opacity .15s ease;
+}
+.ai-svg .svg-act:hover{ opacity:.72; }
+.ai-svg .svg-act:active{ transform:scale(0.9); }
+.ai-svg .svg-act.act-flash{ opacity:1; transform:scale(1.12); }
+/* 轻量 toast：点击 SVG icon 键的反馈 */
+.wb-toast{
+  position:fixed; left:50%; bottom:96px; transform:translateX(-50%) translateY(12px);
+  background:rgba(28,28,34,0.94); color:#fff; padding:8px 16px; border-radius:10px;
+  font-size:13px; font-family:inherit; z-index:1200; opacity:0; pointer-events:none;
+  transition:opacity .18s ease, transform .18s ease; box-shadow:0 8px 28px rgba(0,0,0,0.45);
+}
+.wb-toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+/* Round 131：全局 tooltip（[data-tip] 悬停提示）已整组删除，后续再配置。
+   各元素上的 data-tip 属性保留为惰性标注（无 CSS 即无渲染），重做时只需恢复样式。 */
+
+/* Round 122：主流 AI 比例 + 多模型连续连接线 + 全 icon 交互动效 + 单滚动按钮 */
+.ai-msg{ width:100%; display:flex; flex-direction:column; gap:14px; }
+.ai-rows{ display:flex; flex-direction:column; gap:0; position:relative; }   /* 段间不留断点 → 连接线连续 */
+.ai-row{ display:flex; flex-direction:row; align-items:flex-start; gap:14px; position:relative; }
+.ai-row:last-child{ padding-bottom:0; }
+.ai-row:not(:last-child){ padding-bottom:22px; }                /* 段间距（小说式留白），连接线在其间连续延伸 */
+.ai-rail{ width:32px; flex:0 0 32px; display:flex; flex-direction:column; align-items:center; position:relative; z-index:2; }
+/* 模型 logo：直角 + 无底色 + 固定不移动（始终贴第一段首行左侧） */
+.ai-logo{
+  width:32px; height:32px; border-radius:0; overflow:hidden; flex:0 0 32px;
+  display:grid; place-items:center; background:transparent; position:relative; z-index:2;
+}
+.ai-logo img, .ai-logo svg{ width:32px; height:32px; display:block; object-fit:contain; }
+/* Round 125h：任务结束态小圆点，连到多模型编排最后一段会话的左侧，代表结尾状态 */
+.ai-end-dot{
+  position:absolute; left:11px; top:35px;
+  width:10px; height:10px; border-radius:50%;
+  background:#fff; opacity:.85; box-shadow:0 0 8px rgba(255,255,255,.35);
+}
+/* 连接线：段式 —— 每对相邻模型 logo 之间画一段竖线（首尾各留 5px），由 JS(layoutConnectors) 设定 top/height
+   不穿过任何模型，仅在模型之间的间隙中出现 */
+.ai-conn-seg{
+  position:absolute; left:14.5px; width:3px;
+  background:#FFFFFF; border-radius:1px; opacity:.6; z-index:0;
+  top:0; height:0; pointer-events:none;
+  clip-path:inset(0 0 0 0);
+  transition:clip-path .55s cubic-bezier(.4,0,.2,1);
+}
+.ai-conn-seg:not(.grown){ clip-path:inset(0 0 100% 0); }   /* Round 123：未到达的模型间连线先隐藏，随流式输出逐段向下延长显现 */
+.ai-seg{ flex:1 1 auto; min-width:0; }
+.ai-seg-text{
+  color:rgba(255,255,255,0.9); font-size:16px; line-height:1.85; letter-spacing:.2px;
+  white-space:pre-wrap; word-break:break-word;
+  cursor:text; user-select:text;   /* Round 125g：悬停显示文本光标 + 可选中复制 */
+}
+/* Round 125d：AI 正文「小说式」阅读排版 —— 段落分明、间距舒展，长文不再糊成一坨 */
+.ai-seg-text p{ margin:0 0 16px; }
+.ai-seg-text p:last-child{ margin-bottom:0; }
+.ai-seg-text h2,.ai-seg-text h3,.ai-seg-text h4{
+  color:#fff; font-weight:600; letter-spacing:.2px; margin:22px 0 10px; line-height:1.5;
+}
+/* Round 125e：每段第一个标题贴顶 → 让 logo 与第一行文字真正同行（不被标题 margin-top 顶到上方） */
+.ai-seg-text > h2:first-child,
+.ai-seg-text > h3:first-child,
+.ai-seg-text > h4:first-child{ margin-top:0; }
+.ai-seg-text h2{ font-size:18px; }
+.ai-seg-text h3{ font-size:17px; }
+.ai-seg-text h4{ font-size:16px; }
+.ai-seg-text ul,.ai-seg-text ol{ margin:0 0 16px; padding-left:22px; }
+.ai-seg-text li{ margin-bottom:7px; line-height:1.8; }
+.ai-seg-text li:last-child{ margin-bottom:0; }
+.ai-seg-text blockquote{
+  margin:0 0 16px; padding:2px 0 2px 14px;
+  border-left:2px solid rgba(255,255,255,0.28); color:rgba(255,255,255,0.78);
+}
+.ai-seg-text strong{ font-weight:600; color:#fff; }
+.ai-seg-text code{
+  font-family:"SFMono-Regular",Consolas,monospace; font-size:.9em;
+  background:rgba(255,255,255,0.12); padding:1.5px 6px; border-radius:5px;
+}
+/* Round 123：流式逐字输出时的闪烁光标 */
+.ai-stream-cursor{
+  display:inline-block; width:2px; height:1.05em; margin-left:1px;
+  background:rgba(255,255,255,0.85); vertical-align:-2px;
+  animation:aiBlink 1s steps(1,end) infinite;
+}
+@keyframes aiBlink{ 0%,49%{ opacity:1; } 50%,100%{ opacity:0; } }
+
+/* 底部 6 icon 行：margin-left:46px = rail(32) + gap(14)，对齐正文首字
+   WorkBuddy 风格：克制尺寸 + 全 icon 交互动画（hover 放大 / 点击回弹） */
+.ai-bar{ display:flex; align-items:center; gap:16px; margin-top:6px; margin-left:46px; }
+.ai-bar-btn{
+  width:18px; height:18px; padding:0; border:0; background:transparent;
+  color:#FFFFFF; cursor:pointer; display:grid; place-items:center;   /* Round 123：icon 固定白色，无交互动画 */
+}
+.ai-bar-btn svg{ width:18px; height:18px; display:block; }
+.ai-bar-btn:hover{ color:#FFFFFF; }
+/* 点赞/点踩：激活后原 icon 直接变实心白（覆盖默认半透明描边观感） */
+.ai-bar-btn.on, .ai-bar-btn.copied{ color:#FFFFFF; }
+.ai-bar-btn.on svg path{ fill:#FFFFFF; }
+.ai-bar-btn.act-flash{ color:#FFFFFF; }
+/* 重试：纯 360° 旋转（功能态，非 hover 交互动画） */
+.ai-bar-btn.spinning{ animation:amSpin .8s cubic-bezier(.4,0,.2,1); }
+@keyframes amSpin{
+  0%   { transform:rotate(0deg);   }
+  100% { transform:rotate(360deg); }
+}
+
+/* Round 124+：ChatGPT / WorkBuddy 风格「富内容块」渲染器
+   - 阅读文章式排版：块与块之间明显呼吸（20px gap），弱化卡片框感（淡背景 0.10、无阴影），
+     块头改为文章小标题样式（自适应高度），让 AI 回复整体像排版良好的文章段落流。
+   - 文字排版：标题/正文统一字号与行距
+   - 超过默认可视高度时折叠底部，显示「展开」按钮 */
+.ai-blocks{ margin-top:18px; display:flex; flex-direction:column; gap:20px; }
+.ai-block{
+  border-radius:12px; overflow:hidden; position:relative;
+  background:rgba(255,255,255,0.10);
+  /* 去掉重 border 与 box-shadow → 让块像文章段落，融入流；仅靠淡背景与上下 padding 分块 */
+}
+.ai-block-head{
+  display:flex; align-items:center; gap:8px; padding:10px 16px;
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  /* 去掉 40px 固定高度与独立头部底色 → 像文章小标题；工具栏按钮仍在右侧 */
+}
+.ai-block-type{ display:flex; align-items:center; gap:6px; color:rgba(255,255,255,0.88); font-size:13px; font-weight:600; letter-spacing:.2px; }
+.ai-block-type svg{ width:14px; height:14px; display:block; opacity:.9; }
+.ai-block-title{ flex:1 1 auto; min-width:0; color:rgba(255,255,255,0.58); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-block-acts{ display:flex; align-items:center; gap:2px; }
+.blk-act{
+  width:28px; height:28px; border:0; border-radius:8px; cursor:pointer; padding:0;
+  background:transparent; color:rgba(255,255,255,0.72); display:grid; place-items:center;
+}
+.blk-act:hover{ background:rgba(255,255,255,0.14); color:#fff; }
+.blk-act svg{ width:15px; height:15px; display:block; }
+.blk-act.done{ color:#fff; }
+.ai-block-body{
+  padding:4px 16px 14px; color:rgba(255,255,255,0.92); font-size:14.5px; line-height:1.7;
+}
+
+/* 展开/收起按钮 */
+.ai-block-exp{
+  position:absolute; left:0; right:0; bottom:0;
+  display:flex; align-items:center; gap:4px;
+  padding:10px 14px;
+  color:rgba(255,255,255,0.78); font-size:13px; font-weight:500;
+  cursor:pointer; user-select:none;
+  background: linear-gradient(to top, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0.12) 55%, transparent 100%);
+  border-top:1px solid rgba(255,255,255,0.08);
+  opacity:0; pointer-events:none;
+  transition: opacity .2s ease, background .15s ease;
+}
+.ai-block.collapsed .ai-block-exp,
+.ai-block.expanded .ai-block-exp{ opacity:1; pointer-events:auto; }
+.ai-block-exp:hover{ background: linear-gradient(to top, rgba(255,255,255,0.38) 0%, rgba(255,255,255,0.16) 55%, transparent 100%); color:#fff; }
+.ai-block-exp svg{ width:14px; height:14px; display:block; transition:transform .2s ease; }
+.ai-block.expanded .ai-block-exp svg{ transform:rotate(180deg); }
+.ai-block.collapsed .ai-block-body{
+  max-height:158px; overflow:hidden;
+  -webkit-mask-image:linear-gradient(to bottom, #000 65%, transparent 100%);
+  mask-image:linear-gradient(to bottom, #000 65%, transparent 100%);
+}
+
+/* 代码块 */
+.ai-block.code .ai-block-body{ padding:0; }
+.ai-code-wrap{ position:relative; }
+.ai-code-pre{
+  margin:0; padding:14px; max-height:320px; overflow:auto;
+  font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  font-size:13px; line-height:1.65; color:rgba(255,255,255,0.94);
+  background:rgba(0,0,0,0.22); white-space:pre; tab-size:2;
+}
+.ai-code-pre::-webkit-scrollbar{ width:8px; height:8px; }
+.ai-code-pre::-webkit-scrollbar-thumb{ background:rgba(255,255,255,0.18); border-radius:4px; }
+.ai-block.code .ai-block-type{ color:#9cdcfe; }
+
+/* HTML 实时预览 */
+.ai-block.html .html-preview{ border:0; width:100%; height:200px; background:#fff; border-radius:0; display:block; }
+.ai-block.html .html-source{
+  margin:0; padding:14px; max-height:200px; overflow:auto; display:none;
+  font-family:"SFMono-Regular",Consolas,monospace; font-size:13px; line-height:1.6;
+  color:rgba(255,255,255,0.92); background:rgba(0,0,0,0.22); white-space:pre;
+}
+.ai-block.html.show-source .html-preview{ display:none; }
+.ai-block.html.show-source .html-source{ display:block; }
+
+/* 文档卡片（pdf / doc / file） */
+.ai-block.doc .ai-block-body{ display:flex; align-items:center; gap:14px; padding:12px 14px; }
+.ai-doc-thumb{
+  width:48px; height:64px; flex:0 0 48px; border-radius:8px; position:relative; overflow:hidden;
+  background:linear-gradient(160deg,#3a3f4b,#23262e); display:grid; place-items:center;
+  box-shadow:0 4px 12px rgba(0,0,0,0.35);
+}
+.ai-doc-thumb .ext{ position:absolute; bottom:5px; left:0; right:0; text-align:center; font-size:10px; font-weight:700; color:#fff; letter-spacing:.5px; }
+.ai-doc-thumb svg{ width:24px; height:24px; color:rgba(255,255,255,0.88); }
+.ai-doc-meta{ flex:1 1 auto; min-width:0; }
+.ai-doc-name{ color:#fff; font-size:14px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ai-doc-sub{ color:rgba(255,255,255,0.52); font-size:12.5px; margin-top:3px; }
+
+/* 图片块 */
+.ai-block.image .ai-block-body{ padding:0; }
+.ai-img-thumb{ width:100%; max-height:260px; object-fit:cover; display:block; cursor:zoom-in; background:#111; }
+
+/* 表格块 */
+.ai-block.table .ai-block-body{ padding:0; overflow-x:auto; }
+.ai-tbl{ width:100%; border-collapse:collapse; font-size:13px; }
+.ai-tbl th, .ai-tbl td{ border:1px solid rgba(255,255,255,0.10); padding:8px 12px; text-align:left; color:rgba(255,255,255,0.92); }
+.ai-tbl th{ background:rgba(255,255,255,0.08); color:#fff; font-weight:600; }
+.ai-tbl tr:nth-child(even) td{ background:rgba(255,255,255,0.04); }
+
+/* 加载骨架屏 */
+.ai-block.loading .ai-block-body{ padding:16px; }
+.blk-skel{ display:flex; flex-direction:column; gap:8px; }
+.blk-skel .ln{ height:10px; border-radius:5px; background:linear-gradient(90deg,rgba(255,255,255,0.08),rgba(255,255,255,0.22),rgba(255,255,255,0.08)); background-size:200% 100%; animation:blkShimmer 1.2s infinite linear; }
+.blk-skel .ln.w1{ width:92%; } .blk-skel .ln.w2{ width:78%; } .blk-skel .ln.w3{ width:85%; } .blk-skel .ln.w4{ width:60%; }
+@keyframes blkShimmer{ 0%{ background-position:200% 0; } 100%{ background-position:-200% 0; } }
+
+/* 错误占位 */
+.ai-block.error .ai-block-body{ display:flex; flex-direction:column; align-items:center; gap:10px; padding:22px 14px; color:rgba(255,255,255,0.78); }
+.ai-block.error .err-ico{ width:28px; height:28px; color:#ff7a7a; }
+.ai-block.error .err-msg{ font-size:13px; }
+.ai-block.error .err-retry{
+  border:1px solid rgba(255,255,255,0.22); background:rgba(255,255,255,0.10); color:#fff;
+  border-radius:8px; padding:6px 14px; font-size:13px; cursor:pointer;
+}
+.ai-block.error .err-retry:hover{ background:rgba(255,255,255,0.18); }
+
+/* 块预览弹窗（图片 / HTML 文档页 / PDF 文档页） */
+.blk-lightbox{
+  position:fixed; inset:0; z-index:1300; display:none; align-items:center; justify-content:center;
+  background:rgba(0,0,0,0.72); backdrop-filter:blur(4px); padding:40px;
+}
+.blk-lightbox.open{ display:flex; }
+.blk-lightbox-inner{ max-width:90vw; max-height:88vh; background:#fff; border-radius:10px; overflow:hidden; box-shadow:0 20px 60px rgba(0,0,0,0.5); }
+.blk-lightbox-inner iframe{ width:78vw; height:84vh; border:0; display:block; background:#fff; }
+.blk-lightbox-inner img{ max-width:90vw; max-height:84vh; display:block; }
+.blk-lightbox-close{ position:absolute; top:18px; right:22px; width:38px; height:38px; border-radius:50%; border:0; background:rgba(255,255,255,0.12); color:#fff; font-size:20px; cursor:pointer; }
+.blk-lightbox-close:hover{ background:rgba(255,255,255,0.22); }
+
+/* 三点弹卡（微信朋友圈式：圆角气泡 + 左向小三角，右侧弹出）：提交反馈 / 知识库
+   Round 118：整体小巧化 —— 更窄、更薄、字号更小 */
+.ai-more-popup{
+  position:fixed; z-index:1100; display:none;
+  min-width:104px; padding:4px; border-radius:9px;
+  background:rgba(28,28,34,0.96); backdrop-filter:blur(20px);
+  box-shadow:0 6px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.10);
+}
+.ai-more-popup.visible{ display:block; }
+.ai-more-popup::before{
+  content:''; position:absolute; left:-5px; top:50%; transform:translateY(-50%);
+  border:5px solid transparent; border-right-color:rgba(28,28,34,0.96);
+}
+.ai-more-popup.left::before{ left:auto; right:-5px; border-right-color:transparent; border-left-color:rgba(28,28,34,0.96); }
+.ai-more-popup .mp-item{
+  display:block; width:100%; box-sizing:border-box;
+  padding:6px 10px; border:0; border-radius:6px;
+  background:transparent; color:rgba(255,255,255,0.86);
+  font-family:inherit; font-size:12px; line-height:16px; text-align:left; cursor:pointer;
+}
+.ai-more-popup .mp-item:hover{ background:rgba(255,255,255,0.10); color:#fff; }
+
+/* Round 94：恢复第三列对话区（Round 86 曾移除），绝对定位填充 inputbar 上方，承载「模型路由」多模型来源叠层
+   Round 106：顶部留空 48px→50px（用户明确要求"顶部保留50px"） */
+/* 顶部预留插件区：第三列顶部留 56px 透明空间，未来放置功能插件；当前不填充内容、保持空白 */
+.top-area{
+  position:absolute; left:0; top:0; right:0; height:56px;
+  pointer-events:none; z-index:1;
+}
+.chat-area{
+  position:absolute; left:0; top:56px; right:6px; bottom:78px;   /* Round 125i：内缩 6px —— 贴近外描边但不越出、不贴死 */
+  overflow-y:auto; padding:24px 28px 28px;
+  display:flex; flex-direction:column; gap:24px;
+  /* Round 125i：滚动条默认隐藏，鼠标移入会话区才显现（移出 / 到第二列都不显示） */
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.chat-area:hover{ scrollbar-color: rgba(255,255,255,0.15) transparent; }
+.chat-area::-webkit-scrollbar{ width:4px; }
+.chat-area::-webkit-scrollbar-button{ display:none; }   /* Round 125h：隐藏上下箭头，只保留滚动效果 */
+.chat-area::-webkit-scrollbar-track{ background:transparent; }
+.chat-area::-webkit-scrollbar-thumb{
+  background:transparent; border-radius:2px;            /* 默认透明 = 隐藏 */
+  transition:background .2s ease;
+}
+.chat-area:hover::-webkit-scrollbar-thumb{ background:rgba(255,255,255,0.15); }
+.chat-area:hover::-webkit-scrollbar-thumb:hover{ background:rgba(255,255,255,0.28); }
+
+/* Round 125e：回到底部按钮 —— 黑底 + 白色细边框 + 柔阴影（更明显），位置按输入栏宽度居中；
+   AI 思考时切为三个点动画（用户往上翻时直接看到任务还在执行） */
+.ai-scroll-btn{
+  position:absolute; bottom:84px; left:0; z-index:30;
+  width:40px; height:40px; border-radius:50%;
+  border:1px solid rgba(255,255,255,0.18);
+  background:rgba(0,0,0,0.62);   /* Round 125g：黑色调更高（0.32 → 0.62） */
+  box-shadow:0 4px 14px rgba(0,0,0,0.55);
+  color:#FFFFFF; cursor:pointer; display:grid; place-items:center;
+  opacity:0; transform:translateY(8px) scale(.92); pointer-events:none;
+  transition:opacity .2s ease, transform .2s ease, background .15s ease, border-color .15s ease;
+}
+.ai-scroll-btn.show{ opacity:1; transform:translateY(0); pointer-events:auto; }
+.ai-scroll-btn:hover{ background:rgba(0,0,0,0.78); border-color:rgba(255,255,255,0.32); transform:translateY(0) scale(1.06); }
+.ai-scroll-btn svg{ width:18px; height:18px; display:block; }
+/* AI 思考态：三个点（替换箭头）—— Round 125i：放大到 7px，opacity 提高，与用户参考图对齐 */
+.ai-scroll-btn.thinking svg{ display:none; }
+.ai-scroll-btn .tpt{ display:none; gap:6px; align-items:center; justify-content:center; }
+.ai-scroll-btn.thinking .tpt{ display:flex; }
+.ai-scroll-btn .tpt i{
+  width:7px; height:7px; border-radius:50%;
+  background:#fff; opacity:.9;
+  animation:scrollDotBlink 1.2s infinite ease-in-out;
+}
+.ai-scroll-btn .tpt i:nth-child(2){ animation-delay:.15s; }
+.ai-scroll-btn .tpt i:nth-child(3){ animation-delay:.30s; }
+@keyframes scrollDotBlink{
+  0%,80%,100%{ opacity:.35; transform:scale(.8); }
+  40%{ opacity:1;    transform:scale(1); }
+}
+
+.message-content{ display:flex; flex-direction:column; min-width:0; }
+.message.ai .message-content{ align-items:flex-start; }
+.message.user .message-content{ align-items:flex-end; }
+
+/* 气泡：padding 17/21、圆角 10、字号 17/行高 26（17+26+17 = 60 = SVG 单行气泡高） */
+.message-bubble{
+  display:block;
+  padding:17px 21px; border-radius:10px;
+  font-size:17px; font-weight:var(--fw-regular); line-height:26px;
+  word-wrap:break-word; white-space:pre-wrap;
+  max-width:100%;
+}
+.bubble-text{ min-width:0; }
+.message.ai .message-bubble{
+  background:transparent; color:rgba(255,255,255,0.92);   /* Round 95：chat.svg 中 AI 文字无气泡底 */
+  padding:0; border-radius:0; display:block;
+}
+/* Round 106：用户消息按 Clipboard_Screenshot.png 样式 —— 深蓝药丸 (#2563EB) + 大圆角（半圆）+ 下方 3 icon 行 */
+.message.user .message-bubble{
+  background:#2563EB; color:#fff;                        /* 深蓝药丸 */
+  border-radius:22px; padding:10px 18px;                 /* 大圆角 + 紧凑内边距（贴近参考图比例） */
+  font-size:15px; line-height:20px; font-weight:500;
+  max-width:fit-content;                                 /* 药丸宽度贴合文本（不再撑到容器） */
+  cursor:text; user-select:text;   /* Round 125g：悬停显示文本光标 + 可选中复制 */
+}
+/* Round 106：用户消息下方 3 icon 行（按 Clipboard_Screenshot.png 样式：复制 / ↑ 重发 / ✏️ 编辑，13px 白 0.65） */
+.user-msg-actions{ display:flex; align-items:center; gap:14px; margin-top:6px; }
+.user-act{
+  width:13px; height:13px; display:grid; place-items:center;
+  color:rgba(255,255,255,0.65); cursor:pointer;
+  transition:color .15s ease, transform .12s ease;
+}
+.user-act:hover{ color:#FFFFFF; }
+.user-act:active{ transform:scale(0.88); }
+.user-act svg{ width:13px; height:13px; }
+.user-act.copied{ color:#07C160; }
+
+/* Round 75：图片消息（复刻 SVG rect(100,180) 182×223 内的 rect(120,200) 142×151）
+   · 图内缩 20（182−142×2 = 20×2）、rx=8
+   · 图→说明 14（364.97−351）、说明在气泡内水平居中、底距 25（403−378.25） */
+.message-bubble.has-image{
+  display:block; padding:20px 20px 25px;
+}
+.message-bubble .msg-image{
+  display:block; width:100%; border-radius:8px;
+}
+.message-bubble .msg-caption{
+  display:block; margin-top:14px; text-align:center;
+  font-size:13px; line-height:1; color:rgba(255,255,255,0.55);
+}
+/* thinking（AI 思考中）：三色跳动圆点 */
+.message.ai.thinking .message-bubble{
+  gap:7px;                                  /* Round 75：跟随 17px 字号放大 */
+}
+/* Round 102：思考态圆点移到 .ai-msg-text 内（新结构），横向排列 */
+.ai-dots-thinking{ display:flex; align-items:center; gap:7px; min-height:19px; }
+.message.ai.thinking .dot{
+  width:8px; height:8px; border-radius:50%;
+  background:rgba(255,255,255,0.55);
+  animation: dotBounce 1.2s infinite ease-in-out both;
+}
+.message.ai.thinking .dot:nth-child(2){ animation-delay:.15s; }
+.message.ai.thinking .dot:nth-child(3){ animation-delay:.30s; }
+@keyframes dotBounce{
+  0%, 80%, 100%{ transform:translateY(0); opacity:.45; }
+  40%{ transform:translateY(-5px); opacity:1; }
+}
+

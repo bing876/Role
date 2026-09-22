@@ -1,0 +1,18 @@
+﻿AI 工作台.exe             PID=31968   started=2026/9/20 2:12:44
+AI 工作台.exe             PID=5940    started=2026/9/20 2:12:45
+AI 工作台.exe             PID=17968   started=2026/9/20 2:12:45
+AI 工作台.exe             PID=31752   started=2026/9/20 2:12:45
+AI 工作台.exe             PID=24080   started=2026/9/20 2:16:36
+python.exe             PID=7404    started=2026/9/20 2:17:37
+python.exe             PID=28848   started=2026/9/20 2:17:38
+postgres.exe           PID=1892    started=2026/9/20 2:17:53
+postgres.exe           PID=16900   started=2026/9/20 2:17:54
+postgres.exe           PID=32736   started=2026/9/20 2:17:54
+postgres.exe           PID=26896   started=2026/9/20 2:18:24
+postgres.exe           PID=19640   started=2026/9/20 2:18:25
+postgres.exe           PID=33684   started=2026/9/20 2:18:25
+postgres.exe           PID=28252   started=2026/9/20 2:18:25
+python.exe             PID=2748    started=2026/9/20 2:18:27
+python.exe             PID=30920   started=2026/9/20 2:18:27
+postgres.exe           PID=2404    started=2026/9/20 2:19:13
+2026-09-20 02:19:24

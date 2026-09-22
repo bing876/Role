@@ -1,0 +1,13 @@
+{
+  "fails": 0,
+  "structural": {
+    "shallow": {
+      "rects": 4,
+      "circles": 1
+    },
+    "deep": {
+      "rects": 5,
+      "circles": 1
+    }
+  }
+}

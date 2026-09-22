@@ -1,0 +1,10 @@
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const { chromium } = require('C:/Users/bing/.workbuddy-ai/binaries/node/workspace/node_modules/playwright-core');
+const exe = 'C:/Users/bing/AppData/Local/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-win64/chrome-headless-shell.exe';
+const b = await chromium.launch({ executablePath: exe, headless: true, args: ['--no-sandbox'] });
+const p = await b.newPage();
+await p.setContent('<h1 id="x">hello</h1>');
+console.log('TEXT=' + (await p.textContent('#x')));
+console.log('PW_OK');
+process.exit(0);

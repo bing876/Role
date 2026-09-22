@@ -1,0 +1,22 @@
+#!/bin/sh
+#
+# post-commit —— 提交后立刻复查 ref 是否落盘。
+#
+# 为什么必须有它：本仓库分支名含 `/`，`git commit` 会打印 sha、退出码 0，
+# 但 `.git/refs/heads/arena/` 整个目录被删。实测**提交那一刻 ref 就没了**，
+# 所以这个钩子运行时能看到丢失并当场修好。
+#
+# 这是 git 自己调用的钩子 —— 无论谁提交（命令行 / IDE / 工具 / 技能）都会经过它，
+# 不依赖"人记得用一个包装命令"。
+#
+# 说明：钩子 stdout 会被 git 显示给用户；stderr 同样显示。
+#       ref-guard 的"已修复"提示走 stdout（要让人看见），失败走 stderr + 退出码 1。
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+GUARD="$ROOT/scripts/git/ref-guard.sh"
+[ -f "$GUARD" ] || exit 0
+
+# --quiet：正常时完全静默（不然每次提交都刷一行，很快就没人看了）
+# 修复/报警信息不受 --quiet 影响，永远打印。
+sh "$GUARD" --quiet
+exit $?

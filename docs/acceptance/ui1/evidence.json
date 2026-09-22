@@ -1,0 +1,623 @@
+{
+  "startedAt": "2026-09-18T09:33:58+0800",
+  "ports": {
+    "api": 8799,
+    "fake": 8899,
+    "vite": 5273,
+    "cdp": 9333
+  },
+  "fakeModel": {
+    "delayMs": 2500,
+    "steps": 9,
+    "pageUrl": "http://127.0.0.1:8899/page-a"
+  },
+  "results": [
+    {
+      "name": "验收专用端口全部空闲（8799/8899/5273/9333）",
+      "ok": true,
+      "detail": "四个端口都没人听"
+    },
+    {
+      "name": "构建产物存在：vite 可执行入口",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\node_modules\\vite\\bin\\vite.js"
+    },
+    {
+      "name": "构建产物存在：electron 二进制",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\node_modules\\electron\\dist\\electron.exe"
+    },
+    {
+      "name": "构建产物存在：start-electron.mjs",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\apps\\desktop\\scripts\\start-electron.mjs"
+    },
+    {
+      "name": "假模型起来了",
+      "ok": true,
+      "detail": "health={\"ok\": true, \"fake\": true, \"delayMs\": 2500, \"steps\": 9}"
+    },
+    {
+      "name": "验收后端起来了",
+      "ok": true,
+      "detail": "{\"ok\": true, \"service\": \"ai-workbench-server\", \"db\": \"up\", \"sms\": \"mock\", \"llm\": \"configured\", \"llmCalls\": 0, \"liveLoops\": 0, \"loopMaxSteps\": 10, \"pageStates\": 0, \"time\": \"2026-09-18T01:34:02.466Z\"}"
+    },
+    {
+      "name": "真 Electron 窗口出现了（CDP 能连上渲染进程）",
+      "ok": true,
+      "detail": "耗时 1039ms"
+    },
+    {
+      "name": "发送验证码",
+      "ok": true,
+      "detail": "HTTP 200 {\"sent\": true, \"expires_in\": 300}"
+    },
+    {
+      "name": "从服务端日志里拿到 6 位验证码",
+      "ok": true,
+      "detail": "code=477404"
+    },
+    {
+      "name": "短信登录成功",
+      "ok": true,
+      "detail": "HTTP 200 user=XYZ13452"
+    },
+    {
+      "name": "账号有一个默认项目",
+      "ok": true,
+      "detail": "{\"projects\": [{\"id\": 111, \"name\": \"默认项目\", \"isCurrent\": true, \"isDefault\": true, \"henAgentId\": null, \"createdAt\": \"2026-09-18T01:34:07.718Z\"}], \"currentProjectId\": 111}"
+    },
+    {
+      "name": "登录后进到工作台（.wtMain 出现）",
+      "ok": true,
+      "detail": "耗时 29ms last=True"
+    },
+    {
+      "name": "渲染层 fetch 记录器已装",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "列0 默认是「全局图标」模式",
+      "ok": true,
+      "detail": "railMode=global"
+    },
+    {
+      "name": "★ .wtApp 真的是 flex 容器（shell.css 已加载）",
+      "ok": true,
+      "detail": "display=flex flexDir=row"
+    },
+    {
+      "name": "列0 顶部是「我的头像」",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "列0 全局入口齐了（会话/知识库/插件/设置）",
+      "ok": true,
+      "detail": "icons=['chat', 'knowledge', 'plugins', 'settings']"
+    },
+    {
+      "name": "列0 宽度 = 60px（令牌 --wt-rail-w）",
+      "ok": true,
+      "detail": "railW=60"
+    },
+    {
+      "name": "列1 存在且是展开态",
+      "ok": true,
+      "detail": "state=expanded w=270"
+    },
+    {
+      "name": "列1 宽度 = 270px（令牌 --wt-sb-w）",
+      "ok": true,
+      "detail": "sbW=270"
+    },
+    {
+      "name": "列0 与列1 是两个独立列（DOM 顺序 rail→sb→main，且互不嵌套）",
+      "ok": true,
+      "detail": "colOrder=['rail', 'sb', 'main']"
+    },
+    {
+      "name": "列0 与列1 在 x 方向不重叠（列1 起点 >= 列0 终点）",
+      "ok": true,
+      "detail": "railBox={'x': 0, 'y': 0, 'w': 60, 'h': 721, 'display': 'flex', 'position': 'relative', 'flexDir': 'column', 'flexWrap': 'nowrap', 'overflowX': 'visible', 'flex': '0 0 60px', 'minW': '60px', 'minH': 'auto', 'height': '721px'} sbBox={'x': 60, 'y': 0, 'w': 270, 'h': 721, 'display': 'flex', 'position': 'static', 'flexDir': 'column', 'flexWrap': 'nowrap', 'overflowX': 'hidden', 'flex': '0 0 270px', 'minW': 'auto', 'minH': '0px', 'height': '721px'}"
+    },
+    {
+      "name": "★ 三列等高、撑满外壳高度（不是各自缩成内容高度）",
+      "ok": true,
+      "detail": "app.h=721 rail.h=721 sb.h=721 main.h=721"
+    },
+    {
+      "name": "列1 列出了当前项目的智能体（后端名单一致）",
+      "ok": true,
+      "detail": "names=['小助']"
+    },
+    {
+      "name": "列1 的智能体 id 集合 == 后端 /agents?projectId= 的集合",
+      "ok": true,
+      "detail": "api=[208] ui=[208]"
+    },
+    {
+      "name": "不可删的角色（deletable=false）在 UI 上被标成 locked",
+      "ok": true,
+      "detail": "locked=['小助']"
+    },
+    {
+      "name": "当前智能体不可删 → 删除入口**根本不渲染**",
+      "ok": true,
+      "detail": "delBtn=None"
+    },
+    {
+      "name": "列1 有「+」创建智能体入口",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "列1 有展开/收起按钮",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "列2 空态占位在（当前无浏览器 tab）",
+      "ok": true,
+      "detail": "browserEmpty=True tabs=0"
+    },
+    {
+      "name": "列2 空态/工作区二者必居其一（不会既空态又开面板）",
+      "ok": true,
+      "detail": "empty=True panel=False"
+    },
+    {
+      "name": "新建输入框在切换模式里展开",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "新建输入框已填好、且「建」按钮可点（React 受控状态已更新）",
+      "ok": true,
+      "detail": "{\"value\":\"UI1-B-0918093416\",\"btnDisabled\":false}"
+    },
+    {
+      "name": "项目「UI1-B-0918093416」已在后端存在",
+      "ok": true,
+      "detail": "projects={\"projects\": [{\"id\": 111, \"name\": \"默认项目\", \"isCurrent\": false, \"isDefault\": true, \"henAgentId\": null, \"createdAt\": \"2026-09-18T01:34:07.718Z\"}, {\"id\": 112, \"name\": \"UI1-B-0918093416\", \"isCurrent\": true, \"isDefault\": false, \"henAgentId\": 209, \"createdAt\": \"2026-09-18T01:34:18.936Z\"}], \"currentProjectId\": 112}"
+    },
+    {
+      "name": "建完后列0 自动变回「全局图标」模式（跳过双击确认）",
+      "ok": true,
+      "detail": "railMode=global"
+    },
+    {
+      "name": "服务端「当前项目」已切到新建的 UI1-B",
+      "ok": true,
+      "detail": "current=112 b=112"
+    },
+    {
+      "name": "列0 的布局状态 currentProjectId 也同步了",
+      "ok": true,
+      "detail": "（由 layoutState 持久化 + 同步 effect 保证；下一步用列1 名单间接验证）"
+    },
+    {
+      "name": "新项目的列1 里正好有一只母鸡",
+      "ok": true,
+      "detail": "rows=[{\"id\": 209, \"on\": true, \"hen\": true, \"locked\": true, \"name\": \"项目管家母鸡\", \"hasBadge\": true, \"henTinted\": true}]"
+    },
+    {
+      "name": "母鸡有**明显视觉标记**（资料行给的是暖色头像 + 「母鸡」徽标，不是只靠 tooltip）",
+      "ok": true,
+      "detail": "badge=True tinted=True name=项目管家母鸡"
+    },
+    {
+      "name": "列1 只含新项目的智能体（与 ?projectId=B 完全一致，无泄漏）",
+      "ok": true,
+      "detail": "api=[209] ui=[209]"
+    },
+    {
+      "name": "列1 不包含默认项目的智能体（没串项目）",
+      "ok": true,
+      "detail": "default=[208] b=[209]"
+    },
+    {
+      "name": "当前选中的是母鸡",
+      "ok": true,
+      "detail": "sel=项目管家母鸡"
+    },
+    {
+      "name": "母鸡被选中时，删除入口**根本不渲染**（不是 disabled）",
+      "ok": true,
+      "detail": "delBtn=None"
+    },
+    {
+      "name": "后端对母鸡的删除也确实拦截（UI/后端双重保护一致）",
+      "ok": true,
+      "detail": "HTTP 400 {\"error\": \"这是项目的母鸡（随项目创建、有建智能体的权限），不能删。\"}"
+    },
+    {
+      "name": "点「+」后列1 多出一个智能体",
+      "ok": true,
+      "detail": "耗时 43ms"
+    },
+    {
+      "name": "能识别出新建的那个智能体",
+      "ok": true,
+      "detail": "[{'id': 209, 'on': False, 'hen': True, 'locked': True, 'name': '项目管家母鸡', 'hasBadge': True, 'henTinted': True}, {'id': 210, 'on': True, 'hen': False, 'locked': False, 'name': '新智能体', 'hasBadge': False, 'henTinted': False}]"
+    },
+    {
+      "name": "「+」确实调了后端 POST /agents",
+      "ok": true,
+      "detail": "[{\"at\": 1789695264523, \"m\": \"POST\", \"url\": \"http://127.0.0.1:8799/agents\", \"body\": \"{\\\"asAgentId\\\":209}\"}]"
+    },
+    {
+      "name": "POST /agents 带了 asAgentId（没有猜身份、没有空发）",
+      "ok": true,
+      "detail": "{\"asAgentId\":209}"
+    },
+    {
+      "name": "新智能体在库里的 projectId 就是当前项目",
+      "ok": true,
+      "detail": "newId=210"
+    },
+    {
+      "name": "新智能体是可删的（locked=false）",
+      "ok": true,
+      "detail": "locked=False hen=False"
+    },
+    {
+      "name": "选中可删智能体时，删除入口**出现**",
+      "ok": true,
+      "detail": "delBtn={'text': '删掉「新智能体」', 'disabled': False}"
+    },
+    {
+      "name": "已进入项目切换模式（能看到项目图块）",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "切换模式下列0 显示的是**项目图块**（不是智能体、不是全局图标）",
+      "ok": true,
+      "detail": "tiles=2 hasAvatar=False"
+    },
+    {
+      "name": "单击后：选中框移到了被点的那个项目上",
+      "ok": true,
+      "detail": "tiles={\"111\": {\"id\": 111, \"on\": true, \"current\": false, \"face\": \"默\"}, \"112\": {\"id\": 112, \"on\": false, \"current\": true, \"face\": \"U\"}}"
+    },
+    {
+      "name": "单击后：原当前项目（B）仍是 **current**（单击没有真的切换）",
+      "ok": true,
+      "detail": "b_current=True"
+    },
+    {
+      "name": "单击后：**只有**被点的那个项目带着选中框（框唯一）",
+      "ok": true,
+      "detail": "on=[111]"
+    },
+    {
+      "name": "单击后：列0 **仍在**切换模式（没有被切走）",
+      "ok": true,
+      "detail": "railMode=projects"
+    },
+    {
+      "name": "单击后：列1 仍是项目 B 的名单（没刷新成 A）",
+      "ok": true,
+      "detail": "now=[209, 210] expect=[209]"
+    },
+    {
+      "name": "★ 单击「非当前项目」期间：**没有发出任何切换类请求**（activate/agents/建项目）",
+      "ok": true,
+      "detail": "requests=[]"
+    },
+    {
+      "name": "单击期间也没有 GET /agents（没顺手刷新名单）",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "name": "★ 单击后服务端的「当前项目」**一点没变**（还是 B）",
+      "ok": true,
+      "detail": "current=112 b=112"
+    },
+    {
+      "name": "双击后：列0 自动变回「全局图标」模式",
+      "ok": true,
+      "detail": "railMode=global 耗时=55ms"
+    },
+    {
+      "name": "★ 双击后：服务端「当前项目」真的切成 A 了",
+      "ok": true,
+      "detail": "current=111 a=111"
+    },
+    {
+      "name": "★ 双击后：列1 刷新为项目 A 的智能体（名单换成 A 的）",
+      "ok": true,
+      "detail": "api=[208] ui=[208]"
+    },
+    {
+      "name": "双击期间确实发了 POST /projects/:id/activate",
+      "ok": true,
+      "detail": "[{\"at\": 1789695270461, \"m\": \"POST\", \"url\": \"http://127.0.0.1:8799/projects/111/activate\", \"body\": \"{}\"}]"
+    },
+    {
+      "name": "双击当前项目后面板收起了（不是「纹丝不动」）",
+      "ok": true,
+      "detail": "耗时 59ms"
+    },
+    {
+      "name": "双击当前项目**没有**重复发 activate（省掉一次无意义切换）",
+      "ok": true,
+      "detail": "[]"
+    },
+    {
+      "name": "前置：列1 当前是展开态",
+      "ok": true,
+      "detail": "state=expanded"
+    },
+    {
+      "name": "点收起按钮 → 列1 变成 collapsed",
+      "ok": true,
+      "detail": "state=collapsed 耗时=22ms"
+    },
+    {
+      "name": "收起后列1 宽度 = 72px（令牌 --wt-sb-w-collapsed）",
+      "ok": true,
+      "detail": "sbW=72"
+    },
+    {
+      "name": "收起后列1 里**只剩图标**（名称/状态节点不再渲染）",
+      "ok": true,
+      "detail": "names=['']"
+    },
+    {
+      "name": "★ 收起后列0 **宽度不变**（仍是 60px，没有合并进来）",
+      "ok": true,
+      "detail": "railW=60"
+    },
+    {
+      "name": "★ 收起后列0 与列1 仍是两列（列1 左边界 == 列0 右边界，不重叠）",
+      "ok": true,
+      "detail": "railX=0 railW=60 sbX=60"
+    },
+    {
+      "name": "★ 收起后列0 仍是「全局图标」模式（没有被列1 的内容顶掉）",
+      "ok": true,
+      "detail": "railMode=global avatar=True"
+    },
+    {
+      "name": "★ 收起态下母鸡仍被单独标出（data-agent-hen 仍在，不靠名称也能区分）",
+      "ok": true,
+      "detail": "rows=[{\"id\": 209, \"on\": true, \"hen\": true, \"locked\": true, \"name\": \"\", \"hasBadge\": false, \"henTinted\": true}, {\"id\": 210, \"on\": false, \"hen\": false, \"locked\": false, \"name\": \"\", \"hasBadge\": false, \"henTinted\": false}]"
+    },
+    {
+      "name": "★ 收起态下母鸡头像仍是母鸡配色（--wt-mark-grad 着色，72px 里唯一可辨的线索）",
+      "ok": true,
+      "detail": "hens=[{\"id\": 209, \"on\": true, \"hen\": true, \"locked\": true, \"name\": \"\", \"hasBadge\": false, \"henTinted\": true}]"
+    },
+    {
+      "name": "★ 收起态下列1 仍是 collapsed（没有被切项目带成展开）",
+      "ok": true,
+      "detail": "state=collapsed"
+    },
+    {
+      "name": "收起态下删除入口不渲染（狭窄栏里不塞破坏性按钮）",
+      "ok": true,
+      "detail": "delBtn=None"
+    },
+    {
+      "name": "收起列1 之后，列0 仍能进切换模式（两列互不干扰）",
+      "ok": true,
+      "detail": "railMode=projects"
+    },
+    {
+      "name": "再点一次 → 列1 回到 expanded",
+      "ok": true,
+      "detail": "state=expanded"
+    },
+    {
+      "name": "展开后宽度回到 270px",
+      "ok": true,
+      "detail": "w=270 (expanded was 270)"
+    },
+    {
+      "name": "展开后名称/状态回来了",
+      "ok": true,
+      "detail": "names=['小助']"
+    },
+    {
+      "name": "列1 展开/收起状态进了持久化键 workbench.layout.v1",
+      "ok": true,
+      "detail": "{\"currentProjectId\":111,\"activeAgentByProject\":{\"111\":208,\"112\":209},\"agentSidebar\":\"expanded\"}"
+    },
+    {
+      "name": "项目 A 有智能体可以起任务",
+      "ok": true,
+      "detail": "rows=['小助']"
+    },
+    {
+      "name": "已在项目 A 的智能体里发出「打开网页」指令",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "内嵌浏览器页已创建（任务开始跑）",
+      "ok": true,
+      "detail": "webviews=1 耗时=100ms"
+    },
+    {
+      "name": "假模型已被调用（任务真的在跑，不是只开了张空页）",
+      "ok": true,
+      "detail": "events=1"
+    },
+    {
+      "name": "已切到项目 B（列1 是 B 的名单）",
+      "ok": true,
+      "detail": "now=[209, 210] expect=[209, 210]"
+    },
+    {
+      "name": "★ 内嵌页 JS 计数器在涨（页面一直在跑，没被冻结）",
+      "ok": true,
+      "detail": "before=0 after=67"
+    },
+    {
+      "name": "★ performance.timeOrigin 没变（那张页**从没被重载**）",
+      "ok": true,
+      "detail": "t0 before=1789695294251.8 after=1789695294251.8"
+    },
+    {
+      "name": "★ webview 还在（没有被卸载掉）",
+      "ok": true,
+      "detail": "count=1"
+    },
+    {
+      "name": "★ 假模型调用时间戳**持续在发生**（切换期间后台那路没停）",
+      "ok": true,
+      "detail": "calls=13 stamps=[1789695294551, 1789695297057, 1789695297087, 1789695299591, 1789695299605, 1789695302123, 1789695302138, 1789695304644, 1789695304657, 1789695307165, 1789695307179, 1789695309685]"
+    },
+    {
+      "name": "★ 切换期间模型调用**最大间隔 < 8s**（没有一整段空白）",
+      "ok": true,
+      "detail": "max_gap_ms=2518 gaps=[2506, 30, 2504, 14, 2518, 15, 2506, 13, 2508, 14, 2506, 15]"
+    },
+    {
+      "name": "★ 主进程里这一路驾驶状态仍在（IPC 通道有响应，非报错）",
+      "ok": true,
+      "detail": "{}"
+    },
+    {
+      "name": "切回项目 A 后列1 名单恢复为 A 的名单",
+      "ok": true,
+      "detail": "now=[208] expect=[208]"
+    },
+    {
+      "name": "新增了独立组件文件（>= 4 个 .tsx/.ts + >= 3 个 .css）",
+      "ok": true,
+      "detail": "[{\"path\": \"apps/desktop/src/workbench/AgentSidebar.tsx\", \"lines\": 227, \"bytes\": 9557}, {\"path\": \"apps/desktop/src/workbench/ProjectSwitcher.tsx\", \"lines\": 193, \"bytes\": 7844}, {\"path\": \"apps/desktop/src/workbench/RailColumn.tsx\", \"lines\": 207, \"bytes\": 8021}, {\"path\": \"apps/desktop/src/workbench/agent-sidebar.css\", \"lines\": 341, \"bytes\": 10028}, {\"path\": \"apps/desktop/src/workbench/icons.tsx\", \"lines\": 120, \"bytes\": 3736}, {\"path\": \"apps/desktop/src/workbench/index.ts\", \"lines\": 52, \"bytes\": 231"
+    },
+    {
+      "name": "★ App.tsx 行数变化已记录（供汇报，不做上限约束）",
+      "ok": true,
+      "detail": "before=2360 now=2502 delta=+142"
+    },
+    {
+      "name": "★ 旧的左栏渲染块已被三列组件替换（294 行 → 46 行，净减 248 行）",
+      "ok": true,
+      "detail": "旧 <aside class=\"sidebar\"> 块 294 行 → 现在 3 个组件标签 46 行"
+    },
+    {
+      "name": "App.tsx 里已无旧的 .projectBox 结构",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "App.tsx 里已无旧的 .agentList 结构",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "App.tsx 里已无旧的 .sidebar / .middle 外壳",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "defaultProjectId": 111,
+  "defaultAgents": [
+    {
+      "id": 208,
+      "on": true,
+      "hen": false,
+      "locked": true,
+      "name": "小助",
+      "hasBadge": false,
+      "henTinted": false
+    }
+  ],
+  "projectBName": "UI1-B-0918093416",
+  "projectB": 112,
+  "projectBAgents": [
+    {
+      "id": 209,
+      "on": false,
+      "hen": true,
+      "locked": true,
+      "name": "项目管家母鸡",
+      "hasBadge": true,
+      "henTinted": true
+    },
+    {
+      "id": 210,
+      "on": true,
+      "hen": false,
+      "locked": false,
+      "name": "新智能体",
+      "hasBadge": false,
+      "henTinted": false
+    }
+  ],
+  "newFiles": [
+    {
+      "path": "apps/desktop/src/workbench/AgentSidebar.tsx",
+      "lines": 227,
+      "bytes": 9557
+    },
+    {
+      "path": "apps/desktop/src/workbench/ProjectSwitcher.tsx",
+      "lines": 193,
+      "bytes": 7844
+    },
+    {
+      "path": "apps/desktop/src/workbench/RailColumn.tsx",
+      "lines": 207,
+      "bytes": 8021
+    },
+    {
+      "path": "apps/desktop/src/workbench/agent-sidebar.css",
+      "lines": 341,
+      "bytes": 10028
+    },
+    {
+      "path": "apps/desktop/src/workbench/icons.tsx",
+      "lines": 120,
+      "bytes": 3736
+    },
+    {
+      "path": "apps/desktop/src/workbench/index.ts",
+      "lines": 52,
+      "bytes": 2310
+    },
+    {
+      "path": "apps/desktop/src/workbench/layoutState.ts",
+      "lines": 206,
+      "bytes": 9555
+    },
+    {
+      "path": "apps/desktop/src/workbench/project-switcher.css",
+      "lines": 260,
+      "bytes": 8333
+    },
+    {
+      "path": "apps/desktop/src/workbench/rail.css",
+      "lines": 234,
+      "bytes": 9047
+    },
+    {
+      "path": "apps/desktop/src/workbench/shell.css",
+      "lines": 343,
+      "bytes": 11055
+    },
+    {
+      "path": "apps/desktop/src/workbench/useWorkbenchLayout.ts",
+      "lines": 157,
+      "bytes": 6343
+    },
+    {
+      "path": "apps/desktop/src/styles/tokens.css",
+      "lines": 272,
+      "bytes": 12811
+    }
+  ],
+  "appLines": 2502,
+  "appLinesBefore": 2360,
+  "appLinesDelta": 142,
+  "passed": 101,
+  "total": 101,
+  "finishedAt": "2026-09-18T09:35:10+0800"
+}

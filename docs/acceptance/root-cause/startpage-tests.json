@@ -1,0 +1,38 @@
+{
+  "fails": 0,
+  "c": {
+    "title": "新标签页",
+    "links": [
+      "百度",
+      "淘宝",
+      "抖音",
+      "ChatGPT",
+      "豆包",
+      "速卖通"
+    ],
+    "hrefs": [
+      "https://www.baidu.com",
+      "https://www.taobao.com",
+      "https://www.douyin.com",
+      "https://chatgpt.com",
+      "https://www.doubao.com",
+      "https://www.aliexpress.com"
+    ],
+    "targets": [
+      "_blank",
+      "_blank",
+      "_blank",
+      "_blank",
+      "_blank",
+      "_blank"
+    ],
+    "brand": "新标签页",
+    "hint": "在上面地址栏输入网址，或点上面的入口。也可以直接在聊天里说「打开某网站」。",
+    "bodyLen": 67,
+    "bg": "rgb(251, 251, 253)"
+  },
+  "clicked": {
+    "seen": "clicked",
+    "href": "https://www.baidu.com"
+  }
+}

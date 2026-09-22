@@ -1,0 +1,65 @@
+{
+  "rail": {
+    "rect": {
+      "w": 60,
+      "h": 900,
+      "x": 44,
+      "y": 44
+    },
+    "background": "rgba(0, 0, 0, 0)",
+    "bgImage": "linear-gradient(rgb(42, 42, 42) 0%, rgb(42, 42, 42) 100%)",
+    "borderRight": "0px none",
+    "boxShadow": "none",
+    "backdropFilter": "blur(10px) saturate(1.2)",
+    "zIndex": "4",
+    "position": "absolute",
+    "borderRadius": "20px 0px 0px 20px"
+  },
+  "sb": {
+    "rect": {
+      "w": 270,
+      "h": 900,
+      "x": 104,
+      "y": 44
+    },
+    "background": "rgba(0, 0, 0, 0)",
+    "borderRight": "0px none",
+    "boxShadow": "rgb(47, 47, 48) -1px 0px 0px 0px",
+    "backdropFilter": "blur(14px) saturate(1.28)"
+  },
+  "row": {
+    "rect": {
+      "w": 264,
+      "h": 56,
+      "x": 106,
+      "y": 100
+    },
+    "height": "56px",
+    "padding": "0px 12px 0px 8px",
+    "margin": "2px 4px 2px 2px",
+    "gap": "11px",
+    "borderRadius": "14px",
+    "background": "rgb(69, 69, 74)"
+  },
+  "avatar": {
+    "rect": {
+      "w": 41,
+      "h": 41,
+      "x": 114,
+      "y": 107.5
+    },
+    "borderRadius": "10px"
+  },
+  "name": {
+    "fontSize": "16px",
+    "fontWeight": "600",
+    "lineHeight": "22px",
+    "color": "rgba(255, 255, 255, 0.92)"
+  },
+  "status": {
+    "fontSize": "13px",
+    "lineHeight": "16px",
+    "color": "rgba(255, 255, 255, 0.58)"
+  },
+  "railButtons": []
+}

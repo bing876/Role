@@ -1,0 +1,586 @@
+{
+  "startedAt": "2026-09-20 14:37:43",
+  "testPhone": "18689886270",
+  "afterSearch": {
+    "blockCount": 1,
+    "blocks": [
+      {
+        "label": "来源",
+        "items": [
+          {
+            "tag": "A",
+            "href": "https://www.yzwb.net/news/txs/202609/t20260920_394471.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "紫牛早新闻｜今天，亚运赛场将决出31金！冲金点一览",
+            "domain": "yzwb.net",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 311,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://news.bjd.com.cn/2026/09/20/11965807.shtml",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "9月20日新闻早知道｜昨夜今晨·热点不容错过",
+            "domain": "news.bjd.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 331,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://k.sina.com.cn/article_7879776538_1d5abd91a06801kbgw.html?from=travel",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "华山今天有特殊活动吗？半价+古风游园会持续，险道检修中+FAQ",
+            "domain": "k.sina.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 334,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://www.wenxuecity.com/news/2026/09/19/126779612.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "早上翻开伊朗的报纸，关于中国的话题特别多",
+            "domain": "wenxuecity.com",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 327,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://m.zhibo8.com/news/web/zuqiu/2026-09-20/6aaf1b30e4848native.htm",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "科瓦奇：不管外界觉得赢球是否实至名归，我的判断是配得上胜利",
+            "domain": "m.zhibo8.com",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 338,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://m.weather.com.cn/news/2026/09/4797588.shtml",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "华西降雨进一步发展 西北东北多地最高气温将创新低",
+            "domain": "m.weather.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 359,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://www.cqnews.net/web/content_1551158662893035520.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "今天夜间到明天夜间 重庆中东部部分地区有大到暴雨",
+            "domain": "cqnews.net",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 323,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          }
+        ]
+      }
+    ],
+    "msgCount": 2,
+    "assistantCount": 1,
+    "lastIsAssistant": true,
+    "hint": null
+  },
+  "afterReload": {
+    "blockCount": 1,
+    "blocks": [
+      {
+        "label": "来源",
+        "items": [
+          {
+            "tag": "A",
+            "href": "https://www.yzwb.net/news/txs/202609/t20260920_394471.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "紫牛早新闻｜今天，亚运赛场将决出31金！冲金点一览",
+            "domain": "yzwb.net",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 311,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://news.bjd.com.cn/2026/09/20/11965807.shtml",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "9月20日新闻早知道｜昨夜今晨·热点不容错过",
+            "domain": "news.bjd.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 331,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://k.sina.com.cn/article_7879776538_1d5abd91a06801kbgw.html?from=travel",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "华山今天有特殊活动吗？半价+古风游园会持续，险道检修中+FAQ",
+            "domain": "k.sina.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 334,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://www.wenxuecity.com/news/2026/09/19/126779612.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "早上翻开伊朗的报纸，关于中国的话题特别多",
+            "domain": "wenxuecity.com",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 327,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://m.zhibo8.com/news/web/zuqiu/2026-09-20/6aaf1b30e4848native.htm",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "科瓦奇：不管外界觉得赢球是否实至名归，我的判断是配得上胜利",
+            "domain": "m.zhibo8.com",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 338,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://m.weather.com.cn/news/2026/09/4797588.shtml",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "华西降雨进一步发展 西北东北多地最高气温将创新低",
+            "domain": "m.weather.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 359,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://www.cqnews.net/web/content_1551158662893035520.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "今天夜间到明天夜间 重庆中东部部分地区有大到暴雨",
+            "domain": "cqnews.net",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 323,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          }
+        ]
+      }
+    ],
+    "msgCount": 2,
+    "assistantCount": 1,
+    "lastIsAssistant": true,
+    "hint": null
+  },
+  "afterNeither": {
+    "blockCount": 1,
+    "blocks": [
+      {
+        "label": "来源",
+        "items": [
+          {
+            "tag": "A",
+            "href": "https://www.yzwb.net/news/txs/202609/t20260920_394471.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "紫牛早新闻｜今天，亚运赛场将决出31金！冲金点一览",
+            "domain": "yzwb.net",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 311,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://news.bjd.com.cn/2026/09/20/11965807.shtml",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "9月20日新闻早知道｜昨夜今晨·热点不容错过",
+            "domain": "news.bjd.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 331,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://k.sina.com.cn/article_7879776538_1d5abd91a06801kbgw.html?from=travel",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "华山今天有特殊活动吗？半价+古风游园会持续，险道检修中+FAQ",
+            "domain": "k.sina.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 334,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://www.wenxuecity.com/news/2026/09/19/126779612.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "早上翻开伊朗的报纸，关于中国的话题特别多",
+            "domain": "wenxuecity.com",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 327,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://m.zhibo8.com/news/web/zuqiu/2026-09-20/6aaf1b30e4848native.htm",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "科瓦奇：不管外界觉得赢球是否实至名归，我的判断是配得上胜利",
+            "domain": "m.zhibo8.com",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 338,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://m.weather.com.cn/news/2026/09/4797588.shtml",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "华西降雨进一步发展 西北东北多地最高气温将创新低",
+            "domain": "m.weather.com.cn",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 359,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          },
+          {
+            "tag": "A",
+            "href": "https://www.cqnews.net/web/content_1551158662893035520.html",
+            "target": "_blank",
+            "rel": "noreferrer noopener",
+            "title": "今天夜间到明天夜间 重庆中东部部分地区有大到暴雨",
+            "domain": "cqnews.net",
+            "cursor": "pointer",
+            "color": "rgb(37, 99, 235)",
+            "w": 323,
+            "h": 20,
+            "hitOk": true,
+            "hitAt": "SPAN.sources__title",
+            "inView": true
+          }
+        ]
+      }
+    ],
+    "msgCount": 4,
+    "assistantCount": 2,
+    "lastIsAssistant": true,
+    "hint": null
+  },
+  "clickProbe": {
+    "port": 8911,
+    "url": "http://127.0.0.1:8911/srcclick1789886301",
+    "hits": [
+      [
+        1789886301.4680185,
+        "/srcclick1789886301"
+      ],
+      [
+        1789886301.5057485,
+        "/favicon.ico"
+      ]
+    ],
+    "info": {
+      "x": 306,
+      "y": 421,
+      "w": 311,
+      "h": 20,
+      "target": "_blank",
+      "rel": "noreferrer noopener",
+      "href": "http://127.0.0.1:8911/srcclick1789886301",
+      "orig": "https://www.yzwb.net/news/txs/202609/t20260920_394471.html"
+    },
+    "after": {
+      "href": "http://localhost:5273/",
+      "input": true,
+      "msgs": 4
+    }
+  },
+  "results": [
+    {
+      "name": "验收专用端口空闲（8799/5273/9333，不动用户的 8787/5173）",
+      "ok": true,
+      "detail": "三个端口都没人听"
+    },
+    {
+      "name": "vite 入口存在",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\node_modules\\vite\\bin\\vite.js"
+    },
+    {
+      "name": "start-electron.mjs 存在",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "dist 里有本次改过的服务端（含 sources 列写入）",
+      "ok": true,
+      "detail": "grep sources in dist/routes/chat.js"
+    },
+    {
+      "name": "后端起来了且 db=up",
+      "ok": true,
+      "detail": "{\"ok\": true, \"service\": \"ai-workbench-server\", \"db\": \"up\", \"sms\": \"mock\", \"llm\": \"configured\", \"llmCalls\": 0, \"loopMaxSteps\": 10, \"liveLoops\": 0, \"runningLoops\": 0, \"liveLoopsWindowMs\": 60000, \"pageStates\": 0, \"time\": \"2026-09-20T06:37:46.336Z\"}"
+    },
+    {
+      "name": "后端已配模型（真机验收必须真调模型）",
+      "ok": true,
+      "detail": "llm=configured"
+    },
+    {
+      "name": "★ 连续两次 /health 都是 db=up（起 Electron 前的硬前提）",
+      "ok": true,
+      "detail": "db=up"
+    },
+    {
+      "name": "真 Electron 窗口出现且 CDP 连得上渲染进程",
+      "ok": true,
+      "detail": "耗时 1063ms"
+    },
+    {
+      "name": "发送验证码",
+      "ok": true,
+      "detail": "HTTP 200 {\"sent\": true, \"expires_in\": 300}"
+    },
+    {
+      "name": "从服务端日志里拿到 6 位验证码（mock 只进日志，响应体里没有）",
+      "ok": true,
+      "detail": "code=700692"
+    },
+    {
+      "name": "短信登录成功并拿到 JWT",
+      "ok": true,
+      "detail": "HTTP 200 user=XYZ52396"
+    },
+    {
+      "name": "登录后进到工作台（聊天输入框出现）",
+      "ok": true,
+      "detail": "耗时 25ms"
+    },
+    {
+      "name": "消息发出去了且助手回复落进 DOM",
+      "ok": true,
+      "detail": "assistant 0 → 1（12015ms）"
+    },
+    {
+      "name": "★ 气泡下方真的渲染出了来源块（.sources 存在）",
+      "ok": true,
+      "detail": "blockCount=1"
+    },
+    {
+      "name": "★ 来源块里有可点的条目（.sources__item 非空）",
+      "ok": true,
+      "detail": "7 条"
+    },
+    {
+      "name": "★ 每一条都是真外链 <a href=\"http(s)://…\">",
+      "ok": true,
+      "detail": "样例：https://www.yzwb.net/news/txs/202609/t20260920_394471.html"
+    },
+    {
+      "name": "★ 每一条都带 target=\"_blank\"（点击才会走主进程的 setWindowOpenHandler → 系统浏览器）",
+      "ok": true,
+      "detail": "target=['_blank']"
+    },
+    {
+      "name": "★ 每一条都带 rel=\"noreferrer noopener\"（外链安全）",
+      "ok": true,
+      "detail": "rel=['noreferrer noopener']"
+    },
+    {
+      "name": "来源条目真的渲染了标题和域名（不是空壳）",
+      "ok": true,
+      "detail": "首条：'紫牛早新闻｜今天，亚运赛场将决出31金！冲金点一览' @ 'yzwb.net'"
+    },
+    {
+      "name": "来源条目有实际可见尺寸（不是 display:none / 0×0）",
+      "ok": true,
+      "detail": "首条 311x20"
+    },
+    {
+      "name": "来源条目的鼠标指针是 pointer（看得出来能点）",
+      "ok": true,
+      "detail": "cursor=['pointer']"
+    },
+    {
+      "name": "来源块的标签是「来源」",
+      "ok": true,
+      "detail": "'来源'"
+    },
+    {
+      "name": "★ 每条来源的中心点真的点得到（hit-test 命中自己，不是被别的元素盖住）",
+      "ok": true,
+      "detail": "命中样例：SPAN.sources__title / 未命中 0 条"
+    },
+    {
+      "name": "★ 每条来源都在视口内（不是滚出屏幕所以点不到）",
+      "ok": true,
+      "detail": "视口内 7/7 条"
+    },
+    {
+      "name": "截图已保存（人眼可看来源标注长什么样）",
+      "ok": true,
+      "detail": "C:\\Users\\bing\\workbuddy-ai\\work123\\docs\\acceptance\\tavily\\sources-ui-20260920.png"
+    },
+    {
+      "name": "刷新后应用重新起来（输入框回来了）",
+      "ok": true,
+      "detail": "耗时 1076ms"
+    },
+    {
+      "name": "刷新后自动恢复了历史消息（走 /chat/history）",
+      "ok": true,
+      "detail": "耗时 40ms"
+    },
+    {
+      "name": "★ 刷新后来源块仍在（证明来源真的落了库，不是只在内存里过了一下）",
+      "ok": true,
+      "detail": "blockCount=1"
+    },
+    {
+      "name": "★ 刷新后来源与刷新前逐条一致（同 url 同序）",
+      "ok": true,
+      "detail": "前 7 条 / 后 7 条，首条 一致"
+    },
+    {
+      "name": "第二轮也拿到了回复",
+      "ok": true,
+      "detail": "assistant 1 → 2"
+    },
+    {
+      "name": "★ 常识轮的回复**没有**来源块（来源块总数仍是 1，没跟着涨）",
+      "ok": true,
+      "detail": "搜索轮后=1 → 常识轮后=1"
+    },
+    {
+      "name": "助手消息数确实涨了（证明这一轮真的答了，不是\"没搜就没回复\"）",
+      "ok": true,
+      "detail": "1 → 2"
+    },
+    {
+      "name": "本机一次性探针服务已起（用来接住\"系统浏览器真的来取 url\"那一刻）",
+      "ok": true,
+      "detail": "port=8911"
+    },
+    {
+      "name": "点击之前探针服务没收到过请求（下面那条是这次点击带来的，不是残留）",
+      "ok": true,
+      "detail": "点击前命中数=0"
+    },
+    {
+      "name": "★ 点击前 href 已改写到本机探针服务，但 target/rel 原样没动",
+      "ok": true,
+      "detail": "href=http://127.0.0.1:8911/srcclick1789886301 target=_blank rel=noreferrer noopener"
+    },
+    {
+      "name": "真点了一下（完整鼠标序列 mouseMoved→Pressed→Released）",
+      "ok": true,
+      "detail": "clicked at (306,421)"
+    },
+    {
+      "name": "★ 点击来源后，系统默认浏览器**真的取走了这个 url**（本机探针服务收到请求）",
+      "ok": true,
+      "detail": "收到 /srcclick1789886301（300ms）"
+    },
+    {
+      "name": "★ 点完之后应用没被顶掉（仍在应用里，说明 will-navigate / deny 生效）",
+      "ok": true,
+      "detail": "href=http://localhost:5273/ input=True msgs=4"
+    }
+  ],
+  "summary": {
+    "pass": 38,
+    "fail": 0
+  }
+}

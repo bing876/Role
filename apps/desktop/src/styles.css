@@ -1,0 +1,1119 @@
+:root {
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --sidebar: #ffffff;
+  --border: #eeeeee;
+  --text: #222222;
+  --text-weak: #666666;
+  --accent: #2f6fed;
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ---------- 三栏布局：联系人 | 聊天 | 控制 + 任务 ---------- */
+.app {
+  display: flex;
+  height: 100%;
+}
+
+/* ---------- 左栏 ---------- */
+.sidebar {
+  width: 220px;
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-right: 1px solid var(--border);
+  background: var(--sidebar);
+  /*
+   * 子阶段 2-B：左栏多了一个项目入口，760px 高的窗口下内容会更高。
+   * flex 子项默认 min-height:auto（不肯缩到内容以下），超出部分会被 body 的 overflow:hidden
+   * 直接切掉 —— 表现就是「按钮在 DOM 里、但点不到」（验收里真踩到了）。
+   * 这里让左栏自己能滚：内容装得下时完全没区别，装不下时至少每一个入口都够得着。
+   */
+  overflow-y: auto;
+}
+
+.contact {
+  /* 第 15 步：左栏一行一个智能体，这一行是 <button>——先把浏览器默认按钮样式清掉 */
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  position: relative;
+}
+
+.contact:hover {
+  background: #f6f7f9;
+}
+
+/* 当前正在聊的那个智能体 */
+.contact--on {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+/* ---- 第 15 步：左栏智能体列表 + 「＋ 添加」 ---- */
+.agentList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 44vh;
+  overflow-y: auto;
+  /*
+   * 子阶段 2-B：`overflow-y:auto` 让这个 flex 子项的 min-height:auto 解析成 0，
+   * 于是左栏内容一超高，它就被挤成 0 高（自身能滚、但「＋ 添加」整颗按钮被裁掉，
+   * elementFromPoint 命中到的是 .sidebar —— 表现同样是「DOM 里有、点不到」）。
+   * 明确不参与收缩：要滚由左栏滚（见 .sidebar 的 overflow-y），列表保持自然高度。
+   */
+  flex-shrink: 0;
+}
+.agentList__add {
+  margin-top: 4px;
+}
+/* 删自建智能体（「小助」不会出现这个按钮） */
+.agentList__del {
+  color: #b91c1c;
+}
+.agentList__note {
+  margin-top: 2px;
+  line-height: 1.45;
+  color: #b45309;
+  word-break: break-word;
+}
+
+/* ---- 第 16 步：「启动并保活」开关（左栏）---- */
+.keepalive {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.keepalive__btn {
+  width: 100%;
+}
+
+/* ---- 第 16 步：聊天顶部的会话状态行（当前任务 / 是否保活 / 是否已同意用浏览器）---- */
+.taskState {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ---- 第 17 步：任务结果行（右栏整栏不渲染了，结果挂这里）---- */
+.taskResult {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.taskResult .buttons-row {
+  margin-top: 4px;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 50%;
+  background: #d9d9d9;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b6b6b;
+  font-weight: 700;
+}
+
+.avatar__face {
+  font-size: 15px;
+}
+
+.red-dot {
+  position: absolute;
+  right: -1px;
+  top: -1px;
+  width: 10px;
+  height: 10px;
+  background: #ff3b30;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+.contact__name {
+  font-weight: 700;
+}
+
+.sidebar__footer {
+  margin-top: auto;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text-weak);
+  word-break: break-all;
+}
+
+/* ---------- 中栏：聊天 ---------- */
+.middle {
+  flex: 1 1 auto;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  /* 第 25 步：浏览器全屏层（.browserLayer）用绝对定位铺满这里，所以要定位上下文 */
+  position: relative;
+  overflow: hidden;
+}
+
+/*
+ * 第 25 步 · 中栏分两层（左侧图标栏 / 智能体列表完全不受影响）：
+ *   ① 会话层（.chat + .inputBar）—— 正常流，z-index 10；
+ *   ② 浏览器层（.browserLayer）—— 绝对定位铺满，z-index 20。
+ * 全屏时 ② 压过 ①；退出全屏后 ② 降为 z-index 0 + 不可见，会话层自然露出来。
+ */
+.chat,
+.inputBar {
+  position: relative;
+  z-index: 10;
+}
+
+/* 浏览器层：铺满中栏会话区（位于顶栏下方，左栏与顶栏照旧可见可点） */
+.browserLayer {
+  position: absolute;
+  top: 45px;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/*
+ * ★★ 退出全屏 = 后台运行。这是本步最关键的一条 CSS，改之前先读懂：
+ *
+ *   只用 opacity + pointer-events 让它"看不见、点不到"，
+ *   **绝不 display:none、绝不把 width/height 设成 0、绝不卸载**。
+ *
+ *   原因（侦查阶段已证实）：驾驶（AI 操作内嵌页）的点击坐标来自
+ *   页内 `getBoundingClientRect`，一旦 webview 尺寸归零，所有坐标都算不出来，
+ *   点击会静默失败。所以后台态必须保持**与全屏时完全相同的真实尺寸与挂载状态**。
+ *
+ *   本目录里 .browserPanel__view--off（别的智能体的页）用的是同一套机制，
+ *   那边同样"看不见但照样跑"，已经过验收。
+ */
+.browserLayer--bg {
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/*
+ * ★★ 第 27 步 · 求助卡模式（人工介入卡片）。这一条最容易写错，改之前先读完：
+ *
+ *   目标：让**求助的那一张页**看起来嵌在聊天流的卡片里，而元素一动不动。
+ *
+ *   为什么不能复用上面的 `--bg`（两个坑，都踩过）：
+ *     ① `opacity < 1` 会让这一层成为**固定/绝对定位子元素的包含块** ——
+ *        几何全都会按"层"而不是按"舞台"来算，怎么调都对不齐；
+ *     ② `opacity:0` 会把整层连同那张页一起藏掉，正好把要露的那张也藏了。
+ *
+ *   所以 embed 是**独立一态**：层透明 + 不吃指针事件（页自己再打开 pointer-events），
+ *   z-index 抬到聊天之上，但底下的聊天照常可读、可滚、可点。
+ */
+.browserLayer--embed {
+  background: transparent;
+  pointer-events: none;
+  z-index: 30;
+}
+/* 求助卡模式下"临时测试条"让位（它属于全屏工作区，此时用户看的是聊天卡片） */
+.browserLayer--embed .driveBar {
+  display: none;
+}
+
+/*
+ * 第 27 步 · 「谁在等谁」状态条（渲染在聊天区顶部，**求助卡模式下也看得见**）。
+ *
+ * 它存在的唯一理由就是那条核心验收点：用户主动暂停 与 AI 主动求助
+ * 必须在界面上一眼分得出来。两者都落在 `phase='paused'`，
+ * 所以颜色/图标/文案**一律跟着 `pausedBy` 走**，不跟着 phase 走。
+ */
+.driveState {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 4px 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.driveState__icon {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+}
+/* AI 主动求助 = 蓝（和求助卡同一套色） */
+.driveState--agent {
+  color: #3c3489;
+  background: #eeedfe;
+  border: 1px solid #afa9ec;
+}
+/* 用户主动接管 = 琥珀（沿用原来的告警色，用户已经认得） */
+.driveState--user {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+}
+/* 分不清是谁发起的 = 中立灰（**绝不冒充任何一方**） */
+.driveState--none {
+  color: var(--text-weak);
+  background: #f1efe8;
+  border: 1px solid #e2e2e4;
+}
+
+/* 后台运行小图标（右下角，浮在最上层；只提示"有浏览器在后台跑"，不挡操作） */
+.browserFloating {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  font: inherit;
+  font-size: 12.5px;
+  color: #fff;
+  background: #2f6feb;
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+  cursor: pointer;
+}
+.browserFloating:hover {
+  background: #245bd0;
+}
+
+.chat {
+  flex: 1;
+  padding: 12px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.msg {
+  max-width: 70%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  line-height: 1.35;
+  font-size: 14px;
+}
+
+.msg.assistant {
+  align-self: flex-start;
+  background: #fff;
+  border: 1px solid var(--border);
+}
+
+.msg.user {
+  align-self: flex-end;
+  background: #dcf3ff;
+  border: 1px solid #cde8fb;
+}
+
+.inputBar {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+  background: #fff;
+}
+
+.inputBar input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  outline: none;
+  font: inherit;
+  color: var(--text);
+}
+
+.inputBar input:focus {
+  border-color: var(--accent);
+}
+
+.inputBar button {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+/* 第 10 步：输入行右侧的小「结束」钮——只是小一号，不改动三栏布局 */
+.inputBar .inputBar__end {
+  padding: 6px 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* ---------- 右栏：只在有任务结果时出现（第 13 步：驾驶台/调试区/浏览器全撤） ---------- */
+.right {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: #fff;
+  position: relative;
+}
+
+.btn {
+  padding: 6px 10px;
+  border: 1px solid #ccc;
+  background: #fff;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  color: var(--text);
+}
+
+.btn:hover {
+  background: #f6f7f9;
+}
+
+.card {
+  margin: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.card h4 {
+  margin: 0 0 8px 0;
+}
+
+.small {
+  color: var(--text-weak);
+  font-size: 12px;
+}
+
+.status-running {
+  color: #0a7;
+  font-weight: 700;
+}
+
+/* 阶段简报 · 方案 B：暂停 / 继续**临时测试条**。
+   刻意做成黄框虚线——它是这一阶段的验证入口，不是正式 UI，后面会被正式的驾驶台替掉。 */
+.driveBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 10px 0 10px;
+  padding: 6px 10px;
+  border: 1px dashed #d9a300;
+  border-radius: 10px;
+  background: #fff8e1;
+}
+
+.driveBar__tag {
+  font-size: 12px;
+  color: #8a6100;
+  background: #ffe9a8;
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.driveBar__go {
+  border-color: #d9a300;
+  background: #ffe9a8;
+}
+
+.driveBar__go:hover {
+  background: #ffdf8a;
+}
+
+.driveBar__note {
+  color: #8a6100;
+  flex: 1 1 100%;
+}
+
+/*
+ * ★ P0 止血（2026-09-21）：「这一轮的上下文没了」确认卡。
+ *
+ * 配色刻意**不用**警告黄（那是驾驶条自己的颜色）—— 这是一张要用户停下来读的卡，
+ * 用更重的红棕底 + 实心边框，让它在一堆黄里跳出来。
+ * 「重新开始」是**带代价**的那个选择，所以只有它加粗描边，另一颗保持普通按钮。
+ */
+.loopGone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 100%;
+  padding: 8px 10px;
+  border: 1px solid #b34a2e;
+  border-radius: 8px;
+  background: #fdecea;
+}
+
+.loopGone__q {
+  flex: 1 1 auto;
+  color: #7d2f18;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.loopGone__warn {
+  border-color: #b34a2e;
+  background: #f7c9bf;
+  color: #5c1f0c;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.loopGone__warn:hover {
+  background: #f2b3a5;
+}
+
+.buttons-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/*
+ * 第 18 步：中栏浏览器区（顶栏 tab + URL 栏 + 舞台）的样式**已经搬进浏览器模块**：
+ *   apps/desktop/src/browser/styles.css（由 BrowserPanel.tsx 自己 import）。
+ * 以后只改那边——这里不要再写 .browserPanel / .browserTab 的规则，否则两边打架。
+ *
+ * 同时删掉了「聊天里那一行网页记录」（.browserLine*）：第 18 步起
+ * 开页成功只看 tab，关页只从工作区消失，聊天里最多留一句人话，不再有一串芯片。
+ */
+
+/* ---- 第 5 步（重做版）：登录页 + 左栏账号小块 ---- */
+.authWrap {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f4f6;
+}
+.authCard {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 6%);
+}
+.authCard h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.authTabs {
+  display: flex;
+  gap: 6px;
+}
+.authTab {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+  cursor: pointer;
+}
+.authTab--on {
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+.authRow {
+  display: flex;
+  gap: 8px;
+}
+.authInput {
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  outline: none;
+}
+.authInput:focus {
+  border-color: #6b7280;
+}
+.authErr {
+  color: #c0392b;
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+.btn--go {
+  width: 100%;
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+/* ---- 第 8 步：任务 done 后的「下载文档」按钮（右栏里要一眼看见）---- */
+.docDownload {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 10px 12px;
+  border-style: solid;
+  border-width: 2px;
+}
+.account {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+}
+
+/* ---- 第 22 步：浏览器可调配置（左栏账号块里那两行：标签 + 数字输入）---- */
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settingsRow__num {
+  width: 72px;
+  flex: 0 0 auto;
+}
+
+/* ---- 第 6 步：打字机光标 + 聊天提示条（error/notice，不是 AI 的话）---- */
+.caret {
+  display: inline-block;
+  margin-left: 1px;
+  color: #6b7280;
+  animation: caretBlink 1s steps(1) infinite;
+}
+@keyframes caretBlink {
+  50% { opacity: 0; }
+}
+.chatNote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 4px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+}
+.chatNote__x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: #92400e;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* ---- 第 26 步：联网搜索的过程提示 ----------------------------------------
+   刻意做得"轻"：一行灰色小字 + 一道细左边线，不抢聊天气泡的注意力。
+   它对应的是**轻量搜索**（不打开任何网页），所以绝不能长得像浏览器卡片或任务条。 */
+.searchHint {
+  margin: 4px 4px 2px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+  border-left: 2px solid #cbd5e1;
+}
+
+/* ---- 第 26 步：来源标注（助手气泡下方的可点链接）----
+   设计意图：回答正文照旧是"话"，来源单独一行小字挂在下面，
+   像 ChatGPT 那样"看得出出处"，但不把网址揉进正文。
+   每行 = 标题 + 域名；点一条跳原始网页（走系统默认浏览器）。
+   没搜过的回复整块不渲染，所以这里不需要"空态"样式。 */
+.sources {
+  display: flex;
+  gap: 6px;
+  margin: 2px 4px 4px;
+  padding-top: 6px;
+  border-top: 1px dashed #e5e7eb;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.sources__label {
+  flex: none;
+  color: #9ca3af;
+  user-select: none;
+}
+
+.sources__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+}
+
+.sources__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  color: #2563eb;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sources__item:hover .sources__title {
+  text-decoration: underline;
+}
+
+.sources__title {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources__domain {
+  flex: none;
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+/* ---- 第 7 步：任务卡上的“最近步”小列表（主进程 agent 事件镜像，丑点没事）---- */
+.agentSteps {
+  margin: 6px 0;
+  padding: 6px 8px;
+  max-height: 96px;
+  overflow-y: auto;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  text-align: left;
+}
+
+/* ---- 第 8 步：任务收尾卡（红点标签/短结论）---- */
+.unreadTag {
+  color: #dc2626;
+  font-weight: 600;
+}
+.readTag {
+  color: #16a34a;
+}
+.taskSummary {
+  margin: 4px 0;
+  padding: 6px 8px;
+  background: #f8fafc;
+  border-left: 3px solid #94a3b8;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+/* ---- 第 10 步：记忆确认卡 + 侧栏「我的记忆」（沿用现有卡片皮肤，不新做整站）---- */
+.memCard {
+  margin: 8px 10px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+}
+.memList {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  text-align: left;
+}
+.memList__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  border-top: 1px dashed #eee;
+}
+.memList__forget {
+  border: none;
+  background: none;
+  color: #dc2626;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.memList__title {
+  margin-bottom: 4px;
+  color: #6b7280;
+}
+
+/* ---- 第 15 步：聊天里的「引导表」。
+   它不是后台配置页、也不是独立窗口，就是新会话里的一张四行小表（名称/它是谁/怎么说话/干什么）。
+   宽度跟消息一样撑满中栏，不碰右栏宽度。 ---- */
+.guide {
+  align-self: stretch;
+  flex: 0 0 auto;
+  margin: 4px 0 8px;
+  padding: 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  background: #f8faff;
+}
+.guide__head {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.guide__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 2px;
+}
+.guide__table th {
+  width: 84px;
+  padding: 4px 8px 4px 0;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-weak);
+}
+.guide__table td {
+  padding: 3px 0;
+}
+.guide__input {
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  outline: none;
+}
+.guide__input:focus {
+  border-color: var(--accent);
+}
+.guide__ok {
+  width: auto;
+}
+.guide__del {
+  color: #b91c1c;
+}
+
+/* ---- 第 11 步：左栏知识库入口。只加在现有账户小块内，不改三栏和右侧 webview 宽度。 ---- */
+.knowledgePanel {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px dashed #9ca3af;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+.knowledgePanel__file {
+  display: none;
+}
+.knowledgePanel__note {
+  margin-top: 6px;
+  line-height: 1.45;
+  color: #2563eb;
+  word-break: break-word;
+}
+.knowledgePanel__list {
+  margin-top: 7px;
+  max-height: 132px;
+  overflow-y: auto;
+  border-top: 1px dashed #e5e7eb;
+}
+.knowledgePanel__row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 0;
+  border-bottom: 1px dashed #e5e7eb;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+}
+/* 第 19 步：文件名 + 删除按钮同一行；名字过长省略号，按钮永远可见 */
+.knowledgePanel__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.knowledgePanel__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledgePanel__del {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #dc2626;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.knowledgePanel__del:disabled {
+  color: #9ca3af;
+  cursor: default;
+}
+
+/* ---- 子阶段 2-B：最简项目入口（左栏顶部）----
+ * 刻意不做视觉设计（不是最终 UI）：只保证「看得见全部项目 / 能新建 / 点一下能切」。
+ * 复用既有 .contact / .btn / .authInput，这里只补几条让它在 220px 左栏里不撑破的约束。
+ */
+.projectBox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.projectBox__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.projectBox__row {
+  padding: 3px 6px;
+}
+.projectBox__note {
+  color: #b45309;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/*
+ * 第 18 步「工作区框架（治混乱）」：把左栏两个**纯演示 / 自检**的痕迹用样式藏掉
+ * （「切换红点（演示）」按钮、底部那行 preload 桥信息）。
+ * 只藏不删：DOM 还在，桥自检照跑，哪天要调试把这条规则去掉就能看见。
+ * ⚠️ 这条规则必须放在文件**最后**：`.buttons-row` 也是单类选择器，谁在后面谁赢。
+ */
+.demoOnly {
+  display: none;
+}
+
+/* ---------- 工作台顶栏与视图切换 ---------- */
+.workbenchNav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+  z-index: 25;
+  flex-shrink: 0;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+
+.workbenchNav__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workbenchNav__name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-main, #1f2937);
+}
+
+.workbenchNav__status {
+  font-size: 12px;
+  color: #10b981;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workbenchNav__status::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+}
+
+.workbenchNav__views {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #f3f4f6;
+  padding: 3px;
+  border-radius: 6px;
+}
+
+.workbenchNav__btn {
+  border: none;
+  background: transparent;
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #4b5563;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.15s ease;
+}
+
+.workbenchNav__btn:hover {
+  color: #111827;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.workbenchNav__btn--active {
+  background: #ffffff !important;
+  color: #2563eb !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  font-weight: 600;
+}
+
+.workbenchNav__badge {
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.workbenchNav__driving {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-dot 1.5s infinite;
+}
+
+@keyframes pulse-dot {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+/* ---------- 欢迎卡片与快捷操作 ---------- */
+.welcomeCard {
+  background: linear-gradient(135deg, #f0f7ff 0%, #fafafa 100%);
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  padding: 20px;
+  margin: 16px 8px;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.04);
+}
+
+.welcomeCard__title {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  color: #1e3a8a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.welcomeCard__desc {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.welcomeCard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.welcomeCard__btn {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #1e293b;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.welcomeCard__btn:hover {
+  border-color: #3b82f6;
+  color: #2563eb;
+  background: #f8faff;
+  transform: translateY(-1px);
+}
+
+.welcomeCard__btn--primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.welcomeCard__btn--primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}
+

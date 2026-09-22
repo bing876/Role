@@ -1,0 +1,53 @@
+{
+  "base_fullscreen": {
+    "raf_fps": 60.0,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "bg_opacity": {
+    "raf_fps": 1.0,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "c1_throttle_true_bg": {
+    "raf_fps": 1.0,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "c1_throttle_true_fs": {
+    "raf_fps": 60.0,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "c2_visibility_hidden": {
+    "raf_fps": 1.0,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "c2_drive_ok": true,
+  "c3_offscreen": {
+    "raf_fps": 1.0,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "c3_drive_ok": true,
+  "c4_frozen": {
+    "raf_fps": 1.2,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  },
+  "c4_drive_ok": true,
+  "c4_after_active": {
+    "raf_fps": 19.8,
+    "iv_fps": 62.5,
+    "visibilityState": "visible",
+    "hidden": false
+  }
+}

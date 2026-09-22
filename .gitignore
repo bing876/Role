@@ -1,0 +1,119 @@
+# 本地嵌入式数据库文件
+data/
+apps/server/data/
+
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+dist-electron/
+out/
+release/
+# electron-builder 本机产物（安装包 / unpacked 目录），不提交，更不会把本地 .env 带进 Git
+apps/desktop/release/
+*.tsbuildinfo
+
+# 日志与本地环境
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.env
+.env.local
+
+# NVIDIA 驱动在本机跑 Electron 时自己写出来的日志目录（umdlogs），是运行时残留，不是源码。
+# 不写死单一路径：驱动按 cwd 落盘，任何层级的同名目录都不该进版本库。
+NVIDIA Corporation/
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# ── 下面几条是 2026-09-18 UI 回滚时补的 ──────────────────────────
+# 背景：为建备份跑过一次全量 git add，把几百 MB 的构建产物和 Electron
+# 调试 profile 一起塞进了索引。这些永远不该进版本库，先在这里堵住。
+
+# electron-builder 的其它命名产物目录（release-ui15 / release-frameless …）
+apps/desktop/release-*/
+
+# 回滚前的物理备份（799 MB，随时可删，但绝不该提交）
+_rollback-backup-*/
+
+# 损坏仓库的本地备份：用于历史救援，绝不进入重建后的新仓库。
+.git-old/
+
+# Electron 调试用的临时 user-data-dir（udd-*：CDP 抓图 / 量原型时建的 profile）
+.workbuddy-ai/udd-*/
+
+# 验收脚本的运行输出（服务端日志 / 假模型日志 / 模型调用 jsonl）
+.workbuddy-ai/*-test/
+
+# Python 验收脚本的字节码缓存
+scripts/verify/__pycache__/
+*.pyc
+
+# 方案 B 验收的**可再生**取证产物（*.log 已被上面忽略，这两个是 jsonl）
+# 每次跑 pause-resume-tests.py 都会重写，入库只会制造无意义 diff
+docs/acceptance/pause-resume/*.jsonl
+docs/acceptance/pause-resume/installed-app.log
+docs/acceptance/pause-resume/installed-ui-raw.png
+docs/acceptance/pause-resume/scen-results.json
+docs/acceptance/pause-resume/scen-*.log
+docs/acceptance/pause-resume/server-*.log
+.workbuddy-ai/procs*.txt
+.workbuddy/
+docs/acceptance/pause-resume/scen-results-*.json
+
+# ── 下面这条是 2026-09-19 补的 ──────────────────────────────────
+# E2E 验收脚本专用的 Electron user-data-dir（登录态 / HTTP 缓存 / socket 文件）。
+# 属于「机器相关、每轮可再生」的运行时状态；入库只会制造噪声，
+# 而且里面存着登录 token，不该进版本库。
+# 脚本（run-task-e2e.py）每轮自己会清空重建，删掉不影响任何东西。
+_e2e-profile/
+
+# 本地服务端调试日志（start-dev.cmd / 探针脚本落在这里）
+dev-server-*.log
+
+# ── 2026-09-21 补（Harness 动手前的基线盘点） ──────────────────────
+# 沿用仓库既有口径：「可再生」的运行流水不入库（上面已经为
+# docs/acceptance/pause-resume/*.jsonl 这么做过一次）。
+
+# 验收跑出来的模型调用 / 站点访问流水 —— 每轮重写，入库只制造无意义 diff
+docs/acceptance/help-card/*.jsonl
+docs/acceptance/step-budget/*.jsonl
+
+# 第 27 步验收目录里的一次性诊断脚本与临时笔记（下划线前缀）
+# _diag-*.py = 「我派生的进程为什么创建不了窗口」这类一次性排查
+# _mem-*.md  = 调试中途临时记的草稿
+scripts/verify/help-card/_*
+# ★ 例外：_start-pg.py 不是一次性件 —— help-card-e2e.py / revert-*.py 四个
+#   正式验收脚本的用法注释里都写着「先跑它」；把它忽略掉等于让那些脚本无法复现。
+!scripts/verify/help-card/_start-pg.py
+
+# 一次性探针目录（验证「搬 DOM 会销毁 guest」那次用的），产物全是运行残留
+scripts/verify/webview-embed-probe/
+
+# 一次性行尾修复工具（已经干完活，留着不碍事，但不入库）
+scripts/verify/crlf-normalize.py
+
+# ── 2026-09-21 补（P0 止血那轮） ──────────────────────────────────
+# 同上口径：每轮重跑就会重写的流水不入库（*.log 已在第 15 行全局忽略）
+docs/acceptance/p0-loop-ttl/*.jsonl
+# 本目录里下划线前缀的都是一次性自查小工具（例如修正则时确认"取到了几个关键词"）
+scripts/verify/p0-loop-ttl/_*
+
+# ── 2026-09-21 补（架构审查 + 推送前安全检查那轮） ────────────────
+# ★★ 数据库导出快照：含 users.phone_hash / phone_enc / password_hash /
+#    wechat_openid 等**真实用户 PII**，绝不能进公开仓库。
+#    phone_enc 是 AES-256-GCM 密文，但 phone_hash 是**确定性哈希**——
+#    拿到它就能和已知号码做撞库比对，等同于手机号的弱匿名化形式。
+#    口径：任何"整表导出成 json"的验收留档一律走 *_export.json 命名并在此忽略；
+#    确实需要留证的，只留**结构**（列名）或做脱敏，不留行数据。
+docs/acceptance/**/*backup-before-purge*.json
+docs/acceptance/**/users-before-*.json
+docs/acceptance/**/*_export.json
+docs/acceptance/**/*-dump.json

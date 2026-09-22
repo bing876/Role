@@ -1,0 +1,191 @@
+[
+  {
+    "round": 1,
+    "fullscreen": {
+      "raf_fps": 60.0,
+      "iv_fps": 62.5,
+      "guest": {
+        "vis": "visible",
+        "hidden": false,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "host": {
+        "layerCls": "browserLayer",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": false
+    },
+    "background": {
+      "raf_fps": 1.1,
+      "iv_fps": 61.2,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "host": {
+        "layerCls": "browserLayer browserLayer--bg",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": false
+    },
+    "background_front": {
+      "raf_fps": 1.0,
+      "iv_fps": 60.5,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "host": {
+        "layerCls": "browserLayer browserLayer--bg",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": true
+    }
+  },
+  {
+    "round": 2,
+    "fullscreen": {
+      "raf_fps": 1.0,
+      "iv_fps": 61.6,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": true
+      },
+      "host": {
+        "layerCls": "browserLayer",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": false
+    },
+    "background": {
+      "raf_fps": 1.0,
+      "iv_fps": 60.6,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": true
+      },
+      "host": {
+        "layerCls": "browserLayer browserLayer--bg",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": false
+    },
+    "background_front": {
+      "raf_fps": 1.0,
+      "iv_fps": 60.6,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": true
+      },
+      "host": {
+        "layerCls": "browserLayer browserLayer--bg",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": true
+    }
+  },
+  {
+    "round": 3,
+    "fullscreen": {
+      "raf_fps": 1.0,
+      "iv_fps": 61.5,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": true
+      },
+      "host": {
+        "layerCls": "browserLayer",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": false
+    },
+    "background": {
+      "raf_fps": 1.0,
+      "iv_fps": 61.1,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": true
+      },
+      "host": {
+        "layerCls": "browserLayer browserLayer--bg",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": false
+    },
+    "background_front": {
+      "raf_fps": 1.0,
+      "iv_fps": 60.6,
+      "guest": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": false
+      },
+      "main": {
+        "vis": "hidden",
+        "hidden": true,
+        "focus": true
+      },
+      "host": {
+        "layerCls": "browserLayer browserLayer--bg",
+        "wvOpacity": "1",
+        "wvVisibility": "visible"
+      },
+      "bringToFront": true
+    }
+  }
+]

@@ -1,0 +1,76 @@
+{
+  "name": "@ai-workbench/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI 工作台桌面端：React 渲染进程 + Electron 主进程",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "npm run build:electron && concurrently -k --success command-electron -n vite,electron -c cyan,magenta \"vite\" \"wait-on tcp:5173 -t 30000 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/start-electron.mjs\"",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "build:renderer": "vite build",
+    "build": "npm run build:electron && npm run build:renderer",
+    "start": "npm run build:electron && npm run build:renderer && node scripts/start-electron.mjs",
+    "package": "npm run build && electron-builder --publish never",
+    "package:dir": "npm run build && electron-builder --dir --publish never",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
+  },
+  "build": {
+    "appId": "com.bing876.aiworkbench",
+    "productName": "AI 工作台",
+    "electronVersion": "33.4.11",
+    "artifactName": "AI-Workbench-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/.env",
+      "!**/.env.*",
+      "!**/apps/server/**"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Office"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    }
+  },
+  "dependencies": {
+    "@ai-workbench/shared": "*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "wait-on": "^8.0.1"
+  }
+}

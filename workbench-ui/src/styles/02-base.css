@@ -1,0 +1,14 @@
+/* base —— 源自设计基准 workbench.work.html 第 80-92 行（原序切分，勿重排） */
+/* ---------- 视口 ---------- */
+body.viewport{
+  width:100vw; height:100vh; overflow:hidden;
+  background:#000;
+  font-family:var(--font-ui);
+  font-weight:var(--fw-regular);
+  /* Round 73：苹果渲染特征 —— 浅色/深色底都用灰阶抗锯齿，笔画更细更干净
+     （不设全局 letter-spacing：中文加字间距会散、发虚，是 AI 感来源之一） */
+  -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+  position:relative;
+}
+
