@@ -60,7 +60,7 @@ export interface ToolLoopHooks {
    * pause 之后消息历史/步数/目标全留着，调 resume 就能原地继续。
    * 用户点「暂停」走的是这一条 —— 它就是「继续」能接得回来的前提。
    */
-  pauseLoop?(by?: string): Promise<void>;
+  pauseLoop?(by?: string, result?: LoopToolResult | null): Promise<void>;
   /**
    * 敏感字段（密码/验证码/支付/身份证）：服务端已把这类输入挡成一句提问。
    * 实现方负责【窗口前置 + 聚焦这一路那张页 + 发 🔒 人话提示】。
@@ -231,7 +231,9 @@ function label(a: BrowserAction): string {
     case 'click':
       return `点击「${a.target}」`;
     case 'type':
-      return `在「${a.target}」输入「${a.text}」${a.submit ? '并回车' : ''}`;
+      // R2（2026-09-22）：输入值只记长度、不记原文 —— 原文进摘要会明文落库（tasks.payload.steps）
+      // 并显示在界面上。target 是框名（敏感框名已被服务端闸拦截），可以保留。
+      return `在「${a.target}」输入了 ${[...a.text].length} 个字符${a.submit ? '并回车' : ''}`;
     case 'scroll':
       return `向${a.direction === 'down' ? '下' : '上'}滚动`;
     case 'read_page':
@@ -249,6 +251,8 @@ function toResult(res: DriveResult): LoopToolResult {
     error: res.error,
     noChange: res.noChange,
     page: res.pageSnapshot,
+    // R3-F4：拒收标记透传 —— 之前这里把 risk 吞了，服务端/模型永远看不到"被闸拦下"，只能看到含糊的失败。
+    ...(res.risk ? { refused: res.risk === 'pay' ? '付款/下单类动作被本地安全闸拦下：必须由用户自己点' : '敏感字段被本地安全闸拦下：必须由用户自己在页面里输' } : {}),
   };
 }
 
@@ -372,21 +376,24 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
    * 顺序是**先本地后服务端**，和服务端那边的「挂起期间绝不调模型」形成双保险：
    * 本地这一格已经退出了，服务端再收到任何一次 next 也只会回 paused。
    */
-  const pauseOut = async (): Promise<string> => {
+  // R3（2026-09-22）：退出前把没喂过的回执刷给服务端 —— 否则继续后服务端以为"没执行"而重发。
+  // by/reason 保留各出口自己的语义：用户暂停是 user/paused，stuck/risk 是 agent/stuck|ask_user。
+  const pauseOut = async (opts: { by?: string; result?: LoopToolResult | null; reason?: string } = {}): Promise<string> => {
     try {
-      await hooks.pauseLoop?.('user');
+      await hooks.pauseLoop?.(opts.by ?? 'user', opts.result ?? null);
     } catch {
       // 挂起失败不拦本地停手：本地已经不动了，最坏结果只是「继续」时新建一轮
+      // （回执也一起丢了 —— 服务端 F5 话术会让模型先 read_page 核验，不断链）
     }
     await hooks.taskStatus(taskId, 'paused').catch(() => undefined);
-    return finish('paused');
+    return finish(opts.reason ?? 'paused');
   };
 
   for (;;) {
     if (hooks.aborted()) return 'aborted';
     if (hooks.isPaused()) {
       hooks.phase('paused', '已暂停 — 自动操作已停止，浏览器交还给你（点「继续」我会先读你当前的页面）', 'user');
-      return await pauseOut();
+      return await pauseOut({ result });
     }
 
     let decision: Awaited<ReturnType<ToolLoopHooks['next']>>;
@@ -564,8 +571,9 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
         hooks.phase('paused', '等你输入敏感信息（值不经 AI、不落库）', 'agent');
       }
       maybeRaiseHelp(question);
-      await hooks.taskStatus(taskId, 'paused').catch(() => undefined);
-      return finish('ask_user');
+      // R3：拒收的这一格也要刷回执（F4 让 refused 透传）并挂起服务端循环 —— 否则 pending 不清，
+      // 继续后模型拿着"没有被执行"瞎重试被拒的动作。
+      return pauseOut({ by: 'agent', result: toResult(res), reason: 'ask_user' });
     }
 
     if (res.ok) {
@@ -591,8 +599,8 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
               '② 把按钮上的准确文字告诉我，我再试一次；或者你自己在卡片里点一下，然后点「继续」——我会先读你当前停留的页面再接着做。',
           });
           hooks.phase('paused', '连点三次页面无变化，等用户指导', 'agent');
-          await hooks.taskStatus(taskId, 'paused').catch(() => undefined);
-          return finish('stuck');
+          // R3：stuck 也要刷回执并挂起（之前直接退，回执丢了、服务端还晾在 running，继续必重发）。
+          return pauseOut({ by: 'agent', result: toResult(res), reason: 'stuck' });
         }
         result = toResult(res);
         continue;
@@ -639,8 +647,8 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
       maybeRaiseHelp(`连续 ${FAILS_BEFORE_ASK} 步都没成`);
       hooks.emit({ kind: 'ask', reason: 'consecutive_failures', question: q });
       hooks.phase('paused', '连续失败两次，等用户指导', 'agent');
-      await hooks.taskStatus(taskId, 'paused').catch(() => undefined);
-      return finish('stuck');
+      // R3：同上，刷回执并挂起。
+      return pauseOut({ by: 'agent', result: toResult(res), reason: 'stuck' });
     }
     result = toResult(res);
   }

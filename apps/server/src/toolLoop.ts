@@ -1043,6 +1043,29 @@ function serverContextOf(session: LoopSession): ServerExecutionContext {
  *
  * 返回的一定是「桌面能执行的东西」：一个工具、或一句提问 / 结论 / 说明。
  */
+/**
+ * R3（2026-09-22）：把一份工具回执记进循环历史（追 tool 消息 + 刷新快照 + 清 pending + 步数+1）。
+ *
+ * 从 `advanceInner` 里逐字抽出来 —— `/next` 与 `/pause`（暂停时刷回执）共用同一份，
+ * 两处语义永远一致。调用方负责保证：只在「还有 pending」或「回执里带了用户答复」时调，
+ * 否则会记一条用 `call_<step>` 兜底的孤儿 tool 消息。
+ */
+export function ingestToolResult(session: LoopSession, result: LoopToolResult): void {
+  const callId = session.pendingCallId ?? `call_${session.step}`;
+  const lastCall = lastToolCall(session);
+  session.messages.push({
+    role: 'tool',
+    tool_call_id: callId,
+    content: describeToolResult(lastCall ?? { id: callId, name: 'read_page', args: {} }, result),
+  });
+  if (result.page) session.lastSnapshot = result.page;
+  session.pendingCallId = null;
+  session.step += 1;
+  if (result.userAnswer) {
+    session.messages.push({ role: 'user', content: `用户补了一句：${result.userAnswer.slice(0, 300)}` });
+  }
+}
+
 async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopToolResult | null): Promise<AgentLoopDecision> {
   session.touchedAt = Date.now();
 
@@ -1066,25 +1089,13 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
   }
 
   if (result) {
-    const callId = session.pendingCallId ?? `call_${session.step}`;
-    const lastCall = lastToolCall(session);
-    session.messages.push({
-      role: 'tool',
-      tool_call_id: callId,
-      content: describeToolResult(lastCall ?? { id: callId, name: 'read_page', args: {} }, result),
-    });
-    if (result.page) session.lastSnapshot = result.page;
-    session.pendingCallId = null;
-    session.step += 1;
-    if (result.userAnswer) {
-      session.messages.push({ role: 'user', content: `用户补了一句：${result.userAnswer.slice(0, 300)}` });
-    }
+    ingestToolResult(session, result);
   } else if (session.pendingCallId) {
-    // 上一格给了工具但桌面没回执就又问了一次：把它当「没执行」，让模型重选
+    // R3（2026-09-22）：回执缺失 ≠ 确认没执行（暂停/中断可能吞了回执）——让模型先核验，不许直接重做。
     session.messages.push({
       role: 'tool',
       tool_call_id: session.pendingCallId,
-      content: '工具没有被执行（桌面没有回执）。请重新选下一步。',
+      content: '上一步的回执缺失（不是确认没执行：暂停/中断可能吞了回执）。先用 read_page 看清现状再定下一步；如果那一步已经生效，不要重做。',
     });
     session.pendingCallId = null;
   }

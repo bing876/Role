@@ -638,7 +638,7 @@ ${
         if (searches.length > 0) {
           console.log(
             `[chat] 本轮联网搜索 ${searches.length} 次：` +
-              searches.map((s) => `${s.query}(${s.results}条${s.error ? `/${s.error}` : ''})`).join('、') +
+              searches.map((s) => `${s.error === 'blocked_sensitive' ? '[已拦截·敏感查询]' : s.query.slice(0, 60)}(${s.results}条${s.error ? `/${s.error}` : ''})`).join('、') +
               `；来源 ${sources.length} 个`,
           );
         }

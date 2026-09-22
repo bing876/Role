@@ -40,6 +40,7 @@ import {
   liveLoopCount,
   runningLoopCount,
   LoopBusyError,
+  ingestToolResult,
   pauseLoop,
   resumeLoop,
   startLoop,
@@ -323,7 +324,7 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
   app.post('/agent/loop/pause', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
-    const b = req.body as { loopId?: unknown; pausedBy?: unknown; page?: unknown } | null;
+    const b = req.body as { loopId?: unknown; pausedBy?: unknown; page?: unknown; result?: unknown } | null;
     const loopId = typeof b?.loopId === 'string' ? b.loopId.trim() : '';
     if (!loopId) return errJson(reply, 400, 'loopId 必填');
     const session = getLoop(loopId);
@@ -334,6 +335,21 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
     // `page` = 桌面端在**暂停那一刻**真读到的当前页，用它当变化判定的基线
     //（没有就用循环里的旧快照，行为跟以前一样）。
     const page = b?.page && typeof b.page === 'object' ? (b.page as PageSnapshot) : null;
+    // R3（2026-09-22）：暂停时顺手认领桌面刷上来的回执 —— 先认领、再挂起（认领刷新了
+    // lastSnapshot，暂停基线也更新鲜）。只在「回执形状合法 + 还有 pending/用户答复」时记；
+    // 回执坏了只告警，暂停本身永不失败。终态循环跳过认领（pauseLoop 照旧回 409）。
+    let receiptIngested = false;
+    const settled = session.status === 'stopped' || session.status === 'done' || session.status === 'failed';
+    const rawResult = b?.result;
+    if (!settled && rawResult && typeof rawResult === 'object' && typeof (rawResult as { ok?: unknown }).ok === 'boolean') {
+      const res = rawResult as LoopToolResult;
+      if (session.pendingCallId || res.userAnswer) {
+        ingestToolResult(session, res);
+        receiptIngested = true;
+      }
+    } else if (rawResult !== undefined && rawResult !== null) {
+      console.warn(`[loop] 暂停 ${loopId} 附带的回执形状非法，已忽略（暂停本身不受影响）`);
+    }
     const pause = pauseLoop(loopId, { by, page });
     if (!pause) {
       // 终态循环不接受挂起（它已经没法「继续」了）——明确说出来，别静默成功
@@ -357,7 +373,7 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       console.error('[loop] 暂停记录落库失败（不影响挂起本身）：', (err as Error)?.message ?? String(err));
     }
     console.log(
-      `[loop] 暂停 ${loopId}（by=${by}，页 ${session.wcId ?? '-'}，记录 ${recordId ?? '未落库'}）` +
+      `[loop] 暂停 ${loopId}（by=${by}${receiptIngested ? '，回执已认领' : ''}，页 ${session.wcId ?? '-'}，记录 ${recordId ?? '未落库'}）` +
         `—— 消息历史保留 ${session.messages.length} 条 / 已走 ${session.step} 步`,
     );
     return {
@@ -366,6 +382,7 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       paused: true,
       pausedAt: pause.at,
       pausedBy: pause.by,
+      receiptIngested,
       recordId,
       live: liveLoopCount(),
     };
