@@ -21,6 +21,7 @@
     "package:dir": "npm run build -w @ai-workbench/shared && npm run package:dir -w @ai-workbench/desktop",
     "typecheck": "npm run typecheck -w @ai-workbench/shared && npm run typecheck -w @ai-workbench/desktop && npm run typecheck -w @ai-workbench/server",
     "verify:tools": "tsx scripts/verify/tool-registry-parity.mts",
+    "verify:r4": "node scripts/verify/r4-intent-source-parity.mjs && node scripts/verify/r4-dispatch-acceptance.mjs",
     "live": "node scripts/live.mjs",
     "clean": "node scripts/clean.mjs"
   },
