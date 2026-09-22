@@ -34,6 +34,8 @@ import type {
   LoopToolResult,
   PageSnapshot,
 } from '@ai-workbench/shared';
+// 阶段 0 · 桌面侧执行器表（纯映射模块，不 import electron，打包安全，见其文件头）
+import { resolveBrowserAction } from './toolExecutors';
 
 export interface ToolLoopHooks {
   /**
@@ -186,8 +188,20 @@ export function pageNeedsHuman(snap: PageSnapshot | null | undefined): 'captcha'
   return null;
 }
 
-/** 工具调用 → 本地 driver 的动作（服务端只给工具名 + 参数，映射在本地，与 driver 契约一致） */
+/**
+ * 工具调用 → 本地 driver 的动作（服务端只给工具名 + 参数，映射在本地，与 driver 契约一致）。
+ *
+ * 阶段 0：默认查 `toolExecutors.ts` 的执行器表（与 shared 内建定义的
+ * toBrowserAction 逐项等价，有对照测试兜底）；`TOOL_REGISTRY_LEGACY=1` 时
+ * 走旧 switch。验收一版后删除旧 switch。
+ */
 export function toolToAction(call: LoopToolCall): BrowserAction | null {
+  if (process.env.TOOL_REGISTRY_LEGACY === '1') return toolToActionLegacy(call);
+  return resolveBrowserAction(call);
+}
+
+/** 阶段 0 · 旧 switch（`TOOL_REGISTRY_LEGACY=1` 时用，验收一版后删除） */
+export function toolToActionLegacy(call: LoopToolCall): BrowserAction | null {
   switch (call.name) {
     case 'open_url':
       return { action: 'open_url', url: String(call.args.url ?? '') };
