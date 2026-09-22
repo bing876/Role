@@ -409,3 +409,59 @@ node scripts/verify/db-snapshot.mjs docs/acceptance/substage-2a/db-before.json
   写入时刻是否被迁移改动，用另一个 `id+created_at` 指纹做**同一轮内**的前后对比。
 - **`POST /agents` 现在必须带 `asAgentId`**（2-A 修正把默认回落删了，属**故意的不兼容改动**）：
   桌面端 `App.tsx` 那句 `body: '{}'` 暂时会拿到 400，等 2-B 接项目层时补上调用者。
+
+## R4 发车判定收紧（2026-09-22）
+
+两个脚本**都要跑**，各测一层，缺一不可。报告见 `docs/acceptance-r4发车收紧-真服务端复验-20260922.md`。
+
+| 文件 | 干什么 |
+|---|---|
+| `r4-intent-source-parity.mjs` | **纯函数层（31 条，零依赖，`node` 直接跑，约 0.2s）**：按花括号配平**从 `chat.ts` 抠出真实 `shouldEnterTaskMode` 函数体**（跳过正则字面量与字符串里的 `{}`），去掉箭头头部 TS 标注后 eval 再断言。四段：A 与 `agent-loop-audit-test.mts` 场景 a 对齐的 12 条 / B 反向保护成对断言 10 条 / C 结构反证 7 条（旧宽松规则是否**真的从可执行代码里消失**）/ D R4 已知保守取舍 2 条。 |
+| `r4-dispatch-acceptance.mjs` | **真服务端层（10 条 + 计数，约 27s）**：自己起真后端（PGlite 内存库 + `SMS_MOCK` 新建测试账号 + 真 JWT + 真 `/chat/stream`），断言落在**服务端到底有没有真的建循环**（SSE 里有没有 `event: loop`）+ `/health.liveLoops` 计数。对应独立验收报告第 5、6 两项。自带反证模式（`EXPECT=fail5`）。 |
+
+```bash
+npm run verify:r4                                    # 两个一起跑
+node scripts/verify/r4-intent-source-parity.mjs      # 只跑纯函数层
+node scripts/verify/r4-dispatch-acceptance.mjs       # 只跑真服务端层
+```
+
+不需要 Docker / 本机 PG / 真实 API key：LLM 走服务端**自带**的沙箱桩（`ENABLE_DEV_MOCK_LLM=1` →
+`llm.ts` 内置，不是这两个脚本新写的），发车判定发生在调模型之前，桩不参与被测逻辑。
+默认端口随机取 8900–8989，避开 8787（用户 dev）/ 8798-8799（2a）/ 8899（fake-llm）/ 9333（Electron）。
+
+### ★ 为什么要多写一个 parity 脚本（`agent-loop-audit-test.mts` 不够）
+
+`agent-loop-audit-test.mts` 场景 a 里的 `shouldEnterTaskModeTest` 是 `chat.ts` 那个函数的**手抄副本**，
+不是 import ⇒ **副本通过 ≠ 线上代码正确**。以后谁改了 `chat.ts` 忘了改副本（或反过来），
+审计用例照样全绿，而真实发车行为已经变了 —— 这类漂移是**静默**的。parity 脚本不抄，
+每次都从源码现抠，所以它测的永远是仓库里那一份。
+
+### ★ 反证：只有「第 5 项」有鉴别力
+
+同一套用例在旧宽松逻辑（`origin/main`）上跑：第 5 项 **1/5**（4 条闲聊全被误发车）、
+`liveLoops` **9≠5**、`llmCalls` **1 vs 5**；但**第 6 项两版都 5/5**。
+⇒ **单看「正常任务还能不能发车」证明不了 R4 生效**，只跑回归项就宣布验收通过是无效的。
+
+```bash
+# 反证跑法（用 worktree，不动当前工作区）
+git worktree add /tmp/wb-main origin/main
+ln -s "$PWD/node_modules" /tmp/wb-main/node_modules
+REPO_DIR=/tmp/wb-main LABEL=main-old EXPECT=fail5 node scripts/verify/r4-dispatch-acceptance.mjs
+git worktree remove /tmp/wb-main --force
+```
+
+### R4 这轮新增的坑
+
+- **「已删除」类结构断言不能扫全文**：R4 的注释块本身在描述旧逻辑（`chat.ts` 第 329/336 行就有
+  「`length>=15` 一票发车」字样）。拿全文断言「已删除」会**误判成还在**。
+  规矩：`mustBeAbsent` 的断言只扫函数体切片，`mustBePresent` 的才扫全文（标记注释写在 `const` 之前）。
+- **就绪判定必须校验「这是个全新进程」**：只判 `db === 'up'` 会把上一轮还没退干净的残留服务端
+  当成本轮起的（实测踩过：0.1s 就"就绪"、`llmCalls=5`），反证结论会**完全失真**。
+  现在同时要求 `llmCalls === 0 && liveLoops === 0`，并且每轮随机换端口。
+  （与 2-A 那条「脚本自己起的后端必须确认端口是空的」是同一个坑的另一种表现。）
+- **收紧判定必须写反向保护**：`5-2`「帮我查一下今天北京的天气怎么样」不发车，
+  就要配 `6-4`「在这个页面搜一下同款」**必须**发车；否则很容易把「弱动作词+页面指代」一起掐掉。
+  同理 `6-2`「帮我下单」防短句被漏掉。（照 `TOOLBOX.md` 的 E-2/E-3 成对规矩。）
+- **R4 的残留已立待办**：有活页 + 明确页面指代、但动词不在词表（「当前页面上的价格帮我记下来」）
+  **不发车**。这是「宁可漏发不误发」的有意取舍，已按现状固化在 parity 脚本 D 段，
+  见 `docs/待办-R4残留-页面指代无动作词-20260922.md`。
