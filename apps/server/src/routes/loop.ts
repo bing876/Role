@@ -234,10 +234,26 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
         broadcastLoopEvent(loopId, 'step', { step: session.step, phase: 'done', summary: decision.summary });
         broadcastLoopEvent(loopId, null, { delta: `\n\n🎉 **任务完成**\n${decision.summary || ''}` });
         endLoopSse(loopId, { conversationId: session.conversationId, done: true });
-      } else if (decision.kind === 'ask') {
-        broadcastLoopEvent(loopId, 'ask', { reason: decision.reason, question: decision.question, step: session.step });
-        broadcastLoopEvent(loopId, null, { delta: `\n\n⚠️ **需要协助**：${decision.question}` });
-      } else if (decision.kind === 'say') {
+        } else if (decision.kind === 'ask' && decision.reason === 'job_pending') {
+          // 多智能体编排：这是「在等同事交活」，**不是**「AI 卡住了要人帮忙」。
+          // 报成求助就是狼来了 —— 用户被假警报训练过之后，真需要介入时反而不会看了。
+          // 桌面端 agent.ts 对同一个 reason 也已经拦掉求助卡片，这里是服务端 SSE 这一路
+          // 的对应处理（两路口径必须一致，否则同一件事在聊天流里是警报、在驾驶舱里是正常等待）。
+          // ★ 注意仍要发 `ask` 事件本身：前端靠它拿 jobId/etaMs 画等待态，只是**不加⚠️求助话术**。
+          broadcastLoopEvent(loopId, 'ask', {
+            reason: decision.reason,
+            question: decision.question,
+            step: session.step,
+            jobId: decision.jobId,
+            jobKind: decision.jobKind,
+            etaMs: decision.etaMs,
+          });
+          broadcastLoopEvent(loopId, 'note', { level: 'info', text: decision.question });
+          broadcastLoopEvent(loopId, null, { delta: `\n\n⏳ ${decision.question}` });
+        } else if (decision.kind === 'ask') {
+          broadcastLoopEvent(loopId, 'ask', { reason: decision.reason, question: decision.question, step: session.step });
+          broadcastLoopEvent(loopId, null, { delta: `\n\n⚠️ **需要协助**：${decision.question}` });
+        } else if (decision.kind === 'say') {
         broadcastLoopEvent(loopId, null, { delta: `\n\n${decision.text}` });
       } else if (decision.kind === 'stopped') {
         broadcastLoopEvent(loopId, 'stopped', { reason: decision.reason });
