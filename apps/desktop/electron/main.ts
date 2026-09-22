@@ -28,6 +28,7 @@ import type {
   AgentLoopStartResult,
   AgentLoopInfoResult,
   BrowserAction,
+  LoopToolResult,
   PageSnapshot,
   TaskPhase,
   WorkbenchSettings,
@@ -1366,10 +1367,11 @@ function startAgentLoop(
        * 阶段简报：用户点「暂停」→ 服务端**挂起**（不是 stop）。
        * 挂起后消息历史保留，继续时能原地接上。
        */
-      pauseLoop: async (by?: string) => {
+      pauseLoop: async (by?: string, result?: LoopToolResult | null) => {
         if (!lane.loopId) return;
-        await agentPost('/agent/loop/pause', { loopId: lane.loopId, pausedBy: by ?? 'user' });
-        console.log(`[agent] 第 ${wcId} 路已挂起（服务端循环 ${lane.loopId} 保留历史）`);
+        // R3：暂停时把桌面没喂过的回执一起刷上去 —— 服务端先认领再挂起，继续后不再重发。
+        await agentPost('/agent/loop/pause', { loopId: lane.loopId, pausedBy: by ?? 'user', ...(result ? { result } : {}) });
+        console.log(`[agent] 第 ${wcId} 路已挂起（服务端循环 ${lane.loopId} 保留历史${result ? '，回执已刷' : ''}）`);
       },
       sensitiveNotice: (question) => {
         // 敏感字段：窗口前置 + 聚焦这一路那张页 + 🔒 人话提示（值不经 AI、不落库）

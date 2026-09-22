@@ -3,6 +3,11 @@
  *
  * 只放「类型」——渲染进程、Electron 主进程、以及未来的 apps/server 都从这里取契约。
  * 全部是 type-only 导出，编译后不产生任何运行时代码，任何环境引入都零成本。
+ *
+ * 阶段 0 补充：`tools.ts` 是本包第一份**运行时**代码（Tool Registry 定义侧，
+ * 零依赖纯模块）。**只有服务端在运行时 import 它** —— 桌面打包产物里没有
+ * node_modules，Electron 主进程只能 import 本包的**类型**，详见 tools.ts 文件头。
+ * 不要在这里加任何带 Node/Electron 依赖的运行时代码。
  */
 
 /** 一条消息的角色 */
@@ -1257,3 +1262,9 @@ export interface ResourceGuardSnapshot {
   /** 内存环形缓冲里现有多少点（默认保留最近 1 小时） */
   buffered: number;
 }
+
+/**
+ * 阶段 0 · Tool Registry 定义侧（本包唯一的运行时模块，服务端专用）。
+ * 桌面端只允许 import 上面的类型 —— 打包产物里没有这个包的运行时，详见 tools.ts 文件头。
+ */
+export * from './tools';

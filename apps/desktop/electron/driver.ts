@@ -1995,7 +1995,9 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
             pageSnapshot: snap,
           };
         }
-        detail = `已向 ${result.label} 写入「${action.text}」（方式：${result.method}）`;
+        // R2（2026-09-22）：写入值只记长度、不记原文 —— detail 会拼进步骤摘要（落库/上屏），
+        // 还会随回执进服务端消息历史（之后每轮都发给模型）。
+        detail = `已向 ${result.label} 写入 ${[...action.text].length} 个字符（方式：${result.method}）`;
         break;
       }
       case 'scroll': {

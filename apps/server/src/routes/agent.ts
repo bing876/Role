@@ -89,6 +89,18 @@ async function ownTask(pool: Pool, taskId: number, userId: number) {
   return r.rowCount === 1 ? r.rows[0] : null;
 }
 
+/**
+ * R2（2026-09-22）：步骤摘要入库前脱敏 —— 只认两种已知泄漏形状（新/旧客户端的 type 摘要），
+ * 把引号里的输入原文换成字数，其余字节不动。新客户端修后本来就不发原文，
+ * 这里是防旧版桌面与第三方客户端。注意：不用敏感词正则涂全文 —— secret 值本身通常
+ * 不含敏感词（`Secret123` 命中不了"密码"），全文替换只会涂花账本还拦不住东西。
+ */
+function scrubStepSummary(summary: string): string {
+  return summary
+    .replace(/输入「([^」]*)」/g, (_m: string, inner: string) => `输入「[已脱敏·${[...String(inner)].length}字]」`)
+    .replace(/写入「([^」]*)」/g, (_m: string, inner: string) => `写入「[已脱敏·${[...String(inner)].length}字]」`);
+}
+
 /** 第 8 步：兜底文档——没配 Key 或模型乱答时，用已落库字段拼一份**不编造**的 Markdown */
 function buildFallbackDoc(goal: string, steps: string[], done: Record<string, unknown>): { summary: string; title: string; markdown: string; hint: string } {
   const str = (v: unknown, d: string): string => (typeof v === 'string' && v.trim() ? v.trim() : d);
@@ -186,7 +198,7 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     const b = req.body as { taskId?: unknown; summary?: unknown; ok?: unknown } | null;
     const taskId = Number(b?.taskId);
-    const summary = typeof b?.summary === 'string' ? b.summary.slice(0, 300) : '';
+    const summary = typeof b?.summary === 'string' ? scrubStepSummary(b.summary).slice(0, 300) : '';
     if (!Number.isInteger(taskId) || !summary) return errJson(reply, 400, 'taskId / summary 必填');
     try {
       const t = await ownTask(pool, taskId, claims.sub);

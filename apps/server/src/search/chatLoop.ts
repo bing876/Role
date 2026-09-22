@@ -12,6 +12,8 @@
  *   浏览器那套工具在 `toolLoop.ts`（"页面任务"那一条路），两条路互不干扰。
  *
  * ★ 不做关键词判定：模型说查就查、说不查就不查，本地不猜语义。
+ *   例外（R1·2026-09-22）：安全闸不算"猜语义" —— query 命中与驾驶循环同一份
+ *   SENSITIVE_TARGET_RE（密码/验证码/身份证/银行卡/支付…）时直接拦截、不外发。
  *
  * 循环形态（为什么要"流式 + 工具"而不是先问一轮再答一轮）：
  *   不搜索的那一轮只发**一次**模型请求（和原来完全一样，不多花钱、不多等）；
@@ -19,6 +21,7 @@
  */
 
 import type { ChatSource } from '@ai-workbench/shared';
+import { SENSITIVE_TARGET_RE } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
 import { llmFetch, type LlmMessage, type LlmToolCall } from '../llm';
 import { webSearch, webSearchConfigFromEnv, WebSearchError, redactSecrets, type WebSearchItem } from './tavily';
@@ -326,6 +329,23 @@ export async function streamChatWithSearch(
           role: 'tool',
           tool_call_id: callId,
           content: JSON.stringify({ error: '搜索参数不合法：缺少 query' }),
+        });
+        continue;
+      }
+
+      // R1（2026-09-22）：query 先过敏感闸 —— 与驾驶循环同一份 SENSITIVE_TARGET_RE。
+      // 命中（密码/验证码/身份证/银行卡/支付…）→ 不外发、不记原文、不推"正在搜索"，
+      // 直接回 tool 结果让模型向用户解释。误伤的纯知识问由模型引导换问法。
+      if (SENSITIVE_TARGET_RE.test(query)) {
+        console.log('[search] 已拦截敏感查询（未外发，未记原文）');
+        searches.push({ query: '[已拦截·敏感查询]', results: 0, tookMs: 0, error: 'blocked_sensitive', sources: [] });
+        msgs.push({
+          role: 'tool',
+          tool_call_id: callId,
+          content: JSON.stringify({
+            error: 'blocked_sensitive',
+            note: '这次搜索被本地安全规则拦截了：问题里含有个人敏感信息（密码、验证码、身份证、银行卡、支付等），没有发往任何外部搜索服务。请直接告诉用户：这类问题不能用联网搜索查询，请他换个不带敏感信息的问法，或自己到官方渠道核对；不要编造答案。',
+          }),
         });
         continue;
       }

@@ -27,13 +27,15 @@
  *     执行层 driver.ts 还有第二道闸（typeSensitiveGuard）——两道都不代填；
  *   - 不做：整页换皮、插件、向量库、第二套点页引擎、重启恢复 tab。
  */
-import type {
-  AgentLoopDecision,
-  BrowserAction,
-  LoopToolCall,
-  LoopToolName,
-  LoopToolResult,
-  PageSnapshot,
+import {
+  PAYMENT_TARGET_RE,
+  sensitiveTargetHit,
+  type AgentLoopDecision,
+  type BrowserAction,
+  type LoopToolCall,
+  type LoopToolName,
+  type LoopToolResult,
+  type PageSnapshot,
 } from '@ai-workbench/shared';
 import type { ServerEnv } from './env';
 import { effectiveStepLimit } from './env';
@@ -47,6 +49,13 @@ import {
   summaryFromSnapshot,
   type PageStatePatch,
 } from './pageState';
+// 阶段 0 · Tool Registry：工具表与校验走注册表（旧逻辑保留在 *Legacy 函数里做回滚用）
+import {
+  LOOP_TOOL_NAMES,
+  normalizeToolArgs,
+  serverToolRegistry,
+  type ServerExecutionContext,
+} from './toolRegistry';
 
 /** 会话状态里要喂给循环的几行（字段名与 conversations 表一致，取自 sessionState） */
 export interface LoopStateBrief {
@@ -61,6 +70,15 @@ export interface LoopStateBrief {
 // 工具表：这 6 个就是全部（OpenAI 兼容的 function 定义，上游原样吃）
 // ---------------------------------------------------------------------------
 
+/**
+ * 阶段 0 · 旧工具表字面量（**已冻结**，不要改里面的任何字）。
+ *
+ * 默认路径不再用它 —— `askModel` 改从 `serverToolRegistry.toOpenAITools(LOOP_TOOL_NAMES)`
+ * 取工具表（内容经对照测试断言与这份字面量 deep-equal）。留着它有两个用处：
+ *   ① `TOOL_REGISTRY_LEGACY=1` 时 `askModel` 回退到这份字面量，行为与改前逐字节一致；
+ *   ② 对照测试拿它当「旧真相」做回归断言。
+ * 验收一版后删除（连同 sanitizeToolCallLegacy / toolToActionLegacy 一起）。
+ */
 export const LOOP_TOOLS = [
   {
     type: 'function',
@@ -148,6 +166,15 @@ export const LOOP_TOOLS = [
     },
   },
 ] as const;
+
+/**
+ * 阶段 0 · 回滚开关。`TOOL_REGISTRY_LEGACY=1` 时工具表 / 校验 / 映射三处
+ * 全部走旧逻辑（LOOP_TOOLS 字面量 + *Legacy 函数），与改前行为一致。
+ * 默认（未设置）走注册表。验收一版后删除这个开关与所有 *Legacy 函数。
+ */
+export function useLegacyToolPath(): boolean {
+  return process.env.TOOL_REGISTRY_LEGACY === '1';
+}
 
 /**
  * 循环的系统提示词。**只放服务端**，而且是第 16 步那套原则（最新指令优先、确认是例外、
@@ -756,36 +783,54 @@ export function describeToolResult(call: LoopToolCall, r: LoopToolResult): strin
 // 参数校验：模型吐出来的东西一律先过这里，脏动作绝不下发
 // ---------------------------------------------------------------------------
 
+/**
+ * 阶段 0 · 以下两个小件只剩 sanitizeToolCallLegacy 在用（回滚路径）。
+ * 正则与敏感判定已搬去 `@ai-workbench/shared`（PAYMENT_TARGET_RE /
+ * sensitiveTargetHit），新旧两份校验共用同一份，验收一版后随 legacy 函数一起删除。
+ */
 const ALLOWED = new Set<string>(['open_url', 'read_page', 'click', 'type', 'scroll', 'stop']);
-
-/** 支付/收银的最终确认永远由用户点（第 9 步硬规矩） */
-const PAYMENT_TARGET_RE = /(立即支付|确认支付|确认付款|去支付|去付款|提交订单|确认订单|pay\s*now|checkout|place\s*order)/i;
-/** 敏感字段：命中就不代填，转成「请你自己在卡片里输」 */
-const SENSITIVE_TARGET_RE =
-  /(密码|password|验证码|校验码|动态口令|短信码|otp|captcha|verification\s*code|支付|付款|银行卡|卡号|cvv|身份证)/i;
 
 function str(v: unknown, max: number): string {
   return typeof v === 'string' ? v.trim().slice(0, max) : '';
-}
-
-/** 命中的敏感字段描述（快照里标过敏感的框，或文案本身像敏感字段） */
-function sensitiveHit(snapshot: PageSnapshot | null, target: string): string {
-  const t = target.trim().toLowerCase();
-  if (!t) return '';
-  for (const f of snapshot?.inputFields ?? []) {
-    if (f.kind !== 'sensitive') continue;
-    const lab = f.label.toLowerCase().replace(/^\[敏感·[^\]]*\]\s*/, '');
-    if (lab && !lab.includes('无标识') && (t.includes(lab.slice(0, 20)) || lab.includes(t))) return f.label;
-  }
-  return SENSITIVE_TARGET_RE.test(t) ? target : '';
 }
 
 export type SanitizeOutcome =
   | { ok: true; call: LoopToolCall }
   | { ok: false; reason: string; question: string };
 
-/** 把上游给的 tool_call 归一成可下发的工具调用；不合法就换成一句人话提问 */
+/**
+ * 把上游给的 tool_call 归一成可下发的工具调用；不合法就换成一句人话提问。
+ *
+ * 阶段 0：默认走注册表（查定义 → JSON 解析 → 定义的 validate）。
+ * `TOOL_REGISTRY_LEGACY=1` 时走下面的 sanitizeToolCallLegacy（旧 switch，逐字保留）。
+ * 两条路的等价性由 `scripts/verify/tool-registry-parity.mjs` 逐用例断言。
+ */
 export function sanitizeToolCall(raw: LlmToolCall, snapshot: PageSnapshot | null): SanitizeOutcome {
+  if (useLegacyToolPath()) return sanitizeToolCallLegacy(raw, snapshot);
+  const name = typeof raw?.function?.name === 'string' ? raw.function.name : '';
+  const def = serverToolRegistry.get(name);
+  if (!def) {
+    return { ok: false, reason: 'bad_action', question: `模型想调一个不存在的工具「${name || '(空)'}」，我没有执行任何动作。告诉我下一步就行。` };
+  }
+  let args: Record<string, unknown> = {};
+  try {
+    const parsed = raw.function.arguments ? JSON.parse(raw.function.arguments) : {};
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed as Record<string, unknown>;
+  } catch {
+    return { ok: false, reason: 'bad_args', question: '模型这一步给的参数不是合法 JSON，我没有执行任何动作。告诉我下一步就行。' };
+  }
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : `call_${Date.now()}`;
+  const validated = def.validate(args, { snapshot });
+  if (!validated.ok) return { ok: false, reason: validated.reason, question: validated.question };
+  return { ok: true, call: { id, name: def.name as LoopToolName, args: validated.args } };
+}
+
+/**
+ * 阶段 0 · 旧校验 switch（`TOOL_REGISTRY_LEGACY=1` 时用，逻辑逐字保留，
+ * 只有一处改名：sensitiveHit → shared 的 sensitiveTargetHit，逻辑同一份）。
+ * 验收一版后删除。
+ */
+export function sanitizeToolCallLegacy(raw: LlmToolCall, snapshot: PageSnapshot | null): SanitizeOutcome {
   const name = typeof raw?.function?.name === 'string' ? raw.function.name : '';
   if (!ALLOWED.has(name)) {
     return { ok: false, reason: 'bad_action', question: `模型想调一个不存在的工具「${name || '(空)'}」，我没有执行任何动作。告诉我下一步就行。` };
@@ -825,7 +870,7 @@ export function sanitizeToolCall(raw: LlmToolCall, snapshot: PageSnapshot | null
       const target = str(args.target, 160);
       const text = typeof args.text === 'string' ? args.text.slice(0, 500) : '';
       if (!target || !text) return { ok: false, reason: 'bad_target', question: '输入框或要输入的内容没写清楚，请告诉我往哪个框里输什么。' };
-      const sens = sensitiveHit(snapshot, target);
+      const sens = sensitiveTargetHit(snapshot, target);
       if (sens) {
         return {
           ok: false,
@@ -883,7 +928,9 @@ async function askModel(env: ServerEnv, session: LoopSession, tag: string): Prom
     tag,
     temperature: 0.2,
     timeoutMs: 90_000,
-    tools: LOOP_TOOLS as unknown as unknown[],
+    // 阶段 0：默认从注册表取工具表（内容与 LOOP_TOOLS deep-equal，有对照测试兜底）；
+    // TOOL_REGISTRY_LEGACY=1 时用旧字面量，请求体与改前逐字节一致
+    tools: useLegacyToolPath() ? (LOOP_TOOLS as unknown as unknown[]) : serverToolRegistry.toOpenAITools(LOOP_TOOL_NAMES),
     toolChoice: isFirstStep ? 'required' : 'auto',
   });
   if (!r.ok) {
@@ -974,6 +1021,21 @@ function syncPageState(session: LoopSession, result: LoopToolResult | null, deci
 }
 
 /**
+ * 阶段 0 · 给服务端直执行工具拼执行上下文（loopId/userId/agentId/wcId/快照）。
+ * 阶段 0 没有 server 工具，这个函数只被对照测试间接覆盖。
+ */
+function serverContextOf(session: LoopSession): ServerExecutionContext {
+  return {
+    loopId: session.id,
+    userId: session.userId,
+    agentId: session.agentId,
+    wcId: session.wcId,
+    conversationId: session.conversationId,
+    snapshot: session.lastSnapshot,
+  };
+}
+
+/**
  * 推进一格（**内部实现**，外部一律走上面的 `advance`）。
  *
  *   - 传了 result（上一个工具的回执）→ 先追加 tool 消息，再问模型下一步；
@@ -981,6 +1043,29 @@ function syncPageState(session: LoopSession, result: LoopToolResult | null, deci
  *
  * 返回的一定是「桌面能执行的东西」：一个工具、或一句提问 / 结论 / 说明。
  */
+/**
+ * R3（2026-09-22）：把一份工具回执记进循环历史（追 tool 消息 + 刷新快照 + 清 pending + 步数+1）。
+ *
+ * 从 `advanceInner` 里逐字抽出来 —— `/next` 与 `/pause`（暂停时刷回执）共用同一份，
+ * 两处语义永远一致。调用方负责保证：只在「还有 pending」或「回执里带了用户答复」时调，
+ * 否则会记一条用 `call_<step>` 兜底的孤儿 tool 消息。
+ */
+export function ingestToolResult(session: LoopSession, result: LoopToolResult): void {
+  const callId = session.pendingCallId ?? `call_${session.step}`;
+  const lastCall = lastToolCall(session);
+  session.messages.push({
+    role: 'tool',
+    tool_call_id: callId,
+    content: describeToolResult(lastCall ?? { id: callId, name: 'read_page', args: {} }, result),
+  });
+  if (result.page) session.lastSnapshot = result.page;
+  session.pendingCallId = null;
+  session.step += 1;
+  if (result.userAnswer) {
+    session.messages.push({ role: 'user', content: `用户补了一句：${result.userAnswer.slice(0, 300)}` });
+  }
+}
+
 async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopToolResult | null): Promise<AgentLoopDecision> {
   session.touchedAt = Date.now();
 
@@ -1004,138 +1089,163 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
   }
 
   if (result) {
-    const callId = session.pendingCallId ?? `call_${session.step}`;
-    const lastCall = lastToolCall(session);
-    session.messages.push({
-      role: 'tool',
-      tool_call_id: callId,
-      content: describeToolResult(lastCall ?? { id: callId, name: 'read_page', args: {} }, result),
-    });
-    if (result.page) session.lastSnapshot = result.page;
-    session.pendingCallId = null;
-    session.step += 1;
-    if (result.userAnswer) {
-      session.messages.push({ role: 'user', content: `用户补了一句：${result.userAnswer.slice(0, 300)}` });
-    }
+    ingestToolResult(session, result);
   } else if (session.pendingCallId) {
-    // 上一格给了工具但桌面没回执就又问了一次：把它当「没执行」，让模型重选
+    // R3（2026-09-22）：回执缺失 ≠ 确认没执行（暂停/中断可能吞了回执）——让模型先核验，不许直接重做。
     session.messages.push({
       role: 'tool',
       tool_call_id: session.pendingCallId,
-      content: '工具没有被执行（桌面没有回执）。请重新选下一步。',
+      content: '上一步的回执缺失（不是确认没执行：暂停/中断可能吞了回执）。先用 read_page 看清现状再定下一步；如果那一步已经生效，不要重做。',
     });
     session.pendingCallId = null;
   }
 
-  /**
-   * 步数闸（2026-09-20 用户拍板：默认**不按步数打断**）。
-   *
-   *   · 配了正数 → 走满就停下来问（旧行为）；
-   *   · 没配（0 / 不限）→ 只有撞到**硬兜底**（200 步）才停，
-   *     那是防「read_page → read_page」这类成功死循环烧 token 的最后一道闸，
-   *     正常任务一辈子碰不到它。
-   */
-  const stepLimit = effectiveStepLimit(session.maxSteps);
-  if (session.step >= stepLimit) {
-    session.status = 'waiting';
-    return {
-      kind: 'ask',
-      reason: 'step_budget',
-      /**
-       * 话术必须把**两个入口**都说出来：
-       * 「说『继续』」和「点『继续』按钮」在渲染层走的是同一条恢复链路，
-       * 但以前这里只写了「点『继续』」—— 用户照着说一句「继续」，
-       * 那句话会掉进普通聊天（那一支没有浏览器工具），变成「嘴上答应、手上不动」。
-       */
-      question: `已经走了 ${stepLimit} 步还没做完（这是防空转的兜底上限），我先停下来。要我接着做，直接说「继续」或者点「继续」按钮都行；也可以直接告诉我下一步。`,
-      step: session.step,
-    };
-  }
-
-  let out: Awaited<ReturnType<typeof askModel>>;
-  try {
-    out = await askModel(env, session, `agent/loop#${session.step + 1}`);
-  } catch (err) {
-    session.status = 'failed';
-    return {
-      kind: 'ask',
-      reason: 'llm_unreachable',
-      question: `问不到下一步：${(err as Error).message}。这一步我没有执行任何动作。`,
-      step: session.step,
-    };
-  }
-  if (!out.ok) {
-    session.status = 'failed';
-    return {
-      kind: 'ask',
-      reason: 'llm_http',
-      question: `模型服务返回 HTTP ${out.status}：${out.brief || '（无详情）'}。这一步我没有执行任何动作。`,
-      step: session.step,
-    };
-  }
-
-  const message = out.message;
-  const calls = (message.tool_calls ?? []).filter((c) => c && typeof c === 'object');
-  const text = typeof message.content === 'string' ? message.content.trim().slice(0, 800) : '';
-
-  if (calls.length === 0) {
-    // 模型没调工具，只是说话：把话给用户，循环在这一格停住（等新指令，不空转）
-    session.status = 'waiting';
-    return { kind: 'say', text: text || '（模型这一步没有给出可执行动作）', step: session.step };
-  }
-
-  const first = calls[0];
-  const outcome = sanitizeToolCall(first, session.lastSnapshot);
-  if (!outcome.ok) {
-    // 脏动作不下发；但也让模型知道它这一步被拒了（下次别再这么干）
-    session.messages.push({
-      role: 'assistant',
-      content: '',
-      tool_calls: [{ id: first.id, type: 'function', function: { name: first.function?.name ?? '', arguments: first.function?.arguments ?? '{}' } }],
-    });
-    session.messages.push({ role: 'tool', tool_call_id: first.id, content: `本机拒绝执行：${outcome.reason}。${outcome.question}` });
-    session.status = 'waiting';
-    return { kind: 'ask', reason: outcome.reason, question: outcome.question, step: session.step };
-  }
-
-  const call = outcome.call;
-  // 只把**第一个**工具记进历史（其余忽略），保证 assistant.tool_calls 与 tool 回执一一对应
-  session.messages.push({
-    role: 'assistant',
-    content: text,
-    tool_calls: [{ id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } }],
-  });
-  session.pendingCallId = call.id;
-  session.usedTools.push(call.name);
-
-  if (call.name === 'stop') {
-    const reason = String(call.args.reason ?? 'done');
-    if (reason === 'done') {
-      session.status = 'done';
+  // 阶段 0 · 内循环：desktop 工具走完旧路径直接 return（一次迭代就走完）；
+  // 只有将来注册的 server 工具会 continue 再问一轮。步数闸放在循环内，
+  // 每一轮 server 执行后都会重查预算，不会无限内循环。
+  for (;;) {
+    /**
+     * 步数闸（2026-09-20 用户拍板：默认**不按步数打断**）。
+     *
+     *   · 配了正数 → 走满就停下来问（旧行为）；
+     *   · 没配（0 / 不限）→ 只有撞到**硬兜底**（200 步）才停，
+     *     那是防「read_page → read_page」这类成功死循环烧 token 的最后一道闸，
+     *     正常任务一辈子碰不到它。
+     */
+    const stepLimit = effectiveStepLimit(session.maxSteps);
+    if (session.step >= stepLimit) {
+      session.status = 'waiting';
       return {
-        kind: 'done',
-        summary: String(call.args.summary ?? '').trim() || '任务完成',
-        document_title: String(call.args.document_title ?? '').trim() || '任务记录',
-        document_outline: Array.isArray(call.args.document_outline) ? (call.args.document_outline as string[]) : [],
+        kind: 'ask',
+        reason: 'step_budget',
+        /**
+         * 话术必须把**两个入口**都说出来：
+         * 「说『继续』」和「点『继续』按钮」在渲染层走的是同一条恢复链路，
+         * 但以前这里只写了「点『继续』」—— 用户照着说一句「继续」，
+         * 那句话会掉进普通聊天（那一支没有浏览器工具），变成「嘴上答应、手上不动」。
+         */
+        question: `已经走了 ${stepLimit} 步还没做完（这是防空转的兜底上限），我先停下来。要我接着做，直接说「继续」或者点「继续」按钮都行；也可以直接告诉我下一步。`,
         step: session.step,
       };
     }
-    // ★ need_user / blocked：球已经踢回给用户了，循环**绝不能**进终态。
-    //   实测（场景 s7 / s8）进 done 的两个后果：
-    //     ① 用户回答之后接不回原循环 —— 只能「新建一轮」，前面走过的历史全丢；
-    //     ② 在这个状态下用户再点「暂停」，服务端 409「终态不能再挂起」，
-    //        桌面端退回「新建一轮」，再连点一下「继续」就被推成 stopped / failed。
-    //   所以保持在 waiting：可挂起、可继续，消息历史原样留着。
-    session.status = 'waiting';
-    return {
-      kind: 'ask',
-      reason: reason === 'blocked' ? 'blocked' : 'need_user',
-      question: String(call.args.question ?? '').trim() || '我这边卡住了，你告诉我下一步怎么走？',
-      step: session.step,
-    };
-  }
 
-  return { kind: 'tool', call, step: session.step, ...(text ? { text } : {}) };
+    let out: Awaited<ReturnType<typeof askModel>>;
+    try {
+      out = await askModel(env, session, `agent/loop#${session.step + 1}`);
+    } catch (err) {
+      session.status = 'failed';
+      return {
+        kind: 'ask',
+        reason: 'llm_unreachable',
+        question: `问不到下一步：${(err as Error).message}。这一步我没有执行任何动作。`,
+        step: session.step,
+      };
+    }
+    if (!out.ok) {
+      session.status = 'failed';
+      return {
+        kind: 'ask',
+        reason: 'llm_http',
+        question: `模型服务返回 HTTP ${out.status}：${out.brief || '（无详情）'}。这一步我没有执行任何动作。`,
+        step: session.step,
+      };
+    }
+
+    const message = out.message;
+    const calls = (message.tool_calls ?? []).filter((c) => c && typeof c === 'object');
+    const text = typeof message.content === 'string' ? message.content.trim().slice(0, 800) : '';
+
+    if (calls.length === 0) {
+      // 模型没调工具，只是说话：把话给用户，循环在这一格停住（等新指令，不空转）
+      session.status = 'waiting';
+      return { kind: 'say', text: text || '（模型这一步没有给出可执行动作）', step: session.step };
+    }
+
+    const first = calls[0];
+    const outcome = sanitizeToolCall(first, session.lastSnapshot);
+    if (!outcome.ok) {
+      // 脏动作不下发；但也让模型知道它这一步被拒了（下次别再这么干）
+      session.messages.push({
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: first.id, type: 'function', function: { name: first.function?.name ?? '', arguments: first.function?.arguments ?? '{}' } }],
+      });
+      session.messages.push({ role: 'tool', tool_call_id: first.id, content: `本机拒绝执行：${outcome.reason}。${outcome.question}` });
+      session.status = 'waiting';
+      return { kind: 'ask', reason: outcome.reason, question: outcome.question, step: session.step };
+    }
+
+    const call = outcome.call;
+    // 只把**第一个**工具记进历史（其余忽略），保证 assistant.tool_calls 与 tool 回执一一对应
+    session.messages.push({
+      role: 'assistant',
+      content: text,
+      tool_calls: [{ id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args) } }],
+    });
+    session.pendingCallId = call.id;
+    session.usedTools.push(call.name);
+
+    // 阶段 0 · 服务端直执行工具（side='server'，阶段 1+ 才会有注册）：
+    // 在循环内就地执行、把回执 append 进历史，然后 continue 再问模型，
+    // 桌面侧完全感知不到这一格的存在。阶段 0 没有注册任何 server 工具，
+    // 线上永远走不到这个分支（只被对照测试覆盖），旧行为逐行不变。
+    // 注：legacy 模式下 toolDef 恒为 undefined，保证回滚路径与改前完全一致。
+    const toolDef = useLegacyToolPath() ? undefined : serverToolRegistry.get(call.name);
+    if (toolDef && toolDef.side === 'server' && toolDef.kind === 'action') {
+      const executor = serverToolRegistry.getExecutor(call.name);
+      if (!executor) {
+        session.messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: `本机拒绝执行：no_executor。工具「${call.name}」没有注册执行器，我没有执行任何动作。`,
+        });
+        session.pendingCallId = null;
+        session.status = 'waiting';
+        return { kind: 'ask', reason: 'no_executor', question: `工具「${call.name}」在服务端没有执行器，我没有执行任何动作。告诉我下一步就行。`, step: session.step };
+      }
+      let serverResult: LoopToolResult;
+      try {
+        serverResult = await executor.execute(call.args, serverContextOf(session));
+      } catch (err) {
+        serverResult = { ok: false, error: (err as Error)?.message ?? String(err) };
+      }
+      session.messages.push({ role: 'tool', tool_call_id: call.id, content: describeToolResult(call, serverResult) });
+      if (serverResult.page) session.lastSnapshot = serverResult.page;
+      session.pendingCallId = null;
+      session.step += 1;
+      session.touchedAt = Date.now();
+      continue;
+    }
+
+    if (call.name === 'stop') {
+      const reason = String(call.args.reason ?? 'done');
+      if (reason === 'done') {
+        session.status = 'done';
+        return {
+          kind: 'done',
+          summary: String(call.args.summary ?? '').trim() || '任务完成',
+          document_title: String(call.args.document_title ?? '').trim() || '任务记录',
+          document_outline: Array.isArray(call.args.document_outline) ? (call.args.document_outline as string[]) : [],
+          step: session.step,
+        };
+      }
+      // ★ need_user / blocked：球已经踢回给用户了，循环**绝不能**进终态。
+      //   实测（场景 s7 / s8）进 done 的两个后果：
+      //     ① 用户回答之后接不回原循环 —— 只能「新建一轮」，前面走过的历史全丢；
+      //     ② 在这个状态下用户再点「暂停」，服务端 409「终态不能再挂起」，
+      //        桌面端退回「新建一轮」，再连点一下「继续」就被推成 stopped / failed。
+      //   所以保持在 waiting：可挂起、可继续，消息历史原样留着。
+      session.status = 'waiting';
+      return {
+        kind: 'ask',
+        reason: reason === 'blocked' ? 'blocked' : 'need_user',
+        question: String(call.args.question ?? '').trim() || '我这边卡住了，你告诉我下一步怎么走？',
+        step: session.step,
+      };
+    }
+
+    return { kind: 'tool', call, step: session.step, ...(text ? { text } : {}) };
+  }
 }
 
 /** 历史里最后一条 assistant 的 tool_call（回执时用来对齐工具名） */
@@ -1238,8 +1348,21 @@ function askUser(reason: string, question: string): BrowserAction {
   return { action: 'ask_user', reason, question };
 }
 
-/** 工具调用 → 本地 driver 的动作（driver.ts 的 BrowserAction，不另起第二套） */
+/**
+ * 工具调用 → 本地 driver 的动作（driver.ts 的 BrowserAction，不另起第二套）。
+ *
+ * 阶段 0：默认查注册表定义的 toBrowserAction（与旧 switch 逐项等价，有对照测试兜底）；
+ * `TOOL_REGISTRY_LEGACY=1` 时走旧 switch。唯一的行为差是防御性的：
+ * 旧 switch 在 `call.args` 缺失时会抛错，新逻辑按空对象处理（线上 sanitize 保证 args 恒为对象，走不到）。
+ */
 export function toolToAction(call: LoopToolCall): BrowserAction {
+  if (useLegacyToolPath()) return toolToActionLegacy(call);
+  const def = serverToolRegistry.get(call?.name ?? '');
+  return def?.toBrowserAction?.(normalizeToolArgs(call)) ?? { action: 'read_page' };
+}
+
+/** 阶段 0 · 旧 switch（`TOOL_REGISTRY_LEGACY=1` 时用，验收一版后删除） */
+export function toolToActionLegacy(call: LoopToolCall): BrowserAction {
   switch (call.name) {
     case 'open_url':
       return { action: 'open_url', url: String(call.args.url ?? '') };
