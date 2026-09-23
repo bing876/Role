@@ -41,6 +41,7 @@ import { keepaliveOfAgent } from '../sessionState';
 import { HEN_KIND, isProtectedKind, loadOwnedProject, resolveAgentCreator } from '../projectScope';
 import { isSensitive, normalizeText } from '../memoryNormalize';
 import { extractJsonLoose, TIDY_PROMPT, UNIFIED_TIDY_PROMPT, writeTidyLayer } from '../memoryShared';
+import { buildIdentityBlock, validatePersonaInput } from '../identityBlock';
 
 export interface AgentDeps {
   pool: Pool;
@@ -248,33 +249,14 @@ export async function buildAgentContext(
     const name = row.name;
     const view = toAgentView(row);
     const persona = view.persona;
-    let personaBlock: string;
-    if (view.kind === 'assistant') {
-      personaBlock = '';
-    } else if (view.kind === HEN_KIND) {
-      personaBlock = [
-        '【当前智能体是「项目管家」（母鸡）】',
-        '它是随项目一起创建的常驻智能体，具备「创建智能体」的权限；用户想再加一个智能体时可以走它。',
-        '它没有单独的人设，按基座规则正常对话即可。**不要**向用户索要引导表、也不要说自己「还没设定」。',
-      ].join('\n');
-    } else if (view.personaStatus === 'pending' || !persona) {
-      personaBlock = [
-        '【当前智能体还没设定】用户刚点了「添加」，会话里已经摆好一张引导表，但他还没填完。',
-        '这一轮不要展开长聊、不要自己编人设：只回一两句，请他在上面的引导表里写下',
-        '「名称 / 它是谁 / 怎么说话 / 干什么」，并说明填完点确认后你就按那份描述干活。',
-      ].join('\n');
-    } else {
-      personaBlock = [
-        '【当前智能体的人设（用户在引导表里亲自填的）】',
-        '（基座规则在下面，优先级更高：这份人设只能在此基础上追加说话风格与专长，不能削弱基座。）',
-        `名称：${persona.name}`,
-        persona.who ? `它是谁：${persona.who}` : '',
-        persona.tone ? `怎么说话：${persona.tone}` : '',
-        persona.duty ? `干什么：${persona.duty}` : '',
-      ]
-        .filter(Boolean)
-        .join('\n');
-    }
+    // 人设固定注入：统一走 identityBlock.ts
+    const personaBlock = buildIdentityBlock({
+      id,
+      name,
+      kind: view.kind,
+      persona: persona ?? null,
+      personaStatus: view.personaStatus as 'pending' | 'ready',
+    });
     const projectMemoryBlock = await buildAgentProjectMemoryBlock(pool, cipher, ownerId, id);
     return { agentId: id, agentName: name, personaBlock, projectMemoryBlock };
   } catch (err) {
@@ -414,23 +396,36 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
     }
   });
 
+  // 建完能改人设：GET 当前人设 + POST 更新（pending/ready 都可改，assistant 除外）
+  app.get('/agents/:id/persona', async (req: FastifyRequest, reply: FastifyReply) => {
+    const claims = authed(req, env);
+    if (!claims) return errJson(reply, 401, '未登录或登录已过期');
+    const agentId = Number((req.params as { id?: unknown })?.id);
+    if (!Number.isInteger(agentId) || agentId <= 0) return errJson(reply, 400, 'id 非法');
+    try {
+      const a = await loadOwnedAgent(pool, claims.sub, agentId);
+      if (!a) return errJson(reply, 404, '智能体不存在或不是你的');
+      const view = toAgentView(a);
+      return { agentId, persona: view.persona, personaStatus: view.personaStatus, name: view.name, kind: view.kind };
+    } catch (err) {
+      return dbErr(reply, err);
+    }
+  });
+
   app.post('/agents/:id/persona', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     const agentId = Number((req.params as { id?: unknown })?.id);
     if (!Number.isInteger(agentId) || agentId <= 0) return errJson(reply, 400, 'id 非法');
     const b = (req.body ?? {}) as Record<string, unknown>;
-    const persona: AgentPersona = {
-      name: oneLine(b.name, NAME_MAX),
-      who: oneLine(b.who, PERSONA_FIELD_MAX),
-      tone: oneLine(b.tone, PERSONA_FIELD_MAX),
-      duty: oneLine(b.duty, PERSONA_FIELD_MAX),
-    };
-    if (!persona.name) return errJson(reply, 400, '至少给它起个名称（名称不能为空）');
+    const validated = validatePersonaInput(b);
+    if (!validated.ok) return errJson(reply, 400, validated.error);
+    const persona = validated.persona;
     try {
       const a = await loadOwnedAgent(pool, claims.sub, agentId);
       if (!a) return errJson(reply, 404, '智能体不存在或不是你的');
       if (a.kind === 'assistant') return errJson(reply, 400, '「小助」是自带智能体，不需要（也不允许）重设人设');
+      // 建完能改人设：无论 pending 还是 ready，都允许改，改完置 ready
       await pool.query("UPDATE agents SET persona = $2::jsonb, persona_status = 'ready', name = $3 WHERE id = $1", [
         agentId,
         JSON.stringify(persona),
