@@ -521,6 +521,11 @@ export interface StartLoopInput {
    * 依赖方向永远是 orchestrator → toolLoop。
    */
   systemPrompt?: string;
+  /**
+   * 记忆合并第一批 · 该用户的档案记忆块（账号级 + 智能体级，已按 owner+agent 过滤）。
+   * 由两个启动点（chat.ts 任务轮与 loop.ts 桌面自建）统一传入，拼在首条 user 消息里。
+   */
+  memoryBlock?: string;
 }
 
 /** 建一个循环（只有 /chat/stream 的任务轮与主进程兜底会调它） */
@@ -643,6 +648,8 @@ function firstUserMessage(input: StartLoopInput, maxSteps: number, brief: LoopSt
      * 放在「请选下一步工具」**之前**：模型读到最后仍是那句选择指令，不被名单冲淡。
      */
     input.orchestrationBlock?.trim() ? input.orchestrationBlock.trim() : '',
+    // 记忆合并第一批：账号级+智能体级记忆块
+    input.memoryBlock?.trim() ? input.memoryBlock.trim() : '',
     '请选下一步要调用的工具（一次一个）。',
   ];
   return lines.filter(Boolean).join('\n\n');

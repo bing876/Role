@@ -54,6 +54,7 @@ import {
 import { broadcastLoopEvent, endLoopSse } from '../loopSse';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { getJob, jobOfLoop } from '../orchestrator/registry';
+import { buildMemoryBlock } from './memories';
 
 export interface LoopDeps {
   pool: Pool;
@@ -87,7 +88,7 @@ async function ownsAgent(pool: Pool, userId: number, agentId: number): Promise<b
   return r.rowCount === 1;
 }
 
-export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps): void {
+export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: LoopDeps): void {
   app.post('/agent/loop/start', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期（工具循环需要第 5 步的 JWT）');
@@ -132,6 +133,14 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       }
     }
 
+    // 记忆合并第一批：该用户该智能体的档案记忆（账号级+智能体级）
+    let memoryBlock: string | undefined;
+    try {
+      memoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, goal, agentId ?? null);
+    } catch (err) {
+      console.warn('[loop] 记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
+    }
+
     const session = startLoop(env, {
       userId: claims.sub,
       agentId,
@@ -144,6 +153,7 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env }: LoopDeps
       // ★ 名单必须在这里查、在这里传：它是**按项目按当下**变的，进不了工具 description。
       //   查不到 / 没开编排 → 传 undefined，`startLoop` 那边走「不加这一段」的老路。
       orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, agentId),
+      memoryBlock,
     });
     // R2 全面加固（2026-09-22）：循环创建日志不再打印 goal 明文（goal 可能含密码/卡号），只打 ID/归属/步数
     console.log(

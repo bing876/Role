@@ -231,6 +231,12 @@ export async function executeDelegate(
   // 子循环：**分离式**（不进主 loops Map）、没有页、工具表里没有浏览器工具
   const roster = await loadProjectRoster(pool, ctx.userId, projectId, target.id);
   const targetPersona = await loadAgentPersona(pool, target.id);
+  // 记忆合并第一批：子循环也带记忆块（账号级+被委派智能体级）
+  let delegateMemoryBlock: string | undefined;
+  try {
+    const { buildMemoryBlock } = await import('../routes/memories');
+    delegateMemoryBlock = await buildMemoryBlock(pool, cipher, ctx.userId, task.slice(0, 500), target.id);
+  } catch {}
   const sub = startLoop(env, {
     userId: ctx.userId,
     agentId: target.id,
@@ -245,6 +251,7 @@ export async function executeDelegate(
     detached: true,
     systemPrompt: subAgentSystemPrompt({ selfName: target.name, persona: targetPersona, fromName }),
     orchestrationBlock: orchestrationBlock(target.id, roster),
+    memoryBlock: delegateMemoryBlock,
   });
   registerSubLoop(sub);
   await setDelegationChildLoop(pool, delegationId, sub.id);

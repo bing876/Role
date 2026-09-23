@@ -14,6 +14,7 @@ import { Pool, type PoolClient } from 'pg';
 import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSensitive as isSensitiveMem } from './memoryNormalize';
 
 export function makePool(connectionString: string): Pool {
   if (connectionString.startsWith('pglite')) {
@@ -136,9 +137,10 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS unread BOOLEAN NOT NULL DEFAULT false
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS result_enc TEXT;
 
 -- 第 10 步：用户档案记忆挂 owner_id（全员共用）；老列 project_id/mem_key/value_enc 保留兼容
+-- 记忆合并第一批：project_id 改可空（NULL=不按项目隔离），agent_id 两级作用域（NULL=账号级，值=智能体级）
 CREATE TABLE IF NOT EXISTS memories (
   id                BIGSERIAL PRIMARY KEY,
-  project_id        BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id        BIGINT REFERENCES projects(id) ON DELETE CASCADE,
   agent_id          BIGINT REFERENCES agents(id) ON DELETE SET NULL,
   mem_key           TEXT NOT NULL,
   value_enc         TEXT NOT NULL,
@@ -155,6 +157,7 @@ CREATE INDEX IF NOT EXISTS idx_memories_project ON memories (project_id);
 
 -- 对第 5 步建过表的老库幂等补列（注入/列表一律按 owner_id 过滤，不按项目隔离）
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS owner_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS agent_id BIGINT REFERENCES agents(id) ON DELETE SET NULL;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'preference';
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS content_encrypted TEXT;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS source TEXT;
@@ -162,6 +165,10 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pend
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS needs_confirm BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories (owner_id, status);
+-- 记忆合并：两级作用域唯一性（用户级/智能体级各自去重）
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_owner_agent ON memories (owner_id, agent_id, updated_at DESC);
 
 -- 第 11 步：知识库和第 10 步 memories 完全分表。上传的原文件不落盘；
 -- 文件名 filename_enc 与每个资料正文片段 content_enc 均为 AES-256-GCM 密文。
@@ -195,19 +202,9 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_owner ON knowledge_chunks (owner
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS persona JSONB;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS persona_status TEXT NOT NULL DEFAULT 'ready';
 
--- 第 15 步 · 第一层：用户记忆库（账号级）。所有智能体都能读，属于「这个人」的习惯/口味/展示偏好。
--- 和第 10 步的 memories 完全分表（那张表是老确认流，本步不再往里写）。
-CREATE TABLE IF NOT EXISTS user_memories (
-  id           BIGSERIAL PRIMARY KEY,
-  owner_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  mem_key      TEXT NOT NULL,
-  content_enc  TEXT NOT NULL,
-  source       TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (owner_id, mem_key)
-);
-CREATE INDEX IF NOT EXISTS idx_user_memories_owner ON user_memories (owner_id, updated_at DESC);
+-- 第 15 步 · 第一层（已合并到 memories）：用户记忆库原来是 user_memories 表，账号级。
+-- 记忆合并第一批后单一 memories 表（agent_id IS NULL = 账号级），旧表由迁移逻辑 DROP。
+-- 这里不再 CREATE 旧表，避免新库又建出两套。
 
 -- 第 16 步：轻量会话状态（每个智能体那条会话一份）——直接补在**现有会话表**上，
 -- 不新建 SQLite、不建第二套库。这些字段每轮进模型上下文，否则改提示词也无效。
@@ -229,21 +226,9 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS state_updated_at TIMESTAMPTZ 
 -- 明文 JSONB（不是密文）是刻意的：内容是公开网页地址，且要能直接在界面上渲染。
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB;
 
--- 第 15 步 · 第二层：项目记忆（智能体级）。一个智能体一份，**绝不串**。
--- agent_id 是 NOT NULL 外键：查询一律 owner_id + agent_id 双条件，别的智能体的项目记忆读不到；
--- 删智能体时级联删掉它自己的项目记忆（不会误伤别人）。
-CREATE TABLE IF NOT EXISTS agent_memories (
-  id           BIGSERIAL PRIMARY KEY,
-  owner_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  agent_id     BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-  mem_key      TEXT NOT NULL,
-  content_enc  TEXT NOT NULL,
-  source       TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (agent_id, mem_key)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories (agent_id, updated_at DESC);
+-- 第 15 步 · 第二层（已合并到 memories）：项目记忆原来是 agent_memories 表，智能体级。
+-- 记忆合并第一批后单一 memories 表（agent_id = 智能体ID = 智能体级），旧表由迁移逻辑 DROP。
+-- 这里不再 CREATE 旧表，避免新库又建出两套。
 
 -- ---------------------------------------------------------------------------
 -- 子阶段 2-A：把「项目」从「一个用户一条默认项目」升级成真正的容器。
@@ -485,8 +470,157 @@ async function migrateProjectScope(pool: Pool): Promise<void> {
   }
 }
 
+async function tableExists(pool: Pool, name: string): Promise<boolean> {
+  try {
+    const r = await pool.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = $1
+       ) AS exists`,
+      [name],
+    );
+    return Boolean(r.rows[0]?.exists);
+  } catch {
+    // PGlite 兼容：直接试 SELECT 1，失败即不存在
+    try {
+      await pool.query(`SELECT 1 FROM ${name} LIMIT 1`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * 记忆合并第一批 · 结构补丁
+ * - memories.project_id 改可空
+ * - memories.agent_id 确保有列
+ * - 两级唯一索引
+ */
+async function migrateMemoriesStructure(pool: Pool): Promise<void> {
+  try {
+    await pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS agent_id BIGINT REFERENCES agents(id) ON DELETE SET NULL');
+  } catch (err) {
+    console.warn('[db] memories.agent_id 补列失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('ALTER TABLE memories ALTER COLUMN project_id DROP NOT NULL');
+  } catch {
+    // PGlite / 已是可空时可能报错，忽略
+  }
+  try {
+    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL');
+  } catch (err) {
+    console.warn('[db] uniq_memories_user 建索引失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL');
+  } catch (err) {
+    console.warn('[db] uniq_memories_agent 建索引失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_owner_agent ON memories (owner_id, agent_id, updated_at DESC)');
+  } catch {}
+}
+
+/**
+ * 记忆合并第一批 · 数据迁移
+ * - 从 user_memories / agent_memories 幂等搬到 memories
+ * - 迁移时过敏感闸（按 mem_key 判定，已加密的 content_enc 无法解密时以 key 为准）
+ * - 搬完 DROP 老表
+ */
+async function migrateMemoriesMerge(pool: Pool): Promise<void> {
+  const hasUser = await tableExists(pool, 'user_memories');
+  const hasAgent = await tableExists(pool, 'agent_memories');
+  if (!hasUser && !hasAgent) return;
+
+  let userMoved = 0;
+  let userSkippedSensitive = 0;
+  let agentMoved = 0;
+  let agentSkippedSensitive = 0;
+
+  if (hasUser) {
+    try {
+      const r = await pool.query<{ owner_id: string; mem_key: string; content_enc: string; source: string | null }>(
+        'SELECT owner_id, mem_key, content_enc, source FROM user_memories',
+      );
+      for (const row of r.rows) {
+        const memKey = String(row.mem_key ?? '').trim();
+        if (!memKey) continue;
+        if (isSensitiveMem(memKey)) {
+          userSkippedSensitive += 1;
+          continue;
+        }
+        try {
+          const ins = await pool.query(
+            `INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
+             VALUES (NULL, NULL, $1, $2, $3, 'preference', $2, $4, 'active', false)
+             ON CONFLICT DO NOTHING`,
+            [memKey, row.content_enc, row.owner_id, row.source || 'migrated_user'],
+          );
+          userMoved += ins.rowCount ?? 0;
+        } catch (err) {
+          console.warn('[db] user_memories 迁移单条失败（忽略）：', (err as Error).message);
+        }
+      }
+    } catch (err) {
+      console.warn('[db] 读取 user_memories 失败（忽略）：', (err as Error).message);
+    }
+  }
+
+  if (hasAgent) {
+    try {
+      const r = await pool.query<{
+        owner_id: string;
+        agent_id: string;
+        mem_key: string;
+        content_enc: string;
+        source: string | null;
+      }>('SELECT owner_id, agent_id, mem_key, content_enc, source FROM agent_memories');
+      for (const row of r.rows) {
+        const memKey = String(row.mem_key ?? '').trim();
+        if (!memKey) continue;
+        if (isSensitiveMem(memKey)) {
+          agentSkippedSensitive += 1;
+          continue;
+        }
+        try {
+          const ins = await pool.query(
+            `INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
+             VALUES (NULL, $1, $2, $3, $4, 'preference', $3, $5, 'active', false)
+             ON CONFLICT DO NOTHING`,
+            [row.agent_id, memKey, row.content_enc, row.owner_id, row.source || 'migrated_agent'],
+          );
+          agentMoved += ins.rowCount ?? 0;
+        } catch (err) {
+          console.warn('[db] agent_memories 迁移单条失败（忽略）：', (err as Error).message);
+        }
+      }
+    } catch (err) {
+      console.warn('[db] 读取 agent_memories 失败（忽略）：', (err as Error).message);
+    }
+  }
+
+  console.log(
+    `[db] 记忆合并迁移：user ${userMoved} 条（敏感跳过 ${userSkippedSensitive}）、agent ${agentMoved} 条（敏感跳过 ${agentSkippedSensitive}）`,
+  );
+
+  try {
+    await pool.query('DROP TABLE IF EXISTS user_memories CASCADE');
+  } catch (err) {
+    console.warn('[db] DROP user_memories 失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('DROP TABLE IF EXISTS agent_memories CASCADE');
+  } catch (err) {
+    console.warn('[db] DROP agent_memories 失败（忽略）：', (err as Error).message);
+  }
+}
+
 export async function migrate(pool: Pool): Promise<void> {
   await pool.query(DDL);
+  await migrateMemoriesStructure(pool);
+  await migrateMemoriesMerge(pool);
   await migrateProjectScope(pool);
   await dedupeAgentConversations(pool);
   await ensureAgentConversationIndex(pool);

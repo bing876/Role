@@ -13,9 +13,15 @@
  *   - 结束才抽取：任务 done/failed（服务端自触发）、聊天闲置 15 分钟（定时扫）、桌面「结束」按钮；
  *     同一会话/任务 10 分钟内不重复抽。
  *
- * 注入接口：buildMemoryBlock(pool, cipher, ownerId, userText) —— chat.ts 与 agent.ts 各调一次，
+ * 注入接口：buildMemoryBlock(pool, cipher, ownerId, userText, agentId?) —— chat.ts 与 agent.ts 各调一次，
  * 拼在系统提示词尾部；两条冲突以更晚为准（写进块里）。
+ *
+ * 记忆合并第一批：
+ *   - 抽离 memoryNormalize.ts（零 import）
+ *   - memories 表两级作用域：agent_id NULL=账号级，值=智能体级，project_id 可空
+ *   - buildMemoryBlock / extractCore 通作用域（支持按 owner+agent 过滤）
  */
+
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { MemoryExtractResult, MemoryItem, MemoryListResult } from '@ai-workbench/shared';
@@ -25,7 +31,7 @@ import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
 import { llmFetch } from '../llm';
 import { REFERENCE_PREFIX, sanitizeReferenceLine } from '../promptPolicy';
-import { currentProjectId } from '../projectScope';
+import { normalizeText, SENSITIVE_MEM_RE, LONG_DIGITS_RE, isSensitive } from '../memoryNormalize';
 
 export interface MemoryDeps {
   pool: Pool;
@@ -76,15 +82,6 @@ function looksLikeWorkRule(content: string): boolean {
   return THEME_RULE_RE.test(s) || WORK_RULE_RE.test(s);
 }
 
-/** 写入前的敏感闸（模型已经收过一道，这里再兜一层；命中即丢弃该条） */
-const SENSITIVE_MEM_RE =
-  /(密码|口令|passw|验证\s*码|校验\s*码|captcha|\botp\b|动[态态].{0,2}(码|令)|身份证|银行\s*卡|信用\s*卡|卡号|\bcvv\b|\bcvc\b|cookie|token|令牌|\bsecret\b)/i;
-const LONG_DIGITS_RE = /\d{11,}/;
-
-function normalizeText(s: string): string {
-  return String(s).toLowerCase().replace(/[\s，。、,.;；:：!！?？~～"'“”‘’()（）【】\-—_+·]/g, '');
-}
-
 function wordHits(text: string, fact: string): boolean {
   const hay = normalizeText(text);
   if (!hay) return false;
@@ -99,7 +96,6 @@ function wordHits(text: string, fact: string): boolean {
       if (hay.includes(w)) return true;
       continue;
     }
-    // 中文没有空格分词：对 4 字滑窗做“明显实体词”包含匹配（说明书要求的简单规则，不上向量库）
     for (let i = 0; i + 4 <= w.length; i += 1) {
       if (hay.includes(w.slice(i, i + 4))) return true;
     }
@@ -150,23 +146,38 @@ function extractJsonLoose(text: string): unknown {
 
 /**
  * 注入块：active preference+decision 全带上；active fact 仅命中才带。
- *
- * 第 16 步：整块降级为**参考**——标明「可被用户本轮最新指令覆盖」，并且每一行都过
- * sanitizeReferenceLine：老记忆里若有「操作浏览器前必须先确认」这类句子，会被改写成
- * 「敏感操作需确认；普通浏览在用户同意后或本会话已打开过网页后直执行。」，
- * 绝不让它当最高法把第 13 步（明确开页指令直接出卡片）打回去。
+ * 通作用域：agentId 有值时同时带账号级（agent_id IS NULL）+ 智能体级（agent_id = ?）
  */
 export async function buildMemoryBlock(
   pool: Pool,
   cipher: JsonCipher,
   ownerId: number,
   userText: string,
+  agentId?: number | null,
 ): Promise<string> {
   try {
-    const core = await pool.query<{ type: string; content_encrypted: string | null }>(
-      "SELECT type, content_encrypted FROM memories WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision') AND content_encrypted IS NOT NULL ORDER BY updated_at DESC, id DESC LIMIT 20",
-      [ownerId],
-    );
+    const aid = Number(agentId);
+    const hasAgent = Number.isInteger(aid) && aid > 0;
+
+    const coreQuery = hasAgent
+      ? {
+          text: `SELECT type, content_encrypted FROM memories
+                  WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
+                    AND content_encrypted IS NOT NULL
+                    AND (agent_id IS NULL OR agent_id = $2)
+                  ORDER BY updated_at DESC, id DESC LIMIT 20`,
+          values: [ownerId, aid],
+        }
+      : {
+          text: `SELECT type, content_encrypted FROM memories
+                  WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
+                    AND content_encrypted IS NOT NULL
+                    AND agent_id IS NULL
+                  ORDER BY updated_at DESC, id DESC LIMIT 20`,
+          values: [ownerId],
+        };
+
+    const core = await pool.query<{ type: string; content_encrypted: string | null }>(coreQuery.text, coreQuery.values);
     const lines: string[] = [];
     const seen = new Set<string>();
     const label = (t: string): string => (t === 'preference' ? '偏好' : t === 'decision' ? '决定' : '事实');
@@ -175,19 +186,35 @@ export async function buildMemoryBlock(
       try {
         text = cipher.decryptText(String(r.content_encrypted));
       } catch {
-        continue; // DATA_KEY 换过之类的脏行：跳过，不炸聊天
+        continue;
       }
-      if (SENSITIVE_MEM_RE.test(text) || LONG_DIGITS_RE.test(text)) continue; // 注入前也过闸，双保险
+      if (isSensitive(text)) continue;
       const line = sanitizeReferenceLine(text);
       if (!line || seen.has(line)) continue;
       seen.add(line);
       lines.push(`- [${label(r.type)}] ${line}`);
     }
     if (lines.length > 0) lines.push('若两条冲突，以更晚的为准；与用户本轮最新指令冲突，以最新指令为准。');
-    const facts = await pool.query<{ content_encrypted: string }>(
-      "SELECT content_encrypted FROM memories WHERE owner_id = $1 AND status = 'active' AND type = 'fact' AND content_encrypted IS NOT NULL ORDER BY updated_at DESC LIMIT 10",
-      [ownerId],
-    );
+
+    const factQuery = hasAgent
+      ? {
+          text: `SELECT content_encrypted FROM memories
+                  WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
+                    AND content_encrypted IS NOT NULL
+                    AND (agent_id IS NULL OR agent_id = $2)
+                  ORDER BY updated_at DESC LIMIT 10`,
+          values: [ownerId, aid],
+        }
+      : {
+          text: `SELECT content_encrypted FROM memories
+                  WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
+                    AND content_encrypted IS NOT NULL
+                    AND agent_id IS NULL
+                  ORDER BY updated_at DESC LIMIT 10`,
+          values: [ownerId],
+        };
+
+    const facts = await pool.query<{ content_encrypted: string }>(factQuery.text, factQuery.values);
     for (const f of facts.rows) {
       let text = '';
       try {
@@ -195,7 +222,7 @@ export async function buildMemoryBlock(
       } catch {
         continue;
       }
-      if (SENSITIVE_MEM_RE.test(text) || LONG_DIGITS_RE.test(text)) continue; // 注入前也过一遍闸
+      if (isSensitive(text)) continue;
       if (!wordHits(userText, text)) continue;
       const line = sanitizeReferenceLine(text);
       if (!line || seen.has(line)) continue;
@@ -223,6 +250,7 @@ async function extractCore(
   source: string,
   transcript: string,
   dedupKey: string,
+  agentId?: number | null,
 ): Promise<CoreOutcome> {
   const { pool, env, cipher } = deps;
   const now = Date.now();
@@ -257,16 +285,20 @@ async function extractCore(
   const list = Array.isArray(raw.items) ? raw.items.slice(0, MAX_ITEMS) : [];
   if (list.length === 0) return { ...empty, skipped: 'nothing_worth_remembering' };
 
-  // 去重基线：owner 全部 pending/active/rejected 的规范化句子
-  const exist = await pool.query<{ mem_key: string }>(
-    "SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected')",
-    [ownerId],
-  );
+  // 去重基线：按作用域查
+  const aid = Number(agentId);
+  const hasAgent = Number.isInteger(aid) && aid > 0;
+  const existQuery = hasAgent
+    ? {
+        text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND (agent_id IS NULL OR agent_id = $2)`,
+        values: [ownerId, aid],
+      }
+    : {
+        text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND agent_id IS NULL`,
+        values: [ownerId],
+      };
+  const exist = await pool.query<{ mem_key: string }>(existQuery.text, existQuery.values);
   const seen = new Set(exist.rows.map((r) => r.mem_key));
-  // 子阶段 2-A：挂到**当前使用中的项目**（没有就回落默认项目）
-  const projectId = await currentProjectId(pool, ownerId);
-  // memories.project_id 是老表的 NOT NULL 外键（兼容保留）：没有项目就明确跳过，不撞约束
-  if (projectId === null) return { extracted: 0, pending: [], skipped: 'no_project' };
 
   let inserted = 0;
   const pending: MemoryItem[] = [];
@@ -276,8 +308,6 @@ async function extractCore(
     if (!['preference', 'decision', 'fact'].includes(rawType)) continue;
     const content = typeof o.content === 'string' ? o.content.trim().slice(0, CONTENT_MAX) : '';
     if (content.length < 2) continue;
-    // 保守兜底（提示词之外的第二道）：工作方式/主题/流程/默认规则一律按 decision 处理，
-    // 禁止当成 preference 静默 active —— 必须先上确认卡、用户点了确认才生效。
     let type = rawType;
     if (looksLikeWorkRule(content)) {
       type = 'decision';
@@ -285,29 +315,40 @@ async function extractCore(
         console.warn(`[memories] 「${content.slice(0, 20)}…」被判定为工作方式规则：强制 decision + pending（模型给的是 ${rawType}）`);
       }
     }
-    // 说明书钉死：preference 永不需确认；decision 必确认；fact 不需确认就丢
     const needs = type === 'preference' ? false : type === 'decision' ? true : Boolean(o.needs_confirm);
     if (type === 'fact' && !needs) continue;
-    // 写入前敏感闸（含长数字串=证件/卡号形态）
-    if (SENSITIVE_MEM_RE.test(content) || LONG_DIGITS_RE.test(content)) {
+    if (isSensitive(content)) {
       console.warn('[memories] 一条疑似敏感内容在写入前被丢弃（不落库、不入卡）');
       continue;
     }
     const key = normalizeText(content);
-    if (seen.has(key)) continue; // 已有/已拒，不再插也不弹卡
+    if (seen.has(key)) continue;
     seen.add(key);
     const status = needs ? 'pending' : 'active';
     const enc = cipher.encryptText(content);
-    await pool.query(
-      'INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES ($1, NULL, $2, $3, $4, $5, $3, $6, $7, $8)',
-      [projectId, key, enc, ownerId, type, source, status, needs],
-    );
+    // project_id 可空，直接 NULL；agent_id 按作用域
+    if (hasAgent) {
+      await pool.query(
+        'INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, $1, $2, $3, $4, $5, $3, $6, $7, $8) ON CONFLICT DO NOTHING',
+        [aid, key, enc, ownerId, type, source, status, needs],
+      );
+    } else {
+      await pool.query(
+        'INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, NULL, $1, $2, $3, $4, $2, $5, $6, $7) ON CONFLICT DO NOTHING',
+        [key, enc, ownerId, type, source, status, needs],
+      );
+    }
     inserted += 1;
     if (needs) {
-      const idq = await pool.query<{ id: string }>(
-        'SELECT id FROM memories WHERE owner_id = $1 AND mem_key = $2 ORDER BY id DESC LIMIT 1',
-        [ownerId, key],
-      );
+      const idq = hasAgent
+        ? await pool.query<{ id: string }>(
+            'SELECT id FROM memories WHERE owner_id = $1 AND agent_id = $2 AND mem_key = $3 ORDER BY id DESC LIMIT 1',
+            [ownerId, aid, key],
+          )
+        : await pool.query<{ id: string }>(
+            'SELECT id FROM memories WHERE owner_id = $1 AND agent_id IS NULL AND mem_key = $2 ORDER BY id DESC LIMIT 1',
+            [ownerId, key],
+          );
       if (idq.rowCount === 1) {
         pending.push({
           id: Number(idq.rows[0].id),
@@ -322,7 +363,13 @@ async function extractCore(
 }
 
 /** 任务 done/failed 时由 agent 路由调用（fire-and-forget，失败只静默） */
-export function triggerTaskExtract(deps: MemoryDeps, ownerId: number, taskId: number, payload: unknown): void {
+export function triggerTaskExtract(
+  deps: MemoryDeps,
+  ownerId: number,
+  taskId: number,
+  payload: unknown,
+  agentId?: number | null,
+): void {
   setImmediate(() => {
     void (async () => {
       const pl = (payload ?? {}) as { goal?: string; steps?: string[]; doc?: { summary?: string } };
@@ -334,16 +381,13 @@ export function triggerTaskExtract(deps: MemoryDeps, ownerId: number, taskId: nu
       ]
         .filter(Boolean)
         .join('\n');
-      await extractCore(deps, ownerId, 'task_end', transcript, `task:${taskId}`);
+      await extractCore(deps, ownerId, 'task_end', transcript, `task:${taskId}`, agentId ?? null);
     })().catch((err) => console.warn('[memories] 任务收尾提取失败（忽略）：', (err as Error).message));
   });
 }
 
 /**
  * 闲置 15 分钟自动提取：每分钟扫一轮（进程内记“处理到哪个消息号”，同一切点不重抽）。
- *
- * 第 16 步：**处于「启动并保活」监听态的会话直接跳过**——保活/监听本身一次模型都不调，
- * 只有用户真发了消息才走 /chat/stream。这条让「挂着不调模型」变成硬保证，不靠自觉。
  */
 export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJS.Timeout {
   const done = new Set<string>();
@@ -362,7 +406,7 @@ export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJ
       for (const row of r.rows) {
         if (!row.last_id || !row.last_at) continue;
         const ago = now - new Date(row.last_at).getTime();
-        if (ago < 15 * 60_000 || ago > 60 * 60_000) continue; // 15 分钟~1 小时窗口
+        if (ago < 15 * 60_000 || ago > 60 * 60_000) continue;
         const key = `c${row.conv_id}:${row.last_id}`;
         if (done.has(key)) continue;
         done.add(key);
@@ -384,7 +428,6 @@ export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJ
           })
           .filter(Boolean)
           .join('\n');
-        // 这是**用户活动驱动**的一次整理（某条会话聊完闲置了），不是心跳：日志里能看清。
         console.log(`[memories] 会话 ${row.conv_id} 闲置 ${Math.round(ago / 60_000)} 分钟 → 整理一次记忆`);
         await extractCore(deps, Number(row.user_id), 'chat_idle', transcript, `conv:${row.conv_id}:idle`);
       }
@@ -425,33 +468,50 @@ async function conversationTranscript(deps: MemoryDeps, ownerId: number, convers
 export function registerMemoryRoutes(app: FastifyInstance, deps: MemoryDeps): void {
   const { pool, env, cipher } = deps;
 
-  // 桌面「结束」按钮：手动触发一次提取（同一会话 10 分钟内不重复）
   app.post('/memories/extract', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
-    const b = req.body as { conversationId?: unknown } | null;
+    const b = req.body as { conversationId?: unknown; agentId?: unknown } | null;
     const convId = Number(b?.conversationId);
+    const agentId = Number(b?.agentId);
     if (!Number.isInteger(convId) || convId <= 0) return errJson(reply, 400, 'conversationId 必填（先聊过一次）');
     try {
       const transcript = await conversationTranscript(deps, claims.sub, convId);
       if (transcript === null) return errJson(reply, 404, '会话不存在或不是你的');
-      const out = await extractCore(deps, claims.sub, 'chat_end', transcript, `conv:${convId}`);
+      const out = await extractCore(
+        deps,
+        claims.sub,
+        'chat_end',
+        transcript,
+        `conv:${convId}`,
+        Number.isInteger(agentId) && agentId > 0 ? agentId : null,
+      );
       return out satisfies MemoryExtractResult;
     } catch (err) {
       return dbErr(reply, err);
     }
   });
 
-  // 「我的记忆」列表：active 直接列；pending 单独给确认卡用
   app.get('/memories', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     try {
-      const q = async (status: string) => {
-        const r = await pool.query<{ id: string; type: string; content_encrypted: string | null; updated_at: Date | string }>(
-          "SELECT id, type, content_encrypted, updated_at FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL ORDER BY updated_at DESC, id DESC LIMIT 50",
-          [claims.sub, status],
-        );
+      const q = req.query as { agentId?: unknown } | null;
+      const agentIdRaw = Number(q?.agentId);
+      const hasAgent = Number.isInteger(agentIdRaw) && agentIdRaw > 0;
+      const statusFilter = (status: string) =>
+        hasAgent
+          ? {
+              text: `SELECT id, type, content_encrypted, updated_at, agent_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND (agent_id IS NULL OR agent_id = $3) ORDER BY updated_at DESC, id DESC LIMIT 50`,
+              values: [claims.sub, status, agentIdRaw],
+            }
+          : {
+              text: `SELECT id, type, content_encrypted, updated_at, agent_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND agent_id IS NULL ORDER BY updated_at DESC, id DESC LIMIT 50`,
+              values: [claims.sub, status],
+            };
+      const fetch = async (status: string) => {
+        const qq = statusFilter(status);
+        const r = await pool.query<{ id: string; type: string; content_encrypted: string | null; updated_at: Date | string }>(qq.text, qq.values);
         const out: MemoryItem[] = [];
         for (const row of r.rows) {
           let text = '';
@@ -469,24 +529,24 @@ export function registerMemoryRoutes(app: FastifyInstance, deps: MemoryDeps): vo
         }
         return out;
       };
-      const result: MemoryListResult = { active: await q('active'), pending: await q('pending') };
+      const result: MemoryListResult = { active: await fetch('active'), pending: await fetch('pending') };
       return result;
     } catch (err) {
       return dbErr(reply, err);
     }
   });
 
-  // 确认卡：整卡确认 / 整卡忘掉（also 支持逐条 ids）
   const decide = (target: 'active' | 'rejected') => async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     const b = req.body as { all?: unknown; ids?: unknown } | null;
     try {
       if (b?.all === true) {
-        await pool.query(
-          'UPDATE memories SET status = $2, updated_at = now() WHERE owner_id = $1 AND status = $3',
-          [claims.sub, target, 'pending'],
-        );
+        await pool.query('UPDATE memories SET status = $2, updated_at = now() WHERE owner_id = $1 AND status = $3', [
+          claims.sub,
+          target,
+          'pending',
+        ]);
         return { ok: true, target };
       }
       const ids = Array.isArray(b?.ids) ? (b.ids as unknown[]).map(Number).filter(Number.isInteger).slice(0, 10) : [];
@@ -505,7 +565,6 @@ export function registerMemoryRoutes(app: FastifyInstance, deps: MemoryDeps): vo
   app.post('/memories/confirm', decide('active'));
   app.post('/memories/reject', decide('rejected'));
 
-  // 忘掉这条：archived，立即从注入源消失（不提供编辑，按说明书）
   app.post('/memories/forget', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');

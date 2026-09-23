@@ -389,6 +389,14 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         const convAgent = await pool.query<{ agent_id: string | null }>('SELECT agent_id FROM conversations WHERE id = $1', [convId]);
         const convAgentId = Number(convAgent.rows[0]?.agent_id);
         const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;
+        // 记忆合并第一批：任务轮同样注入记忆块（账号级+智能体级）
+        let taskMemoryBlock: string | undefined;
+        try {
+          taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null);
+        } catch (err) {
+          console.warn('[chat] 任务轮记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
+        }
+
         const loop = startLoop(env, {
           userId: claims.sub,
           agentId: loopAgentId,
@@ -400,6 +408,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
           // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。
           orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, loopAgentId),
+          memoryBlock: taskMemoryBlock,
           state: {
             current_task: state.current_task,
             browser_confirmed: state.browser_confirmed,
@@ -440,7 +449,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
 
       // 第 10 步：该用户已确认的档案记忆注入系统提示词（无记忆=空串，行为与第 9 步一致）
       // 第 16 步：它只是**参考**（buildMemoryBlock 自己带「可被当前指令覆盖」的表头）。
-      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message);
+      // 记忆合并第一批：通作用域，支持按 owner+agent 过滤
+      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, agentId ?? null);
       // 第 15 步 · 两层记忆 + 当前智能体人设：
       //   - 用户记忆库（账号级）：所有智能体都读得到，是「这个人」的习惯/口味；
       //   - 项目记忆（智能体级）：**只**读当前会话所属智能体那一份，绝不串号；
