@@ -5,6 +5,9 @@
  *   - 单一 memories 表，两级作用域：agent_id NULL=账号级（用户记忆库），值=智能体级（项目记忆）
  *   - user_memories / agent_memories 旧表已由 db.ts 幂等迁移后 DROP
  *   - 本文件所有读写一律走 memories 表，接口面保持不变
+ * 记忆合并第二批：
+ *   - 三级作用域：conversation_id 加入，账号级=agent_id NULL+conv NULL，智能体级=agent_id=值+conv NULL，会话级=conv=值
+ *   - 本文件查询显式过滤 conversation_id IS NULL，避免会话级串入账号/智能体列表
  *
  * 接口面（全部要 JWT）：
  *   GET    /agents                 → 我的智能体列表（含人设状态 + 各自的会话号）
@@ -155,7 +158,7 @@ export async function buildUserMemoryBlock(pool: Pool, cipher: JsonCipher, owner
   try {
     const r = await pool.query<{ content_encrypted: string }>(
       `SELECT content_encrypted FROM memories
-        WHERE owner_id = $1 AND agent_id IS NULL AND status = 'active' AND content_encrypted IS NOT NULL
+        WHERE owner_id = $1 AND agent_id IS NULL AND conversation_id IS NULL AND status = 'active' AND content_encrypted IS NOT NULL
         ORDER BY updated_at DESC, id DESC LIMIT 20`,
       [ownerId],
     );
@@ -177,7 +180,7 @@ export async function buildAgentProjectMemoryBlock(
   try {
     const r = await pool.query<{ content_encrypted: string }>(
       `SELECT content_encrypted FROM memories
-        WHERE agent_id = $1 AND owner_id = $2 AND status = 'active' AND content_encrypted IS NOT NULL
+        WHERE agent_id = $1 AND owner_id = $2 AND conversation_id IS NULL AND status = 'active' AND content_encrypted IS NOT NULL
         ORDER BY updated_at DESC, id DESC LIMIT 20`,
       [agentId, ownerId],
     );
@@ -346,14 +349,14 @@ async function writeLayer(
       const r =
         layer === 'user'
           ? await pool.query(
-              `INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
-               VALUES (NULL, NULL, $1, $2, $3, 'preference', $2, $4, 'active', false)
+              `INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
+               VALUES (NULL, NULL, NULL, $1, $2, $3, 'preference', $2, $4, 'active', false)
                ON CONFLICT DO NOTHING`,
               [key, enc, ownerId, source],
             )
           : await pool.query(
-              `INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
-               VALUES (NULL, $1, $2, $3, $4, 'preference', $3, $5, 'active', false)
+              `INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
+               VALUES (NULL, $1, NULL, $2, $3, $4, 'preference', $3, $5, 'active', false)
                ON CONFLICT DO NOTHING`,
               [agentId, key, enc, ownerId, source],
             );
@@ -596,7 +599,7 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
     try {
       const r = await pool.query<{ id: string; content_encrypted: string; updated_at: Date | string }>(
         `SELECT id, content_encrypted, updated_at FROM memories
-          WHERE owner_id = $1 AND agent_id IS NULL AND status = 'active' AND content_encrypted IS NOT NULL
+          WHERE owner_id = $1 AND agent_id IS NULL AND conversation_id IS NULL AND status = 'active' AND content_encrypted IS NOT NULL
           ORDER BY updated_at DESC, id DESC LIMIT 50`,
         [claims.sub],
       );
@@ -621,7 +624,7 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
       if (!a) return errJson(reply, 404, '智能体不存在或不是你的');
       const r = await pool.query<{ id: string; content_encrypted: string; updated_at: Date | string }>(
         `SELECT id, content_encrypted, updated_at FROM memories
-          WHERE agent_id = $1 AND owner_id = $2 AND status = 'active' AND content_encrypted IS NOT NULL
+          WHERE agent_id = $1 AND owner_id = $2 AND conversation_id IS NULL AND status = 'active' AND content_encrypted IS NOT NULL
           ORDER BY updated_at DESC, id DESC LIMIT 50`,
         [agentId, claims.sub],
       );
@@ -649,12 +652,12 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
         layer === 'user'
           ? await pool.query(
               `UPDATE memories SET status = 'archived', updated_at = now()
-                WHERE id = $1 AND owner_id = $2 AND agent_id IS NULL AND status = 'active'`,
+                WHERE id = $1 AND owner_id = $2 AND agent_id IS NULL AND conversation_id IS NULL AND status = 'active'`,
               [id, claims.sub],
             )
           : await pool.query(
               `UPDATE memories SET status = 'archived', updated_at = now()
-                WHERE id = $1 AND owner_id = $2 AND agent_id IS NOT NULL AND status = 'active'`,
+                WHERE id = $1 AND owner_id = $2 AND agent_id IS NOT NULL AND conversation_id IS NULL AND status = 'active'`,
               [id, claims.sub],
             );
       // 兼容旧接口：若按 layer 没找到，尝试按 id+owner 归档（旧 tidy 可能层标记不准）

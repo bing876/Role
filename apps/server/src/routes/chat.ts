@@ -389,10 +389,10 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         const convAgent = await pool.query<{ agent_id: string | null }>('SELECT agent_id FROM conversations WHERE id = $1', [convId]);
         const convAgentId = Number(convAgent.rows[0]?.agent_id);
         const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;
-        // 记忆合并第一批：任务轮同样注入记忆块（账号级+智能体级）
+        // 记忆合并第二批：任务轮三级作用域（账号级+智能体级+会话级）
         let taskMemoryBlock: string | undefined;
         try {
-          taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null);
+          taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null, convId ?? null);
         } catch (err) {
           console.warn('[chat] 任务轮记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
         }
@@ -449,8 +449,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
 
       // 第 10 步：该用户已确认的档案记忆注入系统提示词（无记忆=空串，行为与第 9 步一致）
       // 第 16 步：它只是**参考**（buildMemoryBlock 自己带「可被当前指令覆盖」的表头）。
-      // 记忆合并第一批：通作用域，支持按 owner+agent 过滤
-      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, agentId ?? null);
+      // 记忆合并第二批：三级作用域，支持按 owner+agent+conversation 过滤
+      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, agentId ?? null, convId ?? null);
       // 第 15 步 · 两层记忆 + 当前智能体人设：
       //   - 用户记忆库（账号级）：所有智能体都读得到，是「这个人」的习惯/口味；
       //   - 项目记忆（智能体级）：**只**读当前会话所属智能体那一份，绝不串号；

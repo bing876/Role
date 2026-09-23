@@ -53,7 +53,7 @@ const memContent = fs.readFileSync(memPath, 'utf8');
 must(memContent.includes("from '../memoryNormalize'") || memContent.includes('from \"../memoryNormalize\"'), 'memories.ts 引入 memoryNormalize');
 must(!memContent.includes('const SENSITIVE_MEM_RE ='), 'memories.ts 不再本地定义 SENSITIVE_MEM_RE');
 must(memContent.includes('agentId?: number | null'), 'buildMemoryBlock 支持 agentId 参数');
-must(memContent.includes('(agent_id IS NULL OR agent_id ='), 'buildMemoryBlock 按两级作用域过滤');
+must(memContent.includes('agent_id IS NULL') && memContent.includes('agent_id ='), 'buildMemoryBlock 按两级作用域过滤（兼容三级）');
 must(memContent.includes('project_id') && memContent.includes('NULL'), 'extractCore 使用 NULL project_id（可空）');
 
 // 4. agents.ts 通 memories 表

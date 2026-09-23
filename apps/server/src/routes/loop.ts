@@ -133,10 +133,10 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
       }
     }
 
-    // 记忆合并第一批：该用户该智能体的档案记忆（账号级+智能体级）
+    // 记忆合并第二批：三级作用域（账号级+智能体级+会话级）
     let memoryBlock: string | undefined;
     try {
-      memoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, goal, agentId ?? null);
+      memoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, goal, agentId ?? null, conversationId ?? null);
     } catch (err) {
       console.warn('[loop] 记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
     }

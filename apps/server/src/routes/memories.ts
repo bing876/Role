@@ -13,13 +13,17 @@
  *   - 结束才抽取：任务 done/failed（服务端自触发）、聊天闲置 15 分钟（定时扫）、桌面「结束」按钮；
  *     同一会话/任务 10 分钟内不重复抽。
  *
- * 注入接口：buildMemoryBlock(pool, cipher, ownerId, userText, agentId?) —— chat.ts 与 agent.ts 各调一次，
+ * 注入接口：buildMemoryBlock(pool, cipher, ownerId, userText, agentId?, conversationId?) —— chat.ts 与 agent.ts 各调一次，
  * 拼在系统提示词尾部；两条冲突以更晚为准（写进块里）。
  *
  * 记忆合并第一批：
  *   - 抽离 memoryNormalize.ts（零 import）
  *   - memories 表两级作用域：agent_id NULL=账号级，值=智能体级，project_id 可空
  *   - buildMemoryBlock / extractCore 通作用域（支持按 owner+agent 过滤）
+ * 记忆合并第二批：
+ *   - memories 表三级作用域：agent_id NULL + conversation_id NULL=账号级，agent_id=值+conv NULL=智能体级，conversation_id=值=会话级（只在该会话注入）
+ *   - buildMemoryBlock 支持 conversationId，注入时按三级合并
+ *   - extractCore 支持 conversationId，会话级记忆写入 conversation_id 列
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -146,7 +150,10 @@ function extractJsonLoose(text: string): unknown {
 
 /**
  * 注入块：active preference+decision 全带上；active fact 仅命中才带。
- * 通作用域：agentId 有值时同时带账号级（agent_id IS NULL）+ 智能体级（agent_id = ?）
+ * 三级作用域：
+ *   - 账号级：agent_id IS NULL AND conversation_id IS NULL
+ *   - 智能体级：agent_id = ? AND conversation_id IS NULL
+ *   - 会话级：conversation_id = ?（只在该会话注入）
  */
 export async function buildMemoryBlock(
   pool: Pool,
@@ -154,28 +161,86 @@ export async function buildMemoryBlock(
   ownerId: number,
   userText: string,
   agentId?: number | null,
+  conversationId?: number | null,
 ): Promise<string> {
   try {
     const aid = Number(agentId);
     const hasAgent = Number.isInteger(aid) && aid > 0;
+    const cid = Number(conversationId);
+    const hasConv = Number.isInteger(cid) && cid > 0;
 
-    const coreQuery = hasAgent
-      ? {
-          text: `SELECT type, content_encrypted FROM memories
-                  WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
-                    AND content_encrypted IS NOT NULL
-                    AND (agent_id IS NULL OR agent_id = $2)
-                  ORDER BY updated_at DESC, id DESC LIMIT 20`,
-          values: [ownerId, aid],
-        }
-      : {
-          text: `SELECT type, content_encrypted FROM memories
-                  WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
-                    AND content_encrypted IS NOT NULL
-                    AND agent_id IS NULL
-                  ORDER BY updated_at DESC, id DESC LIMIT 20`,
-          values: [ownerId],
-        };
+    let coreQuery: { text: string; values: unknown[] };
+    let factQuery: { text: string; values: unknown[] };
+
+    if (hasConv && hasAgent) {
+      coreQuery = {
+        text: `SELECT type, content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
+                  AND content_encrypted IS NOT NULL
+                  AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $2 AND conversation_id IS NULL) OR (conversation_id = $3))
+                ORDER BY updated_at DESC, id DESC LIMIT 30`,
+        values: [ownerId, aid, cid],
+      };
+      factQuery = {
+        text: `SELECT content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
+                  AND content_encrypted IS NOT NULL
+                  AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $2 AND conversation_id IS NULL) OR (conversation_id = $3))
+                ORDER BY updated_at DESC LIMIT 15`,
+        values: [ownerId, aid, cid],
+      };
+    } else if (hasConv) {
+      coreQuery = {
+        text: `SELECT type, content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
+                  AND content_encrypted IS NOT NULL
+                  AND ((agent_id IS NULL AND conversation_id IS NULL) OR (conversation_id = $2))
+                ORDER BY updated_at DESC, id DESC LIMIT 30`,
+        values: [ownerId, cid],
+      };
+      factQuery = {
+        text: `SELECT content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
+                  AND content_encrypted IS NOT NULL
+                  AND ((agent_id IS NULL AND conversation_id IS NULL) OR (conversation_id = $2))
+                ORDER BY updated_at DESC LIMIT 15`,
+        values: [ownerId, cid],
+      };
+    } else if (hasAgent) {
+      coreQuery = {
+        text: `SELECT type, content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
+                  AND content_encrypted IS NOT NULL
+                  AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $2 AND conversation_id IS NULL))
+                ORDER BY updated_at DESC, id DESC LIMIT 20`,
+        values: [ownerId, aid],
+      };
+      factQuery = {
+        text: `SELECT content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
+                  AND content_encrypted IS NOT NULL
+                  AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $2 AND conversation_id IS NULL))
+                ORDER BY updated_at DESC LIMIT 10`,
+        values: [ownerId, aid],
+      };
+    } else {
+      coreQuery = {
+        text: `SELECT type, content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type IN ('preference', 'decision')
+                  AND content_encrypted IS NOT NULL
+                  AND agent_id IS NULL AND conversation_id IS NULL
+                ORDER BY updated_at DESC, id DESC LIMIT 20`,
+        values: [ownerId],
+      };
+      factQuery = {
+        text: `SELECT content_encrypted FROM memories
+                WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
+                  AND content_encrypted IS NOT NULL
+                  AND agent_id IS NULL AND conversation_id IS NULL
+                ORDER BY updated_at DESC LIMIT 10`,
+        values: [ownerId],
+      };
+    }
 
     const core = await pool.query<{ type: string; content_encrypted: string | null }>(coreQuery.text, coreQuery.values);
     const lines: string[] = [];
@@ -195,24 +260,6 @@ export async function buildMemoryBlock(
       lines.push(`- [${label(r.type)}] ${line}`);
     }
     if (lines.length > 0) lines.push('若两条冲突，以更晚的为准；与用户本轮最新指令冲突，以最新指令为准。');
-
-    const factQuery = hasAgent
-      ? {
-          text: `SELECT content_encrypted FROM memories
-                  WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
-                    AND content_encrypted IS NOT NULL
-                    AND (agent_id IS NULL OR agent_id = $2)
-                  ORDER BY updated_at DESC LIMIT 10`,
-          values: [ownerId, aid],
-        }
-      : {
-          text: `SELECT content_encrypted FROM memories
-                  WHERE owner_id = $1 AND status = 'active' AND type = 'fact'
-                    AND content_encrypted IS NOT NULL
-                    AND agent_id IS NULL
-                  ORDER BY updated_at DESC LIMIT 10`,
-          values: [ownerId],
-        };
 
     const facts = await pool.query<{ content_encrypted: string }>(factQuery.text, factQuery.values);
     for (const f of facts.rows) {
@@ -251,6 +298,7 @@ async function extractCore(
   transcript: string,
   dedupKey: string,
   agentId?: number | null,
+  conversationId?: number | null,
 ): Promise<CoreOutcome> {
   const { pool, env, cipher } = deps;
   const now = Date.now();
@@ -285,18 +333,34 @@ async function extractCore(
   const list = Array.isArray(raw.items) ? raw.items.slice(0, MAX_ITEMS) : [];
   if (list.length === 0) return { ...empty, skipped: 'nothing_worth_remembering' };
 
-  // 去重基线：按作用域查
+  // 去重基线：按作用域查（三级）
   const aid = Number(agentId);
   const hasAgent = Number.isInteger(aid) && aid > 0;
-  const existQuery = hasAgent
-    ? {
-        text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND (agent_id IS NULL OR agent_id = $2)`,
-        values: [ownerId, aid],
-      }
-    : {
-        text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND agent_id IS NULL`,
-        values: [ownerId],
-      };
+  const cid = Number(conversationId);
+  const hasConv = Number.isInteger(cid) && cid > 0;
+
+  let existQuery: { text: string; values: unknown[] };
+  if (hasConv && hasAgent) {
+    existQuery = {
+      text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $2 AND conversation_id IS NULL) OR (conversation_id = $3))`,
+      values: [ownerId, aid, cid],
+    };
+  } else if (hasConv) {
+    existQuery = {
+      text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND ((agent_id IS NULL AND conversation_id IS NULL) OR (conversation_id = $2))`,
+      values: [ownerId, cid],
+    };
+  } else if (hasAgent) {
+    existQuery = {
+      text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $2 AND conversation_id IS NULL))`,
+      values: [ownerId, aid],
+    };
+  } else {
+    existQuery = {
+      text: `SELECT mem_key FROM memories WHERE owner_id = $1 AND status IN ('pending', 'active', 'rejected') AND agent_id IS NULL AND conversation_id IS NULL`,
+      values: [ownerId],
+    };
+  }
   const exist = await pool.query<{ mem_key: string }>(existQuery.text, existQuery.values);
   const seen = new Set(exist.rows.map((r) => r.mem_key));
 
@@ -326,29 +390,52 @@ async function extractCore(
     seen.add(key);
     const status = needs ? 'pending' : 'active';
     const enc = cipher.encryptText(content);
-    // project_id 可空，直接 NULL；agent_id 按作用域
-    if (hasAgent) {
+    // 三级作用域写入
+    if (hasConv && hasAgent) {
       await pool.query(
-        'INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, $1, $2, $3, $4, $5, $3, $6, $7, $8) ON CONFLICT DO NOTHING',
+        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, $1, $2, $3, $4, $5, $6, $4, $7, $8, $9) ON CONFLICT DO NOTHING',
+        [aid, cid, key, enc, ownerId, type, source, status, needs],
+      );
+    } else if (hasConv) {
+      await pool.query(
+        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, NULL, $1, $2, $3, $4, $5, $3, $6, $7, $8) ON CONFLICT DO NOTHING',
+        [cid, key, enc, ownerId, type, source, status, needs],
+      );
+    } else if (hasAgent) {
+      await pool.query(
+        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, $1, NULL, $2, $3, $4, $5, $3, $6, $7, $8) ON CONFLICT DO NOTHING',
         [aid, key, enc, ownerId, type, source, status, needs],
       );
     } else {
       await pool.query(
-        'INSERT INTO memories (project_id, agent_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, NULL, $1, $2, $3, $4, $2, $5, $6, $7) ON CONFLICT DO NOTHING',
+        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, NULL, NULL, $1, $2, $3, $4, $2, $5, $6, $7) ON CONFLICT DO NOTHING',
         [key, enc, ownerId, type, source, status, needs],
       );
     }
     inserted += 1;
     if (needs) {
-      const idq = hasAgent
-        ? await pool.query<{ id: string }>(
-            'SELECT id FROM memories WHERE owner_id = $1 AND agent_id = $2 AND mem_key = $3 ORDER BY id DESC LIMIT 1',
-            [ownerId, aid, key],
-          )
-        : await pool.query<{ id: string }>(
-            'SELECT id FROM memories WHERE owner_id = $1 AND agent_id IS NULL AND mem_key = $2 ORDER BY id DESC LIMIT 1',
-            [ownerId, key],
-          );
+      let idq;
+      if (hasConv && hasAgent) {
+        idq = await pool.query<{ id: string }>(
+          'SELECT id FROM memories WHERE owner_id = $1 AND conversation_id = $2 AND mem_key = $3 ORDER BY id DESC LIMIT 1',
+          [ownerId, cid, key],
+        );
+      } else if (hasConv) {
+        idq = await pool.query<{ id: string }>(
+          'SELECT id FROM memories WHERE owner_id = $1 AND conversation_id = $2 AND mem_key = $3 ORDER BY id DESC LIMIT 1',
+          [ownerId, cid, key],
+        );
+      } else if (hasAgent) {
+        idq = await pool.query<{ id: string }>(
+          'SELECT id FROM memories WHERE owner_id = $1 AND agent_id = $2 AND conversation_id IS NULL AND mem_key = $3 ORDER BY id DESC LIMIT 1',
+          [ownerId, aid, key],
+        );
+      } else {
+        idq = await pool.query<{ id: string }>(
+          'SELECT id FROM memories WHERE owner_id = $1 AND agent_id IS NULL AND conversation_id IS NULL AND mem_key = $2 ORDER BY id DESC LIMIT 1',
+          [ownerId, key],
+        );
+      }
       if (idq.rowCount === 1) {
         pending.push({
           id: Number(idq.rows[0].id),
@@ -369,6 +456,7 @@ export function triggerTaskExtract(
   taskId: number,
   payload: unknown,
   agentId?: number | null,
+  conversationId?: number | null,
 ): void {
   setImmediate(() => {
     void (async () => {
@@ -381,7 +469,7 @@ export function triggerTaskExtract(
       ]
         .filter(Boolean)
         .join('\n');
-      await extractCore(deps, ownerId, 'task_end', transcript, `task:${taskId}`, agentId ?? null);
+      await extractCore(deps, ownerId, 'task_end', transcript, `task:${taskId}`, agentId ?? null, conversationId ?? null);
     })().catch((err) => console.warn('[memories] 任务收尾提取失败（忽略）：', (err as Error).message));
   });
 }
@@ -394,13 +482,13 @@ export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJ
   const timer = setInterval(() => {
     void (async () => {
       const { pool } = deps;
-      const r = await pool.query<{ conv_id: string; user_id: string; last_id: string | null; last_at: string | null }>(
-        `SELECT c.id AS conv_id, p.user_id, MAX(m.id) AS last_id, MAX(m.created_at) AS last_at
+      const r = await pool.query<{ conv_id: string; user_id: string; agent_id: string | null; last_id: string | null; last_at: string | null }>(
+        `SELECT c.id AS conv_id, p.user_id, c.agent_id, MAX(m.id) AS last_id, MAX(m.created_at) AS last_at
            FROM conversations c
            JOIN projects p ON p.id = c.project_id
            LEFT JOIN messages m ON m.conversation_id = c.id
           WHERE COALESCE(c.keepalive, false) = false
-          GROUP BY c.id, p.user_id`,
+          GROUP BY c.id, p.user_id, c.agent_id`,
       );
       const now = Date.now();
       for (const row of r.rows) {
@@ -429,7 +517,9 @@ export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJ
           .filter(Boolean)
           .join('\n');
         console.log(`[memories] 会话 ${row.conv_id} 闲置 ${Math.round(ago / 60_000)} 分钟 → 整理一次记忆`);
-        await extractCore(deps, Number(row.user_id), 'chat_idle', transcript, `conv:${row.conv_id}:idle`);
+        const agentId = row.agent_id ? Number(row.agent_id) : null;
+        const convId = Number(row.conv_id);
+        await extractCore(deps, Number(row.user_id), 'chat_idle', transcript, `conv:${row.conv_id}:idle`, agentId, convId);
       }
     })().catch((err) => {
       if (!isDbUnreachable(err)) console.warn('[memories] 闲置扫描跳过：', (err as Error).message);
@@ -485,6 +575,7 @@ export function registerMemoryRoutes(app: FastifyInstance, deps: MemoryDeps): vo
         transcript,
         `conv:${convId}`,
         Number.isInteger(agentId) && agentId > 0 ? agentId : null,
+        convId,
       );
       return out satisfies MemoryExtractResult;
     } catch (err) {
@@ -496,19 +587,35 @@ export function registerMemoryRoutes(app: FastifyInstance, deps: MemoryDeps): vo
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     try {
-      const q = req.query as { agentId?: unknown } | null;
+      const q = req.query as { agentId?: unknown; conversationId?: unknown } | null;
       const agentIdRaw = Number(q?.agentId);
+      const convIdRaw = Number(q?.conversationId);
       const hasAgent = Number.isInteger(agentIdRaw) && agentIdRaw > 0;
-      const statusFilter = (status: string) =>
-        hasAgent
-          ? {
-              text: `SELECT id, type, content_encrypted, updated_at, agent_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND (agent_id IS NULL OR agent_id = $3) ORDER BY updated_at DESC, id DESC LIMIT 50`,
-              values: [claims.sub, status, agentIdRaw],
-            }
-          : {
-              text: `SELECT id, type, content_encrypted, updated_at, agent_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND agent_id IS NULL ORDER BY updated_at DESC, id DESC LIMIT 50`,
-              values: [claims.sub, status],
-            };
+      const hasConv = Number.isInteger(convIdRaw) && convIdRaw > 0;
+      const statusFilter = (status: string) => {
+        if (hasConv && hasAgent) {
+          return {
+            text: `SELECT id, type, content_encrypted, updated_at, agent_id, conversation_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $3 AND conversation_id IS NULL) OR (conversation_id = $4)) ORDER BY updated_at DESC, id DESC LIMIT 50`,
+            values: [claims.sub, status, agentIdRaw, convIdRaw],
+          };
+        }
+        if (hasConv) {
+          return {
+            text: `SELECT id, type, content_encrypted, updated_at, agent_id, conversation_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND ((agent_id IS NULL AND conversation_id IS NULL) OR (conversation_id = $3)) ORDER BY updated_at DESC, id DESC LIMIT 50`,
+            values: [claims.sub, status, convIdRaw],
+          };
+        }
+        if (hasAgent) {
+          return {
+            text: `SELECT id, type, content_encrypted, updated_at, agent_id, conversation_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND ((agent_id IS NULL AND conversation_id IS NULL) OR (agent_id = $3 AND conversation_id IS NULL)) ORDER BY updated_at DESC, id DESC LIMIT 50`,
+            values: [claims.sub, status, agentIdRaw],
+          };
+        }
+        return {
+          text: `SELECT id, type, content_encrypted, updated_at, agent_id, conversation_id FROM memories WHERE owner_id = $1 AND status = $2 AND content_encrypted IS NOT NULL AND agent_id IS NULL AND conversation_id IS NULL ORDER BY updated_at DESC, id DESC LIMIT 50`,
+          values: [claims.sub, status],
+        };
+      };
       const fetch = async (status: string) => {
         const qq = statusFilter(status);
         const r = await pool.query<{ id: string; type: string; content_encrypted: string | null; updated_at: Date | string }>(qq.text, qq.values);
