@@ -64,6 +64,10 @@ const ENV: ServerEnv = {
 
 async function main(): Promise<void> {
   log('=== 多智能体编排 · HTTP 路由验收 ===');
+  // 交接文件（批次 A 起每次委派都会写）落临时目录，不污染 apps/server/data/handoffs
+  process.env.HANDOFF_ROOT ??= (await import('node:fs')).mkdtempSync(
+    (await import('node:path')).join((await import('node:os')).tmpdir(), 'orc-routes-handoffs-'),
+  );
   const pool = makePool('pglite://memory');
   await migrate(pool);
   const cipher = makeCipher(ENV.dataKey);

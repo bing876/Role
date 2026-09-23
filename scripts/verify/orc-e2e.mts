@@ -189,6 +189,10 @@ async function main(): Promise<void> {
     assert.ok(SUB_AGENT_TOOL_NAMES.includes('stop'), '子循环必须能收尾');
   });
 
+  // 交接文件（批次 A 起每次委派都会写）落临时目录，不污染 apps/server/data/handoffs
+  process.env.HANDOFF_ROOT ??= (await import('node:fs')).mkdtempSync(
+    (await import('node:path')).join((await import('node:os')).tmpdir(), 'orc-e2e-handoffs-'),
+  );
   const pool = makePool('pglite://memory');
   await migrate(pool);
   await seed(pool);
