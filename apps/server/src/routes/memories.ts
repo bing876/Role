@@ -46,26 +46,79 @@ export interface MemoryDeps {
 }
 
 /// 记忆合并第三批：提示词与判定收口到 memoryShared.ts
-function wordHits(text: string, fact: string): boolean {
-  const hay = normalizeText(text);
-  if (!hay) return false;
-  const whole = normalizeText(fact);
-  if (whole && (hay.includes(whole) || whole.includes(hay))) return true;
-  const words = fact
-    .split(/[\s,，、;；.。/|]+/)
-    .map((w) => normalizeText(w))
-    .filter((w) => w.length >= 2);
-  for (const w of words) {
-    if (w.length <= 3) {
-      if (hay.includes(w)) return true;
-      continue;
-    }
-    for (let i = 0; i + 4 <= w.length; i += 1) {
-      if (hay.includes(w.slice(i, i + 4))) return true;
+/**
+ * 批次 G | 记忆语义检索 — 把批次 C 嵌入能力复用到 memories 检索，替换字面 wordHits
+ * 依据：批次 C 已有 tokenize + 关键词加权 + 嵌入相似度（Jaccard + 加权），直接复用
+ * 反证：字面包含匹配会漏掉同义表达（例如“喜欢喝咖啡” vs “爱喝咖啡”），语义检索应命中
+ */
+
+function tokenizeForMemory(text: string): string[] {
+  const raw = text.toLowerCase().split(/[^a-z0-9\u4e00-\u9fa5]+/g).filter((w) => w.length >= 2);
+  const out: string[] = [];
+  for (const token of raw) {
+    out.push(token);
+    if (/[\u4e00-\u9fa5]/.test(token) && token.length > 2) {
+      for (let i = 0; i <= token.length - 2; i++) {
+        const bigram = token.slice(i, i + 2);
+        if (bigram.length === 2) out.push(bigram);
+      }
     }
   }
-  return false;
+  return out;
 }
+
+const IMPORTANT_MEMORY_KEYWORDS = new Set([
+  '喜欢','讨厌','爱','偏好','习惯','经常','总是','从不','需要','想要','希望','要求',
+  '搜索','分析','整理','诊断','运营','客服','销售','技术','开发','设计','写作',
+  '咖啡','茶','音乐','电影','工作','生活','家庭','健康','运动','饮食',
+]);
+
+function weightForMemoryToken(token: string, position: number, total: number): number {
+  let w = 1;
+  w += Math.min(2, token.length / 4);
+  w += (total - position) / total;
+  if (IMPORTANT_MEMORY_KEYWORDS.has(token)) w += 1.2;
+  return w;
+}
+
+function scoreMemorySemantic(query: string, fact: string): number {
+  if (!query || !fact) return 0;
+  const queryNorm = normalizeText(query);
+  const factNorm = normalizeText(fact);
+  if (!queryNorm || !factNorm) return 0;
+  if (queryNorm.includes(factNorm) || factNorm.includes(queryNorm)) return 0.9;
+  const queryTokens = new Set(tokenizeForMemory(query));
+  const factTokens = tokenizeForMemory(fact);
+  if (queryTokens.size === 0 || factTokens.length === 0) return 0;
+  let inter = 0;
+  const factSet = new Set(factTokens);
+  for (const t of factSet) {
+    if (queryTokens.has(t)) inter += 1;
+  }
+  const union = new Set([...queryTokens, ...factSet]).size;
+  const jaccard = union > 0 ? inter / union : 0;
+  let score = 0;
+  let totalW = 0;
+  for (let i = 0; i < factTokens.length; i++) {
+    const t = factTokens[i];
+    const w = weightForMemoryToken(t, i, factTokens.length);
+    totalW += w;
+    if (queryTokens.has(t)) score += w;
+    else if ([...queryTokens].some((qt) => qt.includes(t) || t.includes(qt))) score += w * 0.5;
+  }
+  const weighted = totalW > 0 ? score / totalW : 0;
+  return weighted * 0.7 + jaccard * 0.3;
+}
+
+function wordHits(text: string, fact: string): boolean {
+  const s = scoreMemorySemantic(text, fact);
+  return s >= 0.25;
+}
+
+export function __test_scoreMemorySemantic(query: string, fact: string): number {
+  return scoreMemorySemantic(query, fact);
+}
+
 
 /** 同会话/同任务 10 分钟内不重复抽（进程内即可：重启后重复抽也会被“句子去重”挡住，不会重复入库） */
 const DEDUP_MS = 10 * 60_000;
