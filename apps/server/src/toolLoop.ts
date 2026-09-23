@@ -50,6 +50,7 @@ import {
   summaryFromSnapshot,
   type PageStatePatch,
 } from './pageState';
+import { compressIfNeeded } from './orchestrator/contextCompress';
 // 阶段 0 · Tool Registry：工具表与校验走注册表（旧逻辑保留在 *Legacy 函数里做回滚用）
 import {
   LOOP_TOOL_NAMES,
@@ -1140,6 +1141,12 @@ interface UpstreamChoice {
 }
 
 async function askModel(env: ServerEnv, session: LoopSession, tag: string): Promise<{ ok: true; message: NonNullable<UpstreamChoice['message']> } | { ok: false; status: number; brief: string }> {
+  // 上下文压缩：toolLoop 只增不减，长任务必爆 —— 每 5 步检查，必要时压缩（学习内核前置）
+  try {
+    compressIfNeeded(session);
+  } catch (err) {
+    console.warn(`[loop] 上下文压缩失败（忽略，继续用原历史）：`, (err as Error).message);
+  }
   // 任务模式首格：强制必须调用工具（tool_choice: 'required'），禁止纯文字挂起
   const isFirstStep = session.step === 0 || !session.messages.some((m) => m.role === 'tool');
   /**
