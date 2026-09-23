@@ -51,6 +51,7 @@ import { findAgentByNameAnyProject, loadProjectRoster, projectOfAgent, resolveDe
 import { orchestrationBlock, subAgentSystemPrompt } from './prompts';
 import { orchestratorDeps } from './tools';
 import { writeCollabBoth, writeCollabToAgentChat } from './collabChat';
+import { triggerByEvent } from './routines';
 
 const TASK_MAX = 600;
 const CONTEXT_MAX = 2000;
@@ -497,6 +498,8 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
         result: { summary, outline: decision.document_outline ?? [] },
       });
       await reply(summary, decision.document_outline ?? []);
+      // 事件触发：委派完成 → 扫 event 类型的 Routines
+      void triggerByEvent(pool, cipher, 'delegation_done', { userId: input.fromId, projectId: 0, agentId: input.target.id }).catch(() => undefined);
       if (!markResultReady(input.jobId)) return;
       input.deliver({
         ok: true,

@@ -68,9 +68,5 @@ exports.DEFAULT_SETTINGS = {
     resourceSysMemGuard: 0,
     resourceSysMemFloorMB: 1536,
 };
-/**
- * 阶段 0 · Tool Registry 定义侧（本包唯一的运行时模块，服务端专用）。
- * 桌面端只允许 import 上面的类型 —— 打包产物里没有这个包的运行时，详见 tools.ts 文件头。
- */
 __exportStar(require("./tools"), exports);
 //# sourceMappingURL=index.js.map

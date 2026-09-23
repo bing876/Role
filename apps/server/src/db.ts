@@ -351,6 +351,30 @@ CREATE TABLE IF NOT EXISTS agent_delegations (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_user ON agent_delegations (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_channel ON agent_delegations (channel_id, id DESC);
+
+-- 定时/事件触发（Routines）：Gro kBot 的 Routines，描述=长期规矩，对话=一次活
+-- trigger_type: interval(每 N 分钟)/cron(表达式)/event(事件)
+-- trigger_config: {intervalMinutes, cron, eventKind}
+-- task_template: 要执行的任务描述（≤600 字），触发时写入 agent 的对话流
+CREATE TABLE IF NOT EXISTS agent_routines (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id      BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id        BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  description     TEXT,
+  trigger_type    TEXT NOT NULL CHECK (trigger_type IN ('interval','cron','event')),
+  trigger_config  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  task_template   TEXT NOT NULL,
+  enabled         BOOLEAN NOT NULL DEFAULT true,
+  last_run_at     TIMESTAMPTZ,
+  next_run_at     TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_routines_user ON agent_routines (user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_routines_agent ON agent_routines (agent_id, enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_agent_routines_project ON agent_routines (project_id, enabled);
 `;
 
 

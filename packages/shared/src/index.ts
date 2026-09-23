@@ -1499,4 +1499,28 @@ export interface ResourceGuardSnapshot {
  * 阶段 0 · Tool Registry 定义侧（本包唯一的运行时模块，服务端专用）。
  * 桌面端只允许 import 上面的类型 —— 打包产物里没有这个包的运行时，详见 tools.ts 文件头。
  */
+/** 定时/事件触发（Routines）：描述=长期规矩，对话=一次活 */
+export type RoutineTriggerType = 'interval' | 'cron' | 'event';
+export interface RoutineView {
+  id: number;
+  projectId: number;
+  agentId: number;
+  agentName?: string;
+  name: string;
+  description: string;
+  triggerType: RoutineTriggerType;
+  triggerConfig: any;
+  taskTemplate: string;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+}
+export interface RoutineListResult {
+  routines: RoutineView[];
+}
+export interface RoutineCreateResult {
+  routine: RoutineView;
+}
+
 export * from './tools';

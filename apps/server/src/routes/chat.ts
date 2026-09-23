@@ -60,6 +60,7 @@ import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
+import { triggerByEvent } from '../orchestrator/routines';
 
 export interface ChatDeps {
   pool: Pool;
@@ -338,6 +339,12 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         [convId, cipher.encryptText(message)],
       );
       const userMessageId = Number(um.rows[0].id);
+      // 事件触发：收到用户消息 → 扫 event 类型的 Routines（描述=长期规矩）
+      try {
+        const projRow = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
+        const projId = Number(projRow.rows[0]?.project_id ?? 0);
+        if (projId) void triggerByEvent(pool, cipher, 'message', { userId: claims.sub, projectId: projId }).catch(() => undefined);
+      } catch {}
 
       /**
        * 服务端自主意图判断：是否进入任务模式（taskMode）。

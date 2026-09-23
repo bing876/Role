@@ -32,7 +32,9 @@ import { registerMultiAgentRoutes } from './routes/agents';
 import { registerProjectRoutes } from './routes/projects';
 import { registerLoopRoutes } from './routes/loop';
 import { registerChannelRoutes } from './routes/channels';
+import { registerRoutineRoutes } from './routes/routines';
 import { initOrchestrator } from './orchestrator/tools';
+import { startRoutineSweeper } from './orchestrator/routines';
 import { jobStats } from './orchestrator/registry';
 import { subLoopCount } from './orchestrator/subLoops';
 import { liveLoopCount, runningLoopCount, agentLoopActiveWindowMs } from './toolLoop';
@@ -108,6 +110,8 @@ async function main(): Promise<void> {
   registerLoopRoutes(app, { pool, env, cipher });
   // 多智能体编排：内部频道的**只读**接口（用户看智能体之间怎么交流的）
   registerChannelRoutes(app, { pool, env, cipher });
+  // 定时/事件触发（Routines）：描述=长期规矩，对话=一次活
+  registerRoutineRoutes(app, { pool, env, cipher });
   /**
    * 多智能体编排 · 装编排能力（web_search / spawn_workers / delegate 三个服务端工具 + 名额表）。
    *
@@ -120,6 +124,7 @@ async function main(): Promise<void> {
    */
   initOrchestrator({ pool, env, cipher });
   startIdleScheduler({ pool, env, cipher });
+  startRoutineSweeper(pool, cipher, 60_000);
 
   // ★ 迁移必须**带重试**（2026-09-20 修）。
   //
