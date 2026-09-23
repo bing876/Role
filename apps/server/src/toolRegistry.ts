@@ -59,7 +59,7 @@ export const LOOP_TOOL_NAMES: string[] = BROWSER_TOOL_DEFINITIONS.map((d) => d.n
  *   工具表就是能力边界：它想开页也没有工具可调（提示词里再说一遍是近因压制，见 orchestrator/prompts.ts）。
  *   将来要给它「桌面手」，只需要在这里加名字 + 给子循环分配 wcId 与 lane，其余部分不用动。
  */
-export const SUB_AGENT_TOOL_NAMES: string[] = ['web_search', 'spawn_workers', 'delegate', 'stop'];
+export const SUB_AGENT_TOOL_NAMES: string[] = ['web_search', 'spawn_workers', 'delegate', 'teach_skill', 'revise_skill', 'stop'];
 
 /**
  * 多智能体编排 · 主浏览器循环实际该用的工具表。
@@ -92,7 +92,7 @@ export function browserToolNamesFor(
   if (orch.agentLoopWebSearch && serverToolRegistry.get('web_search')) extra.push('web_search');
   // 编排两件套：总开关
   if (orch.enabled) {
-    for (const n of ['spawn_workers', 'delegate']) {
+    for (const n of ['spawn_workers', 'delegate', 'teach_skill', 'revise_skill']) {
       if (serverToolRegistry.get(n)) extra.push(n);
     }
   }

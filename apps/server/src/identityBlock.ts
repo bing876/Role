@@ -25,6 +25,8 @@ export interface IdentityInput {
   kind: string;
   persona: AgentPersona | null;
   personaStatus: 'pending' | 'ready';
+  /** 批次 F | Skills 技能槽：命中时注入，已在 chat.ts / toolLoop 拼好 */
+  skillBlock?: string;
 }
 
 /**
@@ -35,32 +37,31 @@ export interface IdentityInput {
  * - 正常 custom：返回用户填的四格
  */
 export function buildIdentityBlock(input: IdentityInput): string {
-  const { id, name, kind, persona, personaStatus } = input;
+  const { id, name, kind, persona, personaStatus, skillBlock } = input;
 
   // 固定人设优先（母鸡/总协调/临时工）
   const fixed = fixedPersonaForKind(kind);
   if (fixed) {
-    // 母鸡额外带上固定说明
-    if (kind === 'hen') {
-      return [HEN_PERSONA_BLOCK, IDENTITY_FIXED_NOTE].join('\n');
-    }
-    return [fixed, IDENTITY_FIXED_NOTE].join('\n');
+    const base = kind === 'hen' ? [HEN_PERSONA_BLOCK, IDENTITY_FIXED_NOTE].join('\n') : [fixed, IDENTITY_FIXED_NOTE].join('\n');
+    return skillBlock?.trim() ? [base, skillBlock.trim()].join('\n\n') : base;
   }
 
   if (kind === 'assistant') {
-    return '';
+    // 小助也需要技能槽（用户教的任务）
+    return skillBlock?.trim() ? skillBlock.trim() : '';
   }
 
   if (personaStatus === 'pending' || !persona) {
-    return [
+    const pendingBlock = [
       '【当前智能体还没设定】用户刚点了「添加」，会话里已经摆好一张引导表，但他还没填完。',
       '这一轮不要展开长聊、不要自己编人设：只回一两句，请他在上面的引导表里写下',
       '「名称 / 它是谁 / 怎么说话 / 干什么」，并说明填完点确认后你就按那份描述干活。',
       IDENTITY_FIXED_NOTE,
     ].join('\n');
+    return skillBlock?.trim() ? [pendingBlock, skillBlock.trim()].join('\n\n') : pendingBlock;
   }
 
-  return [
+  const personaBlock = [
     '【当前智能体的人设（用户在引导表里亲自填的）】',
     IDENTITY_OVERRIDE_NOTE,
     `名称：${persona.name}`,
@@ -72,6 +73,7 @@ export function buildIdentityBlock(input: IdentityInput): string {
   ]
     .filter(Boolean)
     .join('\n');
+  return skillBlock?.trim() ? [personaBlock, skillBlock.trim()].join('\n\n') : personaBlock;
 }
 
 /**

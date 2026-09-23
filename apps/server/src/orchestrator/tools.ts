@@ -33,6 +33,7 @@ import { resolveLoop } from './subLoops';
 import { WEB_SEARCH_SERVER_TOOL, executeWebSearchTool } from './search';
 import { runWorkerPool } from './workers';
 import { registerDelegationTool } from './delegation';
+import { registerSkillTools } from './skillTools';
 
 export interface OrchestratorDeps {
   pool: Pool;
@@ -324,6 +325,7 @@ export function initOrchestrator(next: OrchestratorDeps): void {
   });
   registerServerTool(SPAWN_WORKERS_TOOL, { execute: executeSpawnWorkers });
   registerDelegationTool();
+  registerSkillTools();
 
   console.log(
     `[orc] 已注册 web_search / spawn_workers / delegate —— ` +

@@ -428,6 +428,42 @@ ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS messages_enc TEXT;
 -- 修 3 幂等：记录 pending 的 tool_call_id，重启后可去重，避免工具被执行第二次
 ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS pending_call_id TEXT;
 ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS executed_tool_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 批次 F | Skills — teach-a-task 落成 skills 表
+-- 触发条件+步骤+决策规则+产出要求+审批边界，命中时注入 identityBlock 技能槽，跑完能自我修订
+CREATE TABLE IF NOT EXISTS skills (
+  id                    BIGSERIAL PRIMARY KEY,
+  user_id               BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id            BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id              BIGINT REFERENCES agents(id) ON DELETE SET NULL,
+  name                  TEXT NOT NULL,
+  trigger_condition     TEXT NOT NULL,
+  trigger_enc           TEXT,
+  steps_enc             TEXT,
+  decision_rules_enc    TEXT,
+  output_requirements_enc TEXT,
+  approval_boundary_enc TEXT,
+  status                TEXT NOT NULL DEFAULT 'active',
+  version               INTEGER NOT NULL DEFAULT 1,
+  usage_count           INTEGER NOT NULL DEFAULT 0,
+  last_used_at          TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_skills_user ON skills (user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_skills_project ON skills (project_id, status);
+CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_skills_trigger ON skills (user_id, trigger_condition);
+-- 幂等补列：老库已有 skills 时补新字段
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS trigger_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS steps_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS decision_rules_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS output_requirements_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS approval_boundary_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
 `;
 
 

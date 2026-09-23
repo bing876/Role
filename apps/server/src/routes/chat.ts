@@ -62,6 +62,7 @@ import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
 import { buildWhiteboardBlock } from '../orchestrator/whiteboard';
+import { buildSkillBlock } from '../orchestrator/skills';
 
 export interface ChatDeps {
   pool: Pool;
@@ -498,6 +499,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         // 记忆合并第二批：任务轮三级作用域（账号级+智能体级+会话级）+ 项目白板共享
         let taskMemoryBlock: string | undefined;
         let taskWhiteboardBlock: string | undefined;
+        let taskSkillBlock: string | undefined;
         try {
           taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null, convId ?? null);
         } catch (err) {
@@ -506,9 +508,15 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         try {
           const projRow = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
           const pid = Number(projRow.rows[0]?.project_id ?? 0);
-          if (pid) taskWhiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, pid);
+          if (pid) {
+            taskWhiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, pid);
+            try {
+              const skillRes = await buildSkillBlock(pool, cipher, claims.sub, pid, message);
+              taskSkillBlock = skillRes.block;
+            } catch {}
+          }
         } catch {}
-        const combinedMemoryBlock = [taskMemoryBlock, taskWhiteboardBlock].filter(Boolean).join('\n\n');
+        const combinedMemoryBlock = [taskMemoryBlock, taskWhiteboardBlock, taskSkillBlock].filter(Boolean).join('\n\n');
 
         const loop = startLoop(env, {
           userId: claims.sub,
@@ -564,11 +572,19 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       // 第 16 步：它只是**参考**（buildMemoryBlock 自己带「可被当前指令覆盖」的表头）。
       // 记忆合并第二批：三级作用域，支持按 owner+agent+conversation 过滤
       const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, agentId ?? null, convId ?? null);
+      // 批次 F | Skills：按触发条件匹配技能，注入 identityBlock 技能槽
+      let skillBlock = '';
+      try {
+        const projRowForSkill = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
+        const pidForSkill = Number(projRowForSkill.rows[0]?.project_id ?? 0);
+        const skillRes = await buildSkillBlock(pool, cipher, claims.sub, Number.isInteger(pidForSkill) && pidForSkill > 0 ? pidForSkill : null, message);
+        skillBlock = skillRes.block;
+      } catch {}
       // 第 15 步 · 两层记忆 + 当前智能体人设：
       //   - 用户记忆库（账号级）：所有智能体都读得到，是「这个人」的习惯/口味；
       //   - 项目记忆（智能体级）：**只**读当前会话所属智能体那一份，绝不串号；
       //   - 人设：引导表填完就按它干活；没填完只让模型引导用户去填表，不许空人设乱聊。
-      const agentCtx = await buildAgentContext(pool, cipher, claims.sub, convId, agentId);
+      const agentCtx = await buildAgentContext(pool, cipher, claims.sub, convId, agentId, skillBlock);
       const userMemoryBlockRaw = await buildUserMemoryBlock(pool, cipher, claims.sub);
       // 第 11 步：知识库资料是与 memories 完全独立的、仅聊天用的上下文位置。
       // buildKnowledgeBlock 只按当前 owner 的加密片段做关键词字面匹配；空命中/异常都返回空，

@@ -243,6 +243,7 @@ export async function buildAgentContext(
   ownerId: number,
   conversationId: number | null,
   agentIdHint: number | null,
+  skillBlock?: string,
 ): Promise<AgentContext> {
   const empty: AgentContext = { agentId: null, agentName: null, personaBlock: '', projectMemoryBlock: '' };
   try {
@@ -265,13 +266,14 @@ export async function buildAgentContext(
     const name = row.name;
     const view = toAgentView(row);
     const persona = view.persona;
-    // 人设固定注入：统一走 identityBlock.ts
+    // 人设固定注入：统一走 identityBlock.ts，批次 F 技能槽
     const personaBlock = buildIdentityBlock({
       id,
       name,
       kind: view.kind,
       persona: persona ?? null,
       personaStatus: view.personaStatus as 'pending' | 'ready',
+      skillBlock: skillBlock?.trim() ? skillBlock.trim() : undefined,
     });
     const projectMemoryBlock = await buildAgentProjectMemoryBlock(pool, cipher, ownerId, id);
     return { agentId: id, agentName: name, personaBlock, projectMemoryBlock };
