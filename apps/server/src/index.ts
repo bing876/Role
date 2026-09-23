@@ -36,6 +36,7 @@ import { registerRoutineRoutes } from './routes/routines';
 import { registerHandoffRoutes } from './routes/handoffs';
 import { registerWhiteboardRoutes } from './routes/whiteboard';
 import { registerSkillsRoutes } from './routes/skills';
+import { registerComputerVisibilityRoutes } from './routes/computerVisibility';
 import { initOrchestrator } from './orchestrator/tools';
 import { startRoutineSweeper } from './orchestrator/routines';
 import { setCheckpointDeps } from './toolLoop';
@@ -123,6 +124,8 @@ async function main(): Promise<void> {
   registerWhiteboardRoutes(app, { pool, env, cipher });
   // 批次 F | Skills — teach-a-task 落成 skills 表
   registerSkillsRoutes(app, { pool, env, cipher });
+  // 批次 H | 电脑三级可见度 — Status/Preview/Takeover，默认收起
+  registerComputerVisibilityRoutes(app, { pool, env, cipher });
   /**
    * 多智能体编排 · 装编排能力（web_search / spawn_workers / delegate 三个服务端工具 + 名额表）。
    *

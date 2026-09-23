@@ -253,6 +253,16 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB;
 -- ---------------------------------------------------------------------------
 ALTER TABLE users ADD COLUMN IF NOT EXISTS current_project_id BIGINT REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS can_create_agents BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS computer_visibility TEXT NOT NULL DEFAULT 'status';
+-- 批次 H | 电脑三级可见度：Status/Preview/Takeover，默认收起
+-- 约束：只允许 status/preview/takeover 三档
+-- 幂等：老库补列
+DO $ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_agents_computer_visibility') THEN
+    ALTER TABLE agents ADD CONSTRAINT chk_agents_computer_visibility CHECK (computer_visibility IN ('status','preview','takeover'));
+  END IF;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $;
 ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_project ON knowledge_documents (project_id, id DESC);
