@@ -106,6 +106,20 @@ interface AgentRow {
 
 function toAgentView(r: AgentRow): AgentView {
   const persona = parsePersona(r.persona);
+  // 批次 C | 路由升级：空描述警告
+  let dutyWarning: string | null = null;
+  const duty = persona?.duty?.trim() ?? '';
+  if (!duty) {
+    dutyWarning = '职责为空，路由燃料不足，建议补全具体职责';
+  } else if (duty.length < 5) {
+    dutyWarning = `职责过短（${duty.length}字），建议细化`;
+  } else {
+    const generic = ['通用助手','助手','AI助手','智能助手','通用','帮你','帮助','助理','小助手','小助','assistant','helper'];
+    const lower = duty.toLowerCase();
+    if (generic.includes(duty) || generic.includes(lower)) {
+      dutyWarning = `职责「${duty}」过于通用，路由时优先级降低，前端应警告`;
+    }
+  }
   return {
     id: Number(r.id),
     name: r.name,
@@ -116,6 +130,7 @@ function toAgentView(r: AgentRow): AgentView {
     personaStatus: isProtectedKind(r.kind) ? 'ready' : r.persona_status === 'pending' ? 'pending' : 'ready',
     persona,
     conversationId: r.conversation_id === null ? null : Number(r.conversation_id),
+    dutyWarning,
   };
 }
 

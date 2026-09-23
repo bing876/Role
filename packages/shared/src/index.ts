@@ -772,6 +772,8 @@ export interface AgentView {
   statusLoopId?: string | null;
   /** 当前步数（有循环时） */
   statusStep?: number;
+  /** 批次 C | 路由升级：职责为空/通用时前端警告，description 为燃料 */
+  dutyWarning?: string | null;
 }
 
 /** GET /agents */
