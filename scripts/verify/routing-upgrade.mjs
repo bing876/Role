@@ -15,7 +15,7 @@ const chiefPath = path.join(root,'apps/server/src/orchestrator/chiefOfStaff.ts')
 must(fs.existsSync(chiefPath), 'chiefOfStaff.ts 存在');
 const chief = fs.readFileSync(chiefPath,'utf8');
 must(chief.includes('keyword_weighted') || chief.includes('关键词加权'), 'chiefOfStaff.ts 有关键词加权路由');
-must(chief.includes('embedding') || chief.includes('嵌入'), 'chiefOfStaff.ts 有嵌入相似度路由（预留真实 embedding）');
+must(chief.includes('routeByFuzzy') && chief.includes("'fuzzy_match'"), 'chiefOfStaff.ts 有模糊字面相似度路由（收尾 4 正名：原称「嵌入」，实为 Jaccard + 加权）');
 must(chief.includes('detectEmptyDuty') && chief.includes('通用助手'), 'chiefOfStaff.ts 检测空描述/通用助手');
 must(chief.includes('weightForToken') || chief.includes('加权'), 'chiefOfStaff.ts 关键词按长度/位置/重要性加权');
 must(chief.includes('IMPORTANT_KEYWORDS') || chief.includes('重要'), 'chiefOfStaff.ts 有重要关键词表，命中权重更高');

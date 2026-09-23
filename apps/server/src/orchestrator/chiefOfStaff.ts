@@ -12,9 +12,10 @@
  * 3. 路由决策写入对话流【协同·路由】，折叠摘要
  *
  * 路由策略升级（批次 C）：
- * - 字面匹配 → 关键词加权/嵌入：description 为燃料
+ * - 字面匹配 → 关键词加权 + 模糊字面相似度：description 为燃料
  *   - 关键词加权：duty 分词后按长度、位置、重要性加权，任务命中高权重词得分更高
- *   - 嵌入：简化版语义相似度（Jaccard + 加权），可扩展为真实 embedding（预留接口）
+ *   - 模糊字面相似度：Jaccard + 加权（收尾 4 正名：原先叫「嵌入/embedding」，但没有调用任何
+ *     embedding 模型，是字面重叠打分；要真语义需另接 embedding 模型，替换 scoreDutyFuzzy 即可）
  * - 空描述警告：通用助手/助手/AI助手等空描述，前端给警告，路由时降低优先级
  * - 确定性优先，不依赖模型自觉
  */
@@ -29,7 +30,7 @@ export interface RouteDecision {
   toAgentId: number;
   toAgentName: string;
   reason: string;
-  method: 'duty_match' | 'keyword_weighted' | 'embedding' | 'hen_fallback' | 'assistant_fallback' | 'explicit' | 'keep_current';
+  method: 'duty_match' | 'keyword_weighted' | 'fuzzy_match' | 'hen_fallback' | 'assistant_fallback' | 'explicit' | 'keep_current';
   score?: number;
   warning?: string;
 }
@@ -158,8 +159,8 @@ function scoreDutyWeighted(task: string, duty: string): number {
   return totalWeight > 0 ? score / totalWeight : 0;
 }
 
-// 简化版嵌入相似度：Jaccard + 加权，预留真实 embedding 接口
-function scoreDutyEmbedding(task: string, duty: string): number {
+// 模糊字面相似度：Jaccard + 加权（不是 embedding —— 见文件头「收尾 4 正名」）
+function scoreDutyFuzzy(task: string, duty: string): number {
   if (!duty) return 0;
   const { empty } = detectEmptyDuty(duty);
   if (empty) return 0;
@@ -214,13 +215,13 @@ export function routeByKeywordWeighted(task: string, roster: RosterEntry[]): Rou
   };
 }
 
-export function routeByEmbedding(task: string, roster: RosterEntry[]): RouteDecision | null {
+export function routeByFuzzy(task: string, roster: RosterEntry[]): RouteDecision | null {
   if (roster.length === 0) return null;
   let best: RosterEntry | null = null;
   let bestScore = 0;
   for (const r of roster) {
     if (r.busy || r.waiting) continue;
-    const s = scoreDutyEmbedding(task, r.duty);
+    const s = scoreDutyFuzzy(task, r.duty);
     if (s > bestScore) {
       bestScore = s;
       best = r;
@@ -230,8 +231,8 @@ export function routeByEmbedding(task: string, roster: RosterEntry[]): RouteDeci
   return {
     toAgentId: best.id,
     toAgentName: best.name,
-    reason: `嵌入相似度 ${(bestScore * 100).toFixed(0)}%：${best.duty.slice(0, 60)}`,
-    method: 'embedding',
+    reason: `模糊字面相似度 ${(bestScore * 100).toFixed(0)}%：${best.duty.slice(0, 60)}`,
+    method: 'fuzzy_match',
     score: bestScore,
   };
 }
@@ -272,11 +273,11 @@ export async function routeTask(
     }
   }
 
-  // 关键词加权优先，其次嵌入
+  // 关键词加权优先，其次模糊字面相似度
   const weighted = routeByKeywordWeighted(task, roster);
   if (weighted) return weighted;
-  const embedded = routeByEmbedding(task, roster);
-  if (embedded) return embedded;
+  const fuzzy = routeByFuzzy(task, roster);
+  if (fuzzy) return fuzzy;
 
   // 空描述警告：收集空职责的 agent，前端可提示
   const emptyDuties = roster.filter((r) => !r.busy && !r.waiting && detectEmptyDuty(r.duty).empty);

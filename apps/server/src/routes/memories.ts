@@ -47,9 +47,18 @@ export interface MemoryDeps {
 
 /// 记忆合并第三批：提示词与判定收口到 memoryShared.ts
 /**
- * 批次 G | 记忆语义检索 — 把批次 C 嵌入能力复用到 memories 检索，替换字面 wordHits
- * 依据：批次 C 已有 tokenize + 关键词加权 + 嵌入相似度（Jaccard + 加权），直接复用
- * 反证：字面包含匹配会漏掉同义表达（例如“喜欢喝咖啡” vs “爱喝咖啡”），语义检索应命中
+ * 批次 G | 记忆检索：**模糊字面匹配**（收尾 4 正名，原名「记忆语义检索 / scoreMemorySemantic」）
+ *
+ * 它是什么：分词（英文/数字按词，中文整段 + 二字滑窗）→ 关键词加权命中率 × 0.7 + Jaccard × 0.3，
+ *           阈值 0.25。本质是**字面重叠打分**，没有调用任何模型，也没有向量。
+ * 它不是什么：**不是语义检索**。「我爱喝拿铁」vs「喜欢喝咖啡」零字面重叠 → 0 分，照样漏。
+ *           旧名字里的「语义」「嵌入能力」都不成立 —— 批次 C 的 scoreDutyEmbedding 同样只是
+ *           Jaccard + 加权，仓库里从来没有真实的 embedding 通路可以「复用」。
+ * 相比 main 上的旧 wordHits 真实的改进：旧版只认「整句互相包含」或「≥4 字片段包含」，
+ *           「我爱喝咖啡」vs「喜欢喝咖啡」只共享 3 字「喝咖啡」→ 旧版 miss，这里 0.40 命中。
+ *           也就是说它补的是「短的共同片段」，不是「同义」。
+ * 要真语义：需要接一个 embedding 模型（DeepSeek 没有 embedding API），
+ *           届时替换 scoreMemoryFuzzy 即可，调用点只有 wordHits 一处。
  */
 
 function tokenizeForMemory(text: string): string[] {
@@ -81,7 +90,7 @@ function weightForMemoryToken(token: string, position: number, total: number): n
   return w;
 }
 
-function scoreMemorySemantic(query: string, fact: string): number {
+function scoreMemoryFuzzy(query: string, fact: string): number {
   if (!query || !fact) return 0;
   const queryNorm = normalizeText(query);
   const factNorm = normalizeText(fact);
@@ -111,12 +120,12 @@ function scoreMemorySemantic(query: string, fact: string): number {
 }
 
 function wordHits(text: string, fact: string): boolean {
-  const s = scoreMemorySemantic(text, fact);
+  const s = scoreMemoryFuzzy(text, fact);
   return s >= 0.25;
 }
 
-export function __test_scoreMemorySemantic(query: string, fact: string): number {
-  return scoreMemorySemantic(query, fact);
+export function __test_scoreMemoryFuzzy(query: string, fact: string): number {
+  return scoreMemoryFuzzy(query, fact);
 }
 
 
