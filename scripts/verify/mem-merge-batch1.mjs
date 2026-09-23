@@ -74,7 +74,9 @@ must(loopContent.includes('input.memoryBlock'), 'toolLoop.ts firstUserMessage �
 // 6. 两个启动点都传 memoryBlock
 const chatPath = path.join(root, 'apps/server/src/routes/chat.ts');
 const chatContent = fs.readFileSync(chatPath, 'utf8');
-must(chatContent.includes('taskMemoryBlock') && chatContent.includes('memoryBlock: taskMemoryBlock'), 'chat.ts 任务轮传 memoryBlock');
+// 批次 B 起任务轮传的是「记忆 + 白板 + 技能」合并块，taskMemoryBlock 作为兜底仍在同一个表达式里；
+// 旧断言只认字面 `memoryBlock: taskMemoryBlock`，批次 B 之后就一直 FAIL（没人把这批脚本连起来跑过）。
+must(/memoryBlock:\s*[^,\n]*\btaskMemoryBlock\b/.test(chatContent), 'chat.ts 任务轮传 memoryBlock（含 taskMemoryBlock）');
 
 const loopRoutePath = path.join(root, 'apps/server/src/routes/loop.ts');
 const loopRouteContent = fs.readFileSync(loopRoutePath, 'utf8');

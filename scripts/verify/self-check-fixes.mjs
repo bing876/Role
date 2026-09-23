@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { fileURLToPath as __f2p } from 'node:url';
+import { dirname as __dn, resolve as __rs } from 'node:path';
+// 从任何 cwd 运行都以仓库根为基准（原来散在 scripts/ 下时依赖 cwd=仓库根）
+process.chdir(__rs(__dn(__f2p(import.meta.url)), '..', '..'));
 // 验证五个自查项
-import { makeCipher } from '../apps/server/src/crypto.ts' with { } // we'll import via dynamic
-// Use dynamic import for TS? We'll directly require compiled? Instead we implement simple test using node without TS imports for most
-// We'll import built files via tsx? Simpler: we test logic by reading files
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -60,7 +61,9 @@ assert(!messagesEnc.includes('银行卡'), '密文不应含明文银行卡');
 assert(goalEnc.startsWith('gcm$'), '密文格式 gcm$');
 const decGoal = cipher.decryptText(goalEnc);
 assert(decGoal === sensitiveGoal, '解密后应还原');
-console.log('修1 加密反证 PASS: 直接 SELECT 读不到明文，密文为 gcm$...');
+// 注意：上面只是在脚本里自己加密一段字符串，**没有碰数据库，也没走 checkpoint.ts 的落库路径**。
+// 真库复验（真服务端 + 直接 SELECT + 漏传 cipher 的变异测试）见 scripts/verify/checkpoint-encryption-db.mjs
+console.log('修1 密文格式自检 PASS（仅格式；真库复验：npm run verify:db）');
 
 console.log('\n=== 修2 白板硬上限 ===');
 let wb = fs.readFileSync('apps/server/src/orchestrator/whiteboard.ts','utf8');
@@ -101,7 +104,8 @@ let executed = ['call_1'];
 assert(simulateIngest(executed, 'call_1') === 'blocked', '重复 callId 应被拦截');
 assert(simulateIngest(executed, 'call_2') === 'executed', '新 callId 应执行');
 assert(executed.length === 2, 'executed 列表应为 2');
-console.log('修3 幂等逻辑 PASS: 工具执行后结果落库前 kill→重启→不会二次执行');
+// 注意：这里只是用数组模拟「已执行列表去重」，**不是**真的 kill 进程再重启。
+console.log('修3 去重逻辑模拟 PASS（未做真实 kill→重启测试）');
 
 console.log('\n=== 修4 对话式建智能体兜底 ===');
 let ab = fs.readFileSync('apps/server/src/orchestrator/agentBuilder.ts','utf8');

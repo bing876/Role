@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+import { fileURLToPath as __f2p } from 'node:url';
+import { dirname as __dn, resolve as __rs } from 'node:path';
+// 从任何 cwd 运行都以仓库根为基准（原来散在 scripts/ 下时依赖 cwd=仓库根）
+process.chdir(__rs(__dn(__f2p(import.meta.url)), '..', '..'));
 import fs from 'node:fs';
 function assert(c,m){ if(!c){ console.error('FAIL',m); process.exit(1);} }
 

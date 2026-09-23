@@ -23,6 +23,13 @@
     "verify:tools": "tsx scripts/verify/tool-registry-parity.mts",
     "verify:r4": "node scripts/verify/r4-intent-source-parity.mjs && node scripts/verify/r4-dispatch-acceptance.mjs",
     "verify:orch": "tsx scripts/verify/orc-schema.mts && tsx scripts/verify/orc-registry.mts && tsx scripts/verify/orc-workers.mts && tsx scripts/verify/orc-park.mts && tsx scripts/verify/orc-delegate.mts && tsx scripts/verify/orc-e2e.mts && tsx scripts/verify/orc-routes.mts && tsx scripts/verify/orc-desktop-park.mts && tsx scripts/verify/orc-channels-ui.mts && tsx scripts/verify/orc-killswitch.mts && tsx scripts/verify/orc-park-sse.mts",
+    "verify:memory": "node scripts/verify/mem-merge-batch1.mjs && node scripts/verify/mem-merge-batch2.mjs && node scripts/verify/mem-merge-batch3.mjs && node scripts/verify/mem-merge-batch4.mjs && node scripts/verify/mem-hygiene.mjs && node scripts/verify/mem-retrieval.mjs",
+    "verify:persona": "node scripts/verify/coord-persona.mjs && node scripts/verify/identity-block.mjs",
+    "verify:collab": "node scripts/verify/collab-flow.mjs && node scripts/verify/avatar-status.mjs && node scripts/verify/chief-routing.mjs && node scripts/verify/routines.mjs && node scripts/verify/context-compress.mjs",
+    "verify:batches": "node scripts/verify/handoff-structured.mjs && node scripts/verify/whiteboard.mjs && node scripts/verify/routing-upgrade.mjs && node scripts/verify/restart-recovery.mjs && node scripts/verify/frontend-guide.mjs && node scripts/verify/self-check-fixes.mjs && node scripts/verify/skills.mjs && node scripts/verify/computer-visibility.mjs && node scripts/verify/model-routing.mjs",
+    "verify:websearch": "tsx scripts/verify/websearch-single-source.mts",
+    "verify:db": "node scripts/verify/checkpoint-encryption-db.mjs && node scripts/verify/board-lock-db.mjs",
+    "verify": "npm run -s verify:tools && npm run -s verify:r4 && npm run -s verify:orch && npm run -s verify:websearch && npm run -s verify:memory && npm run -s verify:persona && npm run -s verify:collab && npm run -s verify:batches",
     "live": "node scripts/live.mjs",
     "clean": "node scripts/clean.mjs"
   },
