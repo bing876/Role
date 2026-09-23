@@ -18,6 +18,8 @@ import type {
   KnowledgeUploadResult,
   MemoryEntry,
   MemoryLayerList,
+  MemoryItem,
+  MemoryListResult,
   OpenTabRequest,
   ProjectCreateResult,
   ProjectListResult,
@@ -41,7 +43,6 @@ import {
   useBrowserWorkspace,
 } from './browser';
 import type { EmbedRect } from './browser';
-import { ChannelsPanel } from './channels';
 import { useResourceGuard } from './resources/useResourceGuard';
 
 /**
@@ -727,7 +728,6 @@ export default function App() {
    * 只是个视图开关（与 `browser.view` 同一性质）：开了盖在中栏上面看智能体之间的
    * 委派对话，关掉就回到原来的样子 —— **不 start / 不 resume / 不碰任何一路驾驶**。
    */
-  const [showChannels, setShowChannels] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(() => Boolean(localStorage.getItem(TOKEN_KEY)));
   const [pwOld, setPwOld] = useState('');
   const [pwNew, setPwNew] = useState('');
@@ -852,6 +852,9 @@ export default function App() {
   /** 第 15 步 · 第二层：**当前智能体**的项目记忆（智能体级，切智能体就整块换掉） */
   const [projMem, setProjMem] = useState<MemoryEntry[]>([]);
   const [projMemOpen, setProjMemOpen] = useState(false);
+  /** 记忆合并第四批：待确认记忆（decision/fact 需用户确认才生效） */
+  const [pendingMem, setPendingMem] = useState<MemoryItem[]>([]);
+  const [pendingMemOpen, setPendingMemOpen] = useState(false);
   /**
    * 第 16 步：每个智能体的**会话状态**（服务端现有 Postgres 的 conversations 表为准）。
    * current_task / browser_confirmed / keepalive 都从这里来；进程重启后靠它恢复「当前任务」。
@@ -867,6 +870,10 @@ export default function App() {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [knowledgeUploading, setKnowledgeUploading] = useState(false);
   const [knowledgeNote, setKnowledgeNote] = useState('');
+  /** 建完能改人设：编辑态 */
+  const [personaEditOpen, setPersonaEditOpen] = useState(false);
+  const [personaEditAgentId, setPersonaEditAgentId] = useState<number | null>(null);
+  const [personaEditDraft, setPersonaEditDraft] = useState<AgentPersona>({ name: '', who: '', tone: '', duty: '' });
   /** 第 19 步：正在删的那条资料 id（按钮显示「删除中…」并防连点），null = 没有删除在跑 */
   const [knowledgeDeletingId, setKnowledgeDeletingId] = useState<number | null>(null);
   const knowledgeFileRef = useRef<HTMLInputElement | null>(null);
@@ -947,6 +954,20 @@ export default function App() {
       setProjMem(r.items);
     } catch {
       /* 同上 */
+    }
+  };
+  /** 记忆合并第四批：待确认记忆（账号级+智能体级+会话级，三级合并） */
+  const loadPendingMemory = async (agentId?: number | null, conversationId?: number | null) => {
+    if (!sessionRef.current) return;
+    try {
+      const params = new URLSearchParams();
+      if (agentId) params.set('agentId', String(agentId));
+      if (conversationId) params.set('conversationId', String(conversationId));
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const r = await authFetchJson<MemoryListResult>(`/memories${qs}`, { headers: memHeaders() });
+      setPendingMem(r.pending);
+    } catch {
+      /* 后端/库没起就不打扰 */
     }
   };
 
@@ -1061,6 +1082,7 @@ export default function App() {
       if (stillThere) {
         void loadProjectMemory(cur as number);
         void loadAgentState(cur as number);
+        void loadPendingMemory(cur as number, chatsRef.current[cur as number]?.convId ?? null);
       } else if (r.agents.length > 0) {
         const first = r.agents[0];
         curAgentRef.current = first.id;
@@ -1068,6 +1090,7 @@ export default function App() {
         void loadProjectMemory(first.id);
         void loadAgentHistory(first);
         void loadAgentState(first.id);
+        void loadPendingMemory(first.id, first.conversationId);
       }
     } catch (e) {
       setAgentNote(`读不到智能体列表：${(e as Error).message}`);
@@ -1126,6 +1149,7 @@ export default function App() {
       void loadProjectMemory(first.id);
       void loadAgentHistory(first);
       void loadAgentState(first.id);
+      void loadPendingMemory(first.id, first.conversationId);
     }
     void loadKnowledge(id);
   };
@@ -1189,6 +1213,7 @@ export default function App() {
     setChatNote('');
     setAgentNote('');
     void loadProjectMemory(agent.id);
+    void loadPendingMemory(agent.id, chatsRef.current[agent.id]?.convId ?? agent.conversationId ?? null);
     if (!historyLoadedRef.current.has(agent.id)) void loadAgentHistory(agent);
   };
 
@@ -1206,6 +1231,49 @@ export default function App() {
         (a) => a.canCreateAgents === true && (pid === null || a.projectId === undefined || a.projectId === pid),
       ) ?? null
     );
+  };
+
+  /**
+   * 批次 E | 对话式建智能体、立刻建好不挡你
+   * quickBuildAgent：从提议或对话里直接建一个带人设的智能体，不走 pending 引导表，立刻 ready
+   */
+  const quickBuildAgent = async (name: string, duty: string) => {
+    const sess = sessionRef.current;
+    if (!sess || agentBusy) return;
+    setAgentBusy(true);
+    setAgentNote('');
+    try {
+      let creator = pickCreator(agentsRef.current);
+      if (!creator) {
+        const fresh = await fetchAgentsFor(curProjectRef.current);
+        if (!fresh) return;
+        setAgents(fresh.agents);
+        creator = pickCreator(fresh.agents);
+      }
+      if (!creator) {
+        setAgentNote('这个项目里没有能建智能体的角色（母鸡 / 自带小助），先新建一个项目再试。');
+        return;
+      }
+      const r = await authFetchJson<AgentCreateResult>('/agents', {
+        method: 'POST',
+        body: JSON.stringify({ asAgentId: creator.id, name: name.slice(0, 24), duty: duty.slice(0, 120) }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      const a = r.agent;
+      if (curProjectRef.current !== null) agentProjectRef.current.set(a.id, curProjectRef.current);
+      setAgents((prev) => prev.concat(a));
+      historyLoadedRef.current.add(a.id);
+      patchChat(a.id, () => ({ messages: [], convId: a.conversationId }));
+      curAgentRef.current = a.id;
+      setCurAgentId(a.id);
+      setProjMem([]);
+      setProjMemOpen(false);
+      setChatNote(`已建好「${a.name}」：${duty}。直接和TA聊就行。`);
+    } catch (e) {
+      setAgentNote(`快捷建没成：${(e as Error).message}`);
+    } finally {
+      setAgentBusy(false);
+    }
   };
 
   /**
@@ -1262,7 +1330,7 @@ export default function App() {
     }
   };
 
-  /** 引导表确认：存人设 → 这个智能体从这一刻起按这份描述干活 */
+  /** 引导表确认：存人设 → 这个智能体从这一刻起按这份描述干活（建完也能改） */
   const savePersona = async (agentId: number, persona: AgentPersona) => {
     const sess = sessionRef.current;
     if (!sess) throw new Error('还没登录');
@@ -1273,6 +1341,19 @@ export default function App() {
     });
     setAgents((prev) => prev.map((x) => (x.id === agentId ? r.agent : x)));
     setChatNote(`好，${r.agent.name} 已就位——从现在起它按你填的这份描述干活。`);
+    setPersonaEditOpen(false);
+    setPersonaEditAgentId(null);
+  };
+
+  const openPersonaEdit = (agent: AgentView) => {
+    setPersonaEditAgentId(agent.id);
+    setPersonaEditDraft({
+      name: agent.persona?.name || agent.name || '',
+      who: agent.persona?.who || '',
+      tone: agent.persona?.tone || '',
+      duty: agent.persona?.duty || '',
+    });
+    setPersonaEditOpen(true);
   };
 
   /** 删自建智能体（「小助」服务端会拒）：它的聊天与项目记忆一并清掉，不碰别的智能体 */
@@ -1335,6 +1416,7 @@ export default function App() {
       else setChatNote(`整理完了：用户记忆库 +${r.userAdded} 条，本项目记忆 +${r.projectAdded} 条。`);
       void loadUserMemory();
       void loadProjectMemory(agentId);
+      void loadPendingMemory(agentId, convId);
     } catch (e) {
       setChatNote(`整理记忆没成：${(e as Error).message}`);
     }
@@ -1354,6 +1436,72 @@ export default function App() {
       else if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
     } catch (e) {
       setChatNote(`忘掉失败：${(e as Error).message}`);
+    }
+  };
+
+  /** 记忆合并第四批：确认/拒绝待确认记忆 */
+  const confirmMemory = async (id: number) => {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    try {
+      await authFetchJson('/memories/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ ids: [id] }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem((prev) => prev.filter((m) => m.id !== id));
+      void loadUserMemory();
+      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
+      setChatNote('已确认一条记忆，今后会按它执行。');
+    } catch (e) {
+      setChatNote(`确认失败：${(e as Error).message}`);
+    }
+  };
+  const rejectMemory = async (id: number) => {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    try {
+      await authFetchJson('/memories/reject', {
+        method: 'POST',
+        body: JSON.stringify({ ids: [id] }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem((prev) => prev.filter((m) => m.id !== id));
+      setChatNote('已忽略一条记忆。');
+    } catch (e) {
+      setChatNote(`忽略失败：${(e as Error).message}`);
+    }
+  };
+  const confirmAllPending = async () => {
+    const sess = sessionRef.current;
+    if (!sess || pendingMem.length === 0) return;
+    try {
+      await authFetchJson('/memories/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ all: true }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem([]);
+      void loadUserMemory();
+      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
+      setChatNote(`已确认全部 ${pendingMem.length} 条记忆。`);
+    } catch (e) {
+      setChatNote(`批量确认失败：${(e as Error).message}`);
+    }
+  };
+  const rejectAllPending = async () => {
+    const sess = sessionRef.current;
+    if (!sess || pendingMem.length === 0) return;
+    try {
+      await authFetchJson('/memories/reject', {
+        method: 'POST',
+        body: JSON.stringify({ all: true }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem([]);
+      setChatNote(`已忽略全部 ${pendingMem.length} 条待确认记忆。`);
+    } catch (e) {
+      setChatNote(`批量忽略失败：${(e as Error).message}`);
     }
   };
 
@@ -1522,6 +1670,7 @@ export default function App() {
     setAgentNote('');
     setUserMem([]);
     setProjMem([]);
+    setPendingMem([]);
     setProjects([]);
     curProjectRef.current = null;
     // Phase 3：换号了就把「agentId → projectId」清掉（id 会跨账号复用，留着会把分区认错人）
@@ -1589,6 +1738,8 @@ export default function App() {
     setUserMemOpen(false);
     setProjMem([]);
     setProjMemOpen(false);
+    setPendingMem([]);
+    setPendingMemOpen(false);
     // 子阶段 2-B：项目层也清掉（换号不该看见上一个号的项目名/名单）
     setProjects([]);
     curProjectRef.current = null;
@@ -2440,19 +2591,7 @@ export default function App() {
     }, 400);
   };
 
-  // ---- 阶段简报 · 方案 B：临时测试条（暂停 / 继续）----------------------------
-  /**
-   * 为什么要有这条：**正式的暂停/继续 UI 不在本阶段做**（右栏驾驶台已经在 UI-1.6
-   * 回滚里整块撤掉了，源码里没有任何可点的入口），但方案 B 的核心体验是
-   * 「点暂停 → 自己到浏览器里手动操作 → 点继续 → AI 重新感知、不覆盖你刚才的动作」——
-   * 没有可点的按钮，这条链就亲手验不了。
-   *
-   * 所以这里只补一条**最小临时条**：两个按钮直接走主进程已有的 per-target IPC
-   * （`workbench:task:pause` / `:resume`，点名当前这张页的 wcId），
-   * 因此「暂停这一路」不会碰到别的页、也不会碰到别的智能体。
-   */
-  const [driveBar, setDriveBar] = useState<TaskState | null>(null);
-  const [driveNote, setDriveNote] = useState('');
+  // 批次 E：砍掉一切仪表盘，临时测试条已移除（暂停/继续走浏览器原生控制或输入「停」）
 
   // ---- ★ P0 止血（2026-09-21）·「这一轮的上下文没了」确认卡 ------------------
   /**
@@ -2561,63 +2700,9 @@ export default function App() {
       browser.exitEmbed();
     }
   };
-  /** 当前切到前面的那张页（tabId）——切页就换一路，测试条跟着换 */
-  const activeTabId = browser.active?.id ?? null;
+  // 批次 E：activeTabId 轮询已移除（仪表盘砍掉）
 
-  useEffect(() => {
-    if (activeTabId === null) {
-      setDriveBar(null);
-      return;
-    }
-    let off = false;
-    const tick = async () => {
-      const wcId = browser.webContentsIdOf(activeTabId);
-      if (typeof wcId !== 'number') return;
-      try {
-        const st = await window.workbench?.getTaskState?.(wcId);
-        if (!off && st) setDriveBar(st);
-      } catch {
-        /* 读不到就保留上一次的显示，不打断用户操作 */
-      }
-    };
-    void tick();
-    // 1.2s 轮询：只为了让人肉眼看到相位在变（idle → running → paused），
-    // 真正的暂停/继续是由按钮触发的主进程动作，不依赖这个轮询。
-    const timer = window.setInterval(() => void tick(), 1200);
-    return () => {
-      off = true;
-      window.clearInterval(timer);
-    };
-    // 只认「当前这张页」：切页就重新起一轮
-  }, [activeTabId]);
-
-  /** 临时测试条的两个动作：都点名当前这张页的 wcId */
-  const driveBarAct = async (kind: 'pause' | 'resume') => {
-    const tabId = browser.active?.id;
-    if (typeof tabId !== 'number') {
-      setDriveNote('还没有打开的网页——先让 AI 开一张页再点。');
-      return;
-    }
-    const wcId = await browser.awaitWebContentsId(tabId);
-    if (typeof wcId !== 'number') {
-      setDriveNote('这张页还没准备好（拿不到内嵌页句柄）。');
-      return;
-    }
-    try {
-      const st =
-        kind === 'pause'
-          ? await window.workbench?.pauseTask(wcId)
-          : await window.workbench?.resumeTask(wcId);
-      if (st) setDriveBar(st);
-      setDriveNote(
-        kind === 'pause'
-          ? `已暂停（wcId ${wcId}）：现在你可以在这张页里自己点、自己跳转，AI 不会再动一下。改完点「继续」。`
-          : `已继续（wcId ${wcId}）：AI 会先重新读一遍**当前**这张页再接着干，不会重放暂停前的旧动作。`,
-      );
-    } catch (e) {
-      setDriveNote(`没成功：${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
+  // 批次 E：driveBarAct 已移除（仪表盘砍掉，暂停/继续走 detectStopIntent 或浏览器控制）
 
   // 第 5 步门控：未登录（或正在用存好的 JWT 换会话）时，工作台整体不渲染——不做“游客看假数据”
   if (checkingAuth) {
@@ -2844,12 +2929,16 @@ export default function App() {
             开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
           </div>
           {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
+          {/* 记忆合并第四批：待确认记忆确认卡 */}
           <div className="buttons-row">
             <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
               用户记忆（{userMem.length}）
             </button>
             <button type="button" className="btn" onClick={() => setProjMemOpen((v) => !v)}>
               项目记忆（{projMem.length}）
+            </button>
+            <button type="button" className={pendingMem.length > 0 ? 'btn btn--pending' : 'btn'} onClick={() => setPendingMemOpen((v) => !v)}>
+              待确认（{pendingMem.length}）
             </button>
           </div>
           {userMemOpen && (
@@ -2878,6 +2967,37 @@ export default function App() {
                   <button type="button" className="memList__forget" onClick={() => void forgetEntry('agent', m.id)}>
                     忘掉这条
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {pendingMemOpen && (
+            <div className="memList memList--pending" role="list" aria-label="待确认记忆">
+              <div className="small memList__title">待确认 · 需你确认后才生效（decision/fact）</div>
+              {pendingMem.length === 0 && <div className="small">没有待确认的记忆。</div>}
+              {pendingMem.length > 0 && (
+                <div className="buttons-row" style={{ marginBottom: 8 }}>
+                  <button type="button" className="btn btn--go" onClick={() => void confirmAllPending()}>
+                    全部确认
+                  </button>
+                  <button type="button" className="btn" onClick={() => void rejectAllPending()}>
+                    全部忽略
+                  </button>
+                </div>
+              )}
+              {pendingMem.map((m) => (
+                <div className="memList__row memList__row--pending" key={m.id}>
+                  <span className="small">
+                    <b>[{m.type === 'decision' ? '决定' : m.type === 'fact' ? '事实' : '偏好'}]</b> {m.content}
+                  </span>
+                  <div className="memList__actions">
+                    <button type="button" className="btn btn--go memList__confirm" onClick={() => void confirmMemory(m.id)}>
+                      确认
+                    </button>
+                    <button type="button" className="btn memList__reject" onClick={() => void rejectMemory(m.id)}>
+                      不用
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -2996,14 +3116,16 @@ export default function App() {
               多智能体编排 · 内部频道入口。
               ★ 只是视图开关，不影响任何一路驾驶（与上面两个按钮同一性质）。
             */}
-            <button
-              type="button"
-              className={`workbenchNav__btn ${showChannels ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => setShowChannels((v) => !v)}
-              title="看智能体之间的委派与回复（只读）"
-            >
-              🗂 内部频道
-            </button>
+            {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
+              <button
+                type="button"
+                className="workbenchNav__btn"
+                onClick={() => openPersonaEdit(curAgent)}
+                title="建完也能改人设：改名称/它是谁/怎么说话/干什么"
+              >
+                ✏️ 编辑人设
+              </button>
+            )}
           </div>
         </header>
 
@@ -3013,8 +3135,49 @@ export default function App() {
           ★ token 从 session 传下去，组件自己不碰 localStorage —— 切号时 sessionRef
             那套「晚到的响应丢掉」的逻辑也就自然覆盖到它。
         */}
-        {showChannels && session && (
-          <ChannelsPanel apiBase={API_BASE()} token={session.token} onClose={() => setShowChannels(false)} />
+        {personaEditOpen && personaEditAgentId !== null && (
+          <div className="personaEditOverlay" role="dialog" aria-label="编辑人设">
+            <div className="personaEditCard">
+              <div className="guide__head">编辑人设（建完也能改）</div>
+              <div className="small">改完点确认，立刻按新描述干活；不改就点取消。</div>
+              <table className="guide__table">
+                <tbody>
+                  <tr>
+                    <th>名称</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.name} maxLength={24} placeholder="它叫什么？" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, name: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>它是谁</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.who} maxLength={120} placeholder="例如：一个只懂电商运营的老手" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, who: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>怎么说话</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.tone} maxLength={120} placeholder="例如：短句、直接、别客套" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, tone: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>干什么</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.duty} maxLength={120} placeholder="例如：帮我盯店铺数据、写商品标题" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, duty: e.target.value }))} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="buttons-row">
+                <button type="button" className="btn btn--go" disabled={!personaEditDraft.name.trim()} onClick={() => void savePersona(personaEditAgentId, personaEditDraft)}>
+                  确认保存
+                </button>
+                <button type="button" className="btn" onClick={() => { setPersonaEditOpen(false); setPersonaEditAgentId(null); }}>
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {browser.allTabs.length > 0 && (
@@ -3033,13 +3196,7 @@ export default function App() {
               作用对象是「当前切到前面的那张页」（按钮点名它的 wcId），
               所以暂停这一路 = 只停这一路，别的页、别的智能体照跑。
             */}
-            <div className="driveBar">
-              {/*
-                ★ P0 止血（2026-09-21）：**「上下文没了」的确认卡**。
-                放在驾驶条里是因为它本来就是驾驶态的一部分 —— 用户刚点了「继续」，
-                视线就在这里；放别处等于弹了看不见。
-              */}
-              {loopGone && (
+            {loopGone && (
                 <div className="loopGone">
                   <span className="loopGone__q">{loopGone.question}</span>
                   <button className="btn loopGone__warn" type="button" onClick={() => answerLoopGone('restart')}>
@@ -3050,26 +3207,6 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <span className="driveBar__tag">临时测试条</span>
-              <button className="btn" type="button" onClick={() => void driveBarAct('pause')}>
-                暂停
-              </button>
-              <button className="btn driveBar__go" type="button" onClick={() => void driveBarAct('resume')}>
-                继续
-              </button>
-              <span className="small">
-                当前页：
-                <b>
-                  {driveStateView(driveBar)?.icon} {DRIVE_PHASE_LABEL[driveBar?.phase ?? 'idle'] ?? driveBar?.phase ?? '空闲'}
-                </b>
-                {/* 第 27 步：谁发起的，在测试条上也一眼看得出来（不再只写一句"已暂停"） */}
-                {driveBar?.phase === 'paused' && driveBar.pausedBy && (
-                  <b> · {driveBar.pausedBy === 'agent' ? 'AI 发起' : '你发起'}</b>
-                )}
-                {driveBar?.wcId != null && ` · wcId ${driveBar.wcId}`}
-              </span>
-              {driveNote && <span className="small driveBar__note">{driveNote}</span>}
-            </div>
             <BrowserPanel
               ws={browser}
               agentLabel={agents.find((a) => a.id === curAgentId)?.name}
@@ -3124,7 +3261,7 @@ export default function App() {
             颜色/图标/文案全部跟着 `pausedBy` 走：蓝=AI 求助、琥珀=你接管、灰=分不清。
           */}
           {(() => {
-            const view = driveStateView(driveBar);
+            const view = driveStateView(task as any);
             if (!view) return null;
             return (
               <div className={`driveState driveState--${view.cls}`} role="status">
@@ -3228,13 +3365,25 @@ export default function App() {
             </div>
           )}
           {messages.map((m, idx) => (
-            /**
-             * 第 18 步：聊天里**只有话和结论**——不再有「网页行」芯片。
-             * 开页成功看中栏工作区的 tab；关页只从工作区消失（最多留一句人话在下面的提示条里）。
-             * 这样连续开百度/必应/知乎、再关掉几张，聊天也不会被一串「已关闭」刷屏。
-             */
             <div key={m.id}>
               <div className={`msg ${m.role}`}>{m.text}</div>
+              {/* 批次 E：第一个智能体提议同事，快捷建按钮（对话式建智能体、立刻建好不挡你） */}
+              {m.role === 'assistant' && m.text.includes('建议先建这几位同事') && (
+                <div className="colleagueProposal" style={{ padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {(() => {
+                    const matches = [...m.text.matchAll(/\d+\. \*\*([^*]+)\*\*：([^（\n]+)/g)];
+                    return matches.map((mat, i) => {
+                      const name = mat[1].trim();
+                      const duty = mat[2].trim();
+                      return (
+                        <button key={i} type="button" className="btn btn--go" onClick={() => void quickBuildAgent(name, duty)} title={duty}>
+                          ＋ 建「{name}」
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
               {/*
                 第 26 步：来源标注 —— 这条回答是从哪些网页查到的。
                 点一条就跳原始网页：`target="_blank"` 会走到主进程第 17 步就装好的
@@ -3351,7 +3500,7 @@ export default function App() {
                   ? '正在打字…'
                   : awaitHere
                     ? '回复小助的提问即可，发出后自动继续…'
-                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（消息加密存服务端，刷新后还在）`
+                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“建一个销售助手”立刻建好，不挡你）`
             }
             value={input}
             onChange={(e) => setInput(e.target.value)}

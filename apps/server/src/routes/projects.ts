@@ -65,7 +65,7 @@ function projectIdFromParams(req: FastifyRequest): number | null {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
-export function registerProjectRoutes(app: FastifyInstance, { pool, env }: ProjectDeps): void {
+export function registerProjectRoutes(app: FastifyInstance, { pool, env, cipher }: ProjectDeps): void {
   // ------------------------------------------------------------------ 我的项目
   app.get('/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
@@ -81,13 +81,22 @@ export function registerProjectRoutes(app: FastifyInstance, { pool, env }: Proje
   });
 
   // -------------------------------------------------- 建项目（连带建母鸡 + 设为当前）
+  // 批次 E：第一个智能体自己提议该建哪些同事（进对话流，不弹仪表盘，立刻建好不挡你）
   app.post('/projects', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     const name = cleanProjectName((req.body as { name?: unknown } | null)?.name);
     if (!name) return errJson(reply, 400, '给项目起个名字（不能为空）');
     try {
-      const { project } = await createProjectWithHen(pool, claims.sub, name);
+      const { project, henAgentId } = await createProjectWithHen(pool, claims.sub, name);
+      if (henAgentId) {
+        try {
+          const { seedColleagueProposal } = await import('../orchestrator/agentBuilder');
+          await seedColleagueProposal(pool, cipher, claims.sub, project.id, name, henAgentId);
+        } catch (e) {
+          console.warn('[projects] 提议同事失败（忽略）：', (e as Error).message);
+        }
+      }
       const out: ProjectCreateResult = { project };
       return out;
     } catch (err) {

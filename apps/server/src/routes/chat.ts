@@ -59,6 +59,10 @@ import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
 import { orchestrationBlockFor } from '../orchestrator/roster';
+import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
+import { triggerByEvent } from '../orchestrator/routines';
+import { buildWhiteboardBlock } from '../orchestrator/whiteboard';
+import { buildSkillBlock } from '../orchestrator/skills';
 
 export interface ChatDeps {
   pool: Pool;
@@ -272,7 +276,24 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
     }
 
     try {
-      const conv = await resolveConversation(pool, claims.sub, conversationId, message, agentId);
+      // 总协调路由：未指定 agent 且是新会话时，先按职责路由到最合适的智能体
+      let routedAgentId: number | null = agentId;
+      let routeDecision: any = null;
+      if (!conversationId && !agentId) {
+        try {
+          const curProj = await currentProjectId(pool, claims.sub);
+          if (curProj !== null) {
+            const decision = await routeTask(pool, claims.sub, curProj, message, { explicitAgentId: null, currentAgentId: null });
+            if (decision) {
+              routedAgentId = decision.toAgentId;
+              routeDecision = decision;
+              // 记录路由到对话流（无感核心）
+              void logRouteDecision(pool, cipher, decision, message, '管家路由').catch(() => undefined);
+            }
+          }
+        } catch {}
+      }
+      const conv = await resolveConversation(pool, claims.sub, conversationId, message, routedAgentId ?? agentId);
       if ('err' in conv) return errJson(reply, conv.status, conv.err);
       const convId = conv.id;
 
@@ -291,6 +312,86 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         browserOpened: openedUrl,
         page: body?.taskMode === true && taskWcId !== null ? { wcId: taskWcId, userId: claims.sub, agentId } : null,
       });
+
+      // 批次 E 修 4 | 对话式建智能体：先确认再建，无关键词回落 LLM，问句不建
+      try {
+        const abMod = await import('../orchestrator/agentBuilder');
+        const pending = abMod.getPendingBuildIntent(convId);
+        if (pending && abMod.isConfirmMessage(message)) {
+          const projForBuild = await currentProjectId(pool, claims.sub);
+          if (projForBuild !== null) {
+            const creatorRow = await pool.query<{ id: string }>(
+              `SELECT id FROM agents WHERE project_id=$1 AND can_create_agents=true ORDER BY CASE WHEN kind='hen' THEN 0 WHEN kind='assistant' THEN 1 ELSE 2 END, id ASC LIMIT 1`,
+              [projForBuild],
+            );
+            const creatorId = creatorRow.rows[0] ? Number(creatorRow.rows[0].id) : null;
+            const fallbackRow = creatorId === null ? await pool.query<{ id: string }>(`SELECT id FROM agents WHERE project_id=$1 ORDER BY id ASC LIMIT 1`, [projForBuild]) : null;
+            const finalCreatorId = creatorId ?? (fallbackRow?.rows[0] ? Number(fallbackRow.rows[0].id) : null);
+            if (finalCreatorId !== null) {
+              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, pending);
+              abMod.clearPendingBuildIntent(convId);
+              const builtMsg = `已建好「${built.name}」：${pending.duty}。直接和TA聊就行，对话里说"建一个XXX"就能继续建同事，不挡你。`;
+              const umTmp = await pool.query<{ id: string }>(
+                "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
+                [convId, cipher.encryptText(message)],
+              );
+              await pool.query(
+                "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2)",
+                [convId, cipher.encryptText(builtMsg)],
+              );
+              reply.hijack();
+              const res = reply.raw;
+              res.writeHead(200, {
+                'content-type': 'text/event-stream; charset=utf-8',
+                'cache-control': 'no-cache, no-transform',
+                connection: 'keep-alive',
+                'x-accel-buffering': 'no',
+                'access-control-allow-origin': req.headers.origin ?? '*',
+              });
+              const sseLocal = (ev: string | null, data: unknown) => {
+                res.write(`${ev ? `event: ${ev}\\n` : ''}data: ${JSON.stringify(data)}\\n\\n`);
+              };
+              sseLocal('meta', { conversationId: convId, userMessageId: Number(umTmp.rows[0].id), agentId: routedAgentId ?? agentId });
+              sseLocal(null, { delta: builtMsg });
+              sseLocal('done', { conversationId: convId, messageId: Date.now(), contentLength: builtMsg.length, searches: 0, sources: [] });
+              res.end();
+              return;
+            }
+          }
+        }
+        const buildIntent = abMod.detectBuildIntent(message);
+        if (buildIntent) {
+          abMod.setPendingBuildIntent(convId, buildIntent);
+          const confirmMsg = `要建一个「${buildIntent.name}」，职责：${buildIntent.duty}，确认就建？（回"确认/可以/建吧"）`;
+          const umTmp = await pool.query<{ id: string }>(
+            "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
+            [convId, cipher.encryptText(message)],
+          );
+          await pool.query(
+            "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2)",
+            [convId, cipher.encryptText(confirmMsg)],
+          );
+          reply.hijack();
+          const res = reply.raw;
+          res.writeHead(200, {
+            'content-type': 'text/event-stream; charset=utf-8',
+            'cache-control': 'no-cache, no-transform',
+            connection: 'keep-alive',
+            'x-accel-buffering': 'no',
+            'access-control-allow-origin': req.headers.origin ?? '*',
+          });
+          const sseLocal = (ev: string | null, data: unknown) => {
+            res.write(`${ev ? `event: ${ev}\\n` : ''}data: ${JSON.stringify(data)}\\n\\n`);
+          };
+          sseLocal('meta', { conversationId: convId, userMessageId: Number(umTmp.rows[0].id), agentId: routedAgentId ?? agentId });
+          sseLocal(null, { delta: confirmMsg });
+          sseLocal('done', { conversationId: convId, messageId: Date.now(), contentLength: confirmMsg.length, searches: 0, sources: [] });
+          res.end();
+          return;
+        }
+      } catch (e) {
+        console.warn('[chat] 对话式建智能体失败，回落到普通聊天：', (e as Error).message);
+      }
 
       // 1) 先读历史（不含本句），再落用户消息
       const hist = await pool.query<{ role: string; content_enc: string }>(
@@ -320,6 +421,12 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         [convId, cipher.encryptText(message)],
       );
       const userMessageId = Number(um.rows[0].id);
+      // 事件触发：收到用户消息 → 扫 event 类型的 Routines（描述=长期规矩）
+      try {
+        const projRow = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
+        const projId = Number(projRow.rows[0]?.project_id ?? 0);
+        if (projId) void triggerByEvent(pool, cipher, 'message', { userId: claims.sub, projectId: projId }).catch(() => undefined);
+      } catch {}
 
       /**
        * 服务端自主意图判断：是否进入任务模式（taskMode）。
@@ -389,6 +496,28 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         const convAgent = await pool.query<{ agent_id: string | null }>('SELECT agent_id FROM conversations WHERE id = $1', [convId]);
         const convAgentId = Number(convAgent.rows[0]?.agent_id);
         const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;
+        // 记忆合并第二批：任务轮三级作用域（账号级+智能体级+会话级）+ 项目白板共享
+        let taskMemoryBlock: string | undefined;
+        let taskWhiteboardBlock: string | undefined;
+        let taskSkillBlock: string | undefined;
+        try {
+          taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null, convId ?? null);
+        } catch (err) {
+          console.warn('[chat] 任务轮记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
+        }
+        try {
+          const projRow = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
+          const pid = Number(projRow.rows[0]?.project_id ?? 0);
+          if (pid) {
+            taskWhiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, pid);
+            try {
+              const skillRes = await buildSkillBlock(pool, cipher, claims.sub, pid, message);
+              taskSkillBlock = skillRes.block;
+            } catch {}
+          }
+        } catch {}
+        const combinedMemoryBlock = [taskMemoryBlock, taskWhiteboardBlock, taskSkillBlock].filter(Boolean).join('\n\n');
+
         const loop = startLoop(env, {
           userId: claims.sub,
           agentId: loopAgentId,
@@ -400,6 +529,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
           // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。
           orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, loopAgentId),
+          memoryBlock: combinedMemoryBlock || taskMemoryBlock,
           state: {
             current_task: state.current_task,
             browser_confirmed: state.browser_confirmed,
@@ -440,12 +570,21 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
 
       // 第 10 步：该用户已确认的档案记忆注入系统提示词（无记忆=空串，行为与第 9 步一致）
       // 第 16 步：它只是**参考**（buildMemoryBlock 自己带「可被当前指令覆盖」的表头）。
-      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message);
+      // 记忆合并第二批：三级作用域，支持按 owner+agent+conversation 过滤
+      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, agentId ?? null, convId ?? null);
+      // 批次 F | Skills：按触发条件匹配技能，注入 identityBlock 技能槽
+      let skillBlock = '';
+      try {
+        const projRowForSkill = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
+        const pidForSkill = Number(projRowForSkill.rows[0]?.project_id ?? 0);
+        const skillRes = await buildSkillBlock(pool, cipher, claims.sub, Number.isInteger(pidForSkill) && pidForSkill > 0 ? pidForSkill : null, message);
+        skillBlock = skillRes.block;
+      } catch {}
       // 第 15 步 · 两层记忆 + 当前智能体人设：
       //   - 用户记忆库（账号级）：所有智能体都读得到，是「这个人」的习惯/口味；
       //   - 项目记忆（智能体级）：**只**读当前会话所属智能体那一份，绝不串号；
       //   - 人设：引导表填完就按它干活；没填完只让模型引导用户去填表，不许空人设乱聊。
-      const agentCtx = await buildAgentContext(pool, cipher, claims.sub, convId, agentId);
+      const agentCtx = await buildAgentContext(pool, cipher, claims.sub, convId, agentId, skillBlock);
       const userMemoryBlockRaw = await buildUserMemoryBlock(pool, cipher, claims.sub);
       // 第 11 步：知识库资料是与 memories 完全独立的、仅聊天用的上下文位置。
       // buildKnowledgeBlock 只按当前 owner 的加密片段做关键词字面匹配；空命中/异常都返回空，
@@ -503,6 +642,13 @@ ${
        * （实测：「请问你现在想让我做什么：继续在 YouTube 上操作，还是去抖店看订单数据？」）。
        * task_switched 由 applyUserMessage 算好（不落库）。
        */
+      // 项目共享白板：所有成员自动注入
+      let whiteboardBlock = '';
+      try {
+        if (Number.isInteger(convProjectId) && convProjectId > 0) {
+          whiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, convProjectId);
+        }
+      } catch {}
       const systemParts = [
         systemPromptHead(agentCtx.agentName),
         agentCtx.personaBlock,
@@ -531,6 +677,7 @@ ${
         sessionStateBlock(state),
         userMemoryBlockRaw,
         agentCtx.projectMemoryBlock,
+        whiteboardBlock,
         memBlock,
         knowledgeBlock,
         browserContext,

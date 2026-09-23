@@ -1,7 +1,7 @@
 {
   "label": "HEAD",
   "repo": "/home/user/Role",
-  "at": "2026-09-22T11:06:49.142Z",
+  "at": "2026-09-23T13:37:07.575Z",
   "item5": true,
   "item6": true,
   "liveLoopsMatches": true,
@@ -17,7 +17,20 @@
     "runningLoops": 5,
     "liveLoopsWindowMs": 60000,
     "pageStates": 2,
-    "time": "2026-09-22T11:06:49.140Z"
+    "jobs": {
+      "live": 0,
+      "byKind": {
+        "workers": 0,
+        "delegate": 0
+      },
+      "workersSpawned": 0,
+      "delegationsStarted": 0,
+      "timeouts": 0
+    },
+    "subLoops": 0,
+    "orchestration": "on",
+    "delegateTimeoutMs": 600000,
+    "time": "2026-09-23T13:37:07.574Z"
   },
   "results": [
     {

@@ -52,3 +52,6 @@ export {
   sameSite,
   toHttpUrl,
 } from './url';
+
+export { ComputerVisibility } from './ComputerVisibility';
+export type { ComputerVisibility as ComputerVisibilityLevel } from './ComputerVisibility';

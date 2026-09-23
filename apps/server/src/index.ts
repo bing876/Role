@@ -32,7 +32,15 @@ import { registerMultiAgentRoutes } from './routes/agents';
 import { registerProjectRoutes } from './routes/projects';
 import { registerLoopRoutes } from './routes/loop';
 import { registerChannelRoutes } from './routes/channels';
+import { registerRoutineRoutes } from './routes/routines';
+import { registerHandoffRoutes } from './routes/handoffs';
+import { registerWhiteboardRoutes } from './routes/whiteboard';
+import { registerSkillsRoutes } from './routes/skills';
+import { registerComputerVisibilityRoutes } from './routes/computerVisibility';
 import { initOrchestrator } from './orchestrator/tools';
+import { startRoutineSweeper } from './orchestrator/routines';
+import { setCheckpointDeps } from './toolLoop';
+import { restoreLoops } from './orchestrator/checkpoint';
 import { jobStats } from './orchestrator/registry';
 import { subLoopCount } from './orchestrator/subLoops';
 import { liveLoopCount, runningLoopCount, agentLoopActiveWindowMs } from './toolLoop';
@@ -108,6 +116,16 @@ async function main(): Promise<void> {
   registerLoopRoutes(app, { pool, env, cipher });
   // 多智能体编排：内部频道的**只读**接口（用户看智能体之间怎么交流的）
   registerChannelRoutes(app, { pool, env, cipher });
+  // 定时/事件触发（Routines）：描述=长期规矩，对话=一次活
+  registerRoutineRoutes(app, { pool, env, cipher });
+  // 批次 A | 交接结构化：项目工作区 handoffs/ + board.md 单写者
+  registerHandoffRoutes(app, { pool, env, cipher });
+  // 批次 B | 项目共享白板：项目简报，所有成员自动注入；贴白板=待确认记忆卡
+  registerWhiteboardRoutes(app, { pool, env, cipher });
+  // 批次 F | Skills — teach-a-task 落成 skills 表
+  registerSkillsRoutes(app, { pool, env, cipher });
+  // 批次 H | 电脑三级可见度 — Status/Preview/Takeover，默认收起
+  registerComputerVisibilityRoutes(app, { pool, env, cipher });
   /**
    * 多智能体编排 · 装编排能力（web_search / spawn_workers / delegate 三个服务端工具 + 名额表）。
    *
@@ -119,7 +137,22 @@ async function main(): Promise<void> {
    *   `LOOP_SYSTEM_PROMPT` 从头到尾没改过一个字 —— 所以关掉就是**完全回到旧行为**。
    */
   initOrchestrator({ pool, env, cipher });
+  // 修 1：checkpoint 加密，传入 cipher，落库为密文，SELECT 读不到明文
+  setCheckpointDeps(pool, cipher);
   startIdleScheduler({ pool, env, cipher });
+  startRoutineSweeper(pool, cipher, 60_000);
+  // 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job（修 1 已加密）
+  void (async () => {
+    try {
+      const { restoreLoopFromCheckpoint } = await import('./toolLoop');
+      const restored = await restoreLoops(pool, (partial) => {
+        restoreLoopFromCheckpoint(partial as any);
+      }, cipher);
+      if (restored > 0) console.log(`[server] 重启恢复完成：${restored} 个循环已恢复（已解密）`);
+    } catch (err) {
+      console.warn('[checkpoint] 重启恢复失败（忽略）：', (err as Error).message);
+    }
+  })();
 
   // ★ 迁移必须**带重试**（2026-09-20 修）。
   //

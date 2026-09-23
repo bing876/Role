@@ -764,6 +764,16 @@ export interface AgentView {
   conversationId: number | null;
   /** 第 16 步：是否处于「启动并保活」监听态（挂在会话状态上；空闲不调模型） */
   listening?: boolean;
+  /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户 */
+  status?: 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done';
+  /** 状态人话摘要（折叠一行，细节前端可展开） */
+  statusDetail?: string;
+  /** 状态对应的循环 id（调试/追踪用） */
+  statusLoopId?: string | null;
+  /** 当前步数（有循环时） */
+  statusStep?: number;
+  /** 批次 C | 路由升级：职责为空/通用时前端警告，description 为燃料 */
+  dutyWarning?: string | null;
 }
 
 /** GET /agents */
@@ -1491,4 +1501,49 @@ export interface ResourceGuardSnapshot {
  * 阶段 0 · Tool Registry 定义侧（本包唯一的运行时模块，服务端专用）。
  * 桌面端只允许 import 上面的类型 —— 打包产物里没有这个包的运行时，详见 tools.ts 文件头。
  */
+/** 定时/事件触发（Routines）：描述=长期规矩，对话=一次活 */
+export type RoutineTriggerType = 'interval' | 'cron' | 'event';
+export interface RoutineView {
+  id: number;
+  projectId: number;
+  agentId: number;
+  agentName?: string;
+  name: string;
+  description: string;
+  triggerType: RoutineTriggerType;
+  triggerConfig: any;
+  taskTemplate: string;
+  enabled: boolean;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  createdAt: string;
+}
+export interface RoutineListResult {
+  routines: RoutineView[];
+}
+export interface RoutineCreateResult {
+  routine: RoutineView;
+}
+
+/** 批次 B | 项目共享白板：项目简报，所有成员自动注入；贴白板=待确认记忆卡 */
+export interface WhiteboardView {
+  id: number;
+  projectId: number;
+  agentId: number | null;
+  content: string;
+  status: 'active' | 'pending' | 'archived';
+  needsConfirm: boolean;
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface WhiteboardListResult {
+  projectId: number;
+  whiteboard: WhiteboardView[];
+}
+export interface WhiteboardPostResult {
+  ok: boolean;
+  whiteboard: WhiteboardView;
+}
+
 export * from './tools';

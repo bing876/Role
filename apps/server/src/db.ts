@@ -14,6 +14,7 @@ import { Pool, type PoolClient } from 'pg';
 import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSensitive as isSensitiveMem } from './memoryNormalize';
 
 export function makePool(connectionString: string): Pool {
   if (connectionString.startsWith('pglite')) {
@@ -136,10 +137,14 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS unread BOOLEAN NOT NULL DEFAULT false
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS result_enc TEXT;
 
 -- 第 10 步：用户档案记忆挂 owner_id（全员共用）；老列 project_id/mem_key/value_enc 保留兼容
+-- 记忆合并第一批：project_id 改可空（NULL=不按项目隔离），agent_id 两级作用域（NULL=账号级，值=智能体级）
+-- 记忆合并第二批：conversation_id 三级作用域（NULL=账号/智能体级，值=会话级，会话级只在该会话注入）
+-- 记忆卫生：merged 状态表示被合并（原文保留可查），merged_into 指向新合并后的那条
 CREATE TABLE IF NOT EXISTS memories (
   id                BIGSERIAL PRIMARY KEY,
-  project_id        BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id        BIGINT REFERENCES projects(id) ON DELETE CASCADE,
   agent_id          BIGINT REFERENCES agents(id) ON DELETE SET NULL,
+  conversation_id   BIGINT REFERENCES conversations(id) ON DELETE CASCADE,
   mem_key           TEXT NOT NULL,
   value_enc         TEXT NOT NULL,
   owner_id          BIGINT REFERENCES users(id) ON DELETE CASCADE,
@@ -148,6 +153,7 @@ CREATE TABLE IF NOT EXISTS memories (
   source            TEXT,
   status            TEXT NOT NULL DEFAULT 'pending',
   needs_confirm     BOOLEAN NOT NULL DEFAULT false,
+  merged_into       BIGINT REFERENCES memories(id) ON DELETE SET NULL,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -155,13 +161,24 @@ CREATE INDEX IF NOT EXISTS idx_memories_project ON memories (project_id);
 
 -- 对第 5 步建过表的老库幂等补列（注入/列表一律按 owner_id 过滤，不按项目隔离）
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS owner_id BIGINT REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS agent_id BIGINT REFERENCES agents(id) ON DELETE SET NULL;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS conversation_id BIGINT REFERENCES conversations(id) ON DELETE CASCADE;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'preference';
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS content_encrypted TEXT;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS needs_confirm BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS merged_into BIGINT REFERENCES memories(id) ON DELETE SET NULL;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories (owner_id, status);
+-- 记忆合并：三级作用域唯一性（用户级/智能体级/会话级各自去重），只对 active/pending 生效，merged/archived 不占坑
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL AND conversation_id IS NULL AND status IN ('active','pending');
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL AND conversation_id IS NULL AND status IN ('active','pending');
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_session ON memories (conversation_id, mem_key) WHERE conversation_id IS NOT NULL AND status IN ('active','pending');
+CREATE INDEX IF NOT EXISTS idx_memories_owner_agent ON memories (owner_id, agent_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_conversation ON memories (conversation_id, updated_at DESC) WHERE conversation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_owner_agent_conv ON memories (owner_id, agent_id, conversation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_merged ON memories (merged_into) WHERE merged_into IS NOT NULL;
 
 -- 第 11 步：知识库和第 10 步 memories 完全分表。上传的原文件不落盘；
 -- 文件名 filename_enc 与每个资料正文片段 content_enc 均为 AES-256-GCM 密文。
@@ -195,19 +212,9 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_owner ON knowledge_chunks (owner
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS persona JSONB;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS persona_status TEXT NOT NULL DEFAULT 'ready';
 
--- 第 15 步 · 第一层：用户记忆库（账号级）。所有智能体都能读，属于「这个人」的习惯/口味/展示偏好。
--- 和第 10 步的 memories 完全分表（那张表是老确认流，本步不再往里写）。
-CREATE TABLE IF NOT EXISTS user_memories (
-  id           BIGSERIAL PRIMARY KEY,
-  owner_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  mem_key      TEXT NOT NULL,
-  content_enc  TEXT NOT NULL,
-  source       TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (owner_id, mem_key)
-);
-CREATE INDEX IF NOT EXISTS idx_user_memories_owner ON user_memories (owner_id, updated_at DESC);
+-- 第 15 步 · 第一层（已合并到 memories）：用户记忆库原来是 user_memories 表，账号级。
+-- 记忆合并第一批后单一 memories 表（agent_id IS NULL = 账号级），旧表由迁移逻辑 DROP。
+-- 这里不再 CREATE 旧表，避免新库又建出两套。
 
 -- 第 16 步：轻量会话状态（每个智能体那条会话一份）——直接补在**现有会话表**上，
 -- 不新建 SQLite、不建第二套库。这些字段每轮进模型上下文，否则改提示词也无效。
@@ -229,21 +236,9 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS state_updated_at TIMESTAMPTZ 
 -- 明文 JSONB（不是密文）是刻意的：内容是公开网页地址，且要能直接在界面上渲染。
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB;
 
--- 第 15 步 · 第二层：项目记忆（智能体级）。一个智能体一份，**绝不串**。
--- agent_id 是 NOT NULL 外键：查询一律 owner_id + agent_id 双条件，别的智能体的项目记忆读不到；
--- 删智能体时级联删掉它自己的项目记忆（不会误伤别人）。
-CREATE TABLE IF NOT EXISTS agent_memories (
-  id           BIGSERIAL PRIMARY KEY,
-  owner_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  agent_id     BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
-  mem_key      TEXT NOT NULL,
-  content_enc  TEXT NOT NULL,
-  source       TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (agent_id, mem_key)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories (agent_id, updated_at DESC);
+-- 第 15 步 · 第二层（已合并到 memories）：项目记忆原来是 agent_memories 表，智能体级。
+-- 记忆合并第一批后单一 memories 表（agent_id = 智能体ID = 智能体级），旧表由迁移逻辑 DROP。
+-- 这里不再 CREATE 旧表，避免新库又建出两套。
 
 -- ---------------------------------------------------------------------------
 -- 子阶段 2-A：把「项目」从「一个用户一条默认项目」升级成真正的容器。
@@ -258,6 +253,19 @@ CREATE INDEX IF NOT EXISTS idx_agent_memories_agent ON agent_memories (agent_id,
 -- ---------------------------------------------------------------------------
 ALTER TABLE users ADD COLUMN IF NOT EXISTS current_project_id BIGINT REFERENCES projects(id) ON DELETE SET NULL;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS can_create_agents BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS computer_visibility TEXT NOT NULL DEFAULT 'status';
+-- 批次 H | 电脑三级可见度：Status/Preview/Takeover，默认收起
+-- 约束：只允许 status/preview/takeover 三档
+-- 幂等：老库补列
+-- ★ 必须是 $$（美元引号）。3cd7c14 里被写成了单个 $ —— 补丁用 JS String.replace 写入，
+--   替换串里的 "$$" 会被解释成一个 "$"。结果整段 DDL 在真 PostgreSQL 上语法错误、一张表都建不出来，
+--   而当时的验收脚本只读源码不连库，没发现。scripts/verify/checkpoint-encryption-db.mjs 连真库才抓到。
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_agents_computer_visibility') THEN
+    ALTER TABLE agents ADD CONSTRAINT chk_agents_computer_visibility CHECK (computer_visibility IN ('status','preview','takeover'));
+  END IF;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_project ON knowledge_documents (project_id, id DESC);
@@ -356,6 +364,131 @@ CREATE TABLE IF NOT EXISTS agent_delegations (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_user ON agent_delegations (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_channel ON agent_delegations (channel_id, id DESC);
+
+-- 定时/事件触发（Routines）：Gro kBot 的 Routines，描述=长期规矩，对话=一次活
+-- trigger_type: interval(每 N 分钟)/cron(表达式)/event(事件)
+-- trigger_config: {intervalMinutes, cron, eventKind}
+-- task_template: 要执行的任务描述（≤600 字），触发时写入 agent 的对话流
+CREATE TABLE IF NOT EXISTS agent_routines (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id      BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id        BIGINT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  description     TEXT,
+  trigger_type    TEXT NOT NULL CHECK (trigger_type IN ('interval','cron','event')),
+  trigger_config  JSONB NOT NULL DEFAULT '{}'::jsonb,
+  task_template   TEXT NOT NULL,
+  enabled         BOOLEAN NOT NULL DEFAULT true,
+  last_run_at     TIMESTAMPTZ,
+  next_run_at     TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_agent_routines_user ON agent_routines (user_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_routines_agent ON agent_routines (agent_id, enabled, next_run_at);
+CREATE INDEX IF NOT EXISTS idx_agent_routines_project ON agent_routines (project_id, enabled);
+
+-- 批次 B | 项目共享白板：project scope 记忆暴露成“项目简报”，所有成员自动注入；贴白板=待确认记忆卡
+-- 白板是项目级共享记忆，所有智能体自动注入
+CREATE TABLE IF NOT EXISTS project_whiteboard (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id      BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id        BIGINT REFERENCES agents(id) ON DELETE SET NULL,
+  mem_key         TEXT NOT NULL,
+  content_enc     TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  needs_confirm   BOOLEAN NOT NULL DEFAULT false,
+  source          TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_project_whiteboard ON project_whiteboard (project_id, mem_key) WHERE status IN ('active','pending');
+CREATE INDEX IF NOT EXISTS idx_project_whiteboard_project ON project_whiteboard (project_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_whiteboard_user ON project_whiteboard (user_id, project_id);
+
+-- 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job
+-- 修 1（安全）：messages 若为明文 JSONB，改为加密——整列 messages_enc TEXT 走 cipher，goal 同理 goal_enc TEXT
+-- 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，R2 当年专门给 task_pauses 加 goal_enc
+-- 旧列 messages/goal 保留作兼容，读取时优先 messages_enc/goal_enc，落库一律写加密列
+CREATE TABLE IF NOT EXISTS loop_checkpoints (
+  id              TEXT PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id        BIGINT,
+  conversation_id BIGINT,
+  wc_id           BIGINT,
+  goal            TEXT,
+  goal_enc        TEXT,
+  messages        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  messages_enc    TEXT,
+  pending_call_id TEXT,
+  executed_tool_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  step            INTEGER NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL,
+  tool_names      JSONB,
+  kind            TEXT,
+  parent_loop_id  TEXT,
+  chain           JSONB,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_user ON loop_checkpoints (user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_agent ON loop_checkpoints (agent_id, status);
+-- 修 1 幂等补列：老库已有 loop_checkpoints 时补 goal_enc/messages_enc
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS goal_enc TEXT;
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS messages_enc TEXT;
+-- 修 3 幂等：记录 pending 的 tool_call_id，重启后可去重，避免工具被执行第二次
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS pending_call_id TEXT;
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS executed_tool_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+-- 收尾 2 | board.md 落库锁：跨进程 / 跨重启的互斥（替代原来的进程内 Promise 链）
+-- 写 board.md 时在事务里 SELECT ... FOR UPDATE 这一行，持锁完成「读 → 追加 → 原子替换文件」再提交。
+--   * 跨进程有效：两个服务进程（重启交接期新旧进程并存 / tsx watch 重启）抢的是同一行锁；
+--   * 持锁进程被 kill -9：PG 发现连接断开即回滚事务、释放行锁，后来者不会死等；
+--   * version：每次成功追加 +1，只是写计数（诊断 / 验收用），不参与加锁判断。
+CREATE TABLE IF NOT EXISTS board_locks (
+  project_id  BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  version     BIGINT NOT NULL DEFAULT 0,
+  last_writer TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 批次 F | Skills — teach-a-task 落成 skills 表
+-- 触发条件+步骤+决策规则+产出要求+审批边界，命中时注入 identityBlock 技能槽，跑完能自我修订
+CREATE TABLE IF NOT EXISTS skills (
+  id                    BIGSERIAL PRIMARY KEY,
+  user_id               BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id            BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id              BIGINT REFERENCES agents(id) ON DELETE SET NULL,
+  name                  TEXT NOT NULL,
+  trigger_condition     TEXT NOT NULL,
+  trigger_enc           TEXT,
+  steps_enc             TEXT,
+  decision_rules_enc    TEXT,
+  output_requirements_enc TEXT,
+  approval_boundary_enc TEXT,
+  status                TEXT NOT NULL DEFAULT 'active',
+  version               INTEGER NOT NULL DEFAULT 1,
+  usage_count           INTEGER NOT NULL DEFAULT 0,
+  last_used_at          TIMESTAMPTZ,
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_skills_user ON skills (user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_skills_project ON skills (project_id, status);
+CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_id, status);
+CREATE INDEX IF NOT EXISTS idx_skills_trigger ON skills (user_id, trigger_condition);
+-- 幂等补列：老库已有 skills 时补新字段
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS trigger_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS steps_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS decision_rules_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS output_requirements_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS approval_boundary_enc TEXT;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+ALTER TABLE skills ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
 `;
 
 
@@ -485,8 +618,194 @@ async function migrateProjectScope(pool: Pool): Promise<void> {
   }
 }
 
+async function tableExists(pool: Pool, name: string): Promise<boolean> {
+  try {
+    const r = await pool.query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'public' AND table_name = $1
+       ) AS exists`,
+      [name],
+    );
+    return Boolean(r.rows[0]?.exists);
+  } catch {
+    // PGlite 兼容：直接试 SELECT 1，失败即不存在
+    try {
+      await pool.query(`SELECT 1 FROM ${name} LIMIT 1`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
+ * 记忆合并第一批 · 结构补丁
+ * - memories.project_id 改可空
+ * - memories.agent_id 确保有列
+ * - 两级唯一索引
+ * 记忆合并第二批：
+ * - memories.conversation_id 三级作用域（会话级）
+ * - 三级唯一索引 + 会话级索引
+ */
+async function migrateMemoriesStructure(pool: Pool): Promise<void> {
+  try {
+    await pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS agent_id BIGINT REFERENCES agents(id) ON DELETE SET NULL');
+  } catch (err) {
+    console.warn('[db] memories.agent_id 补列失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS conversation_id BIGINT REFERENCES conversations(id) ON DELETE CASCADE');
+  } catch (err) {
+    console.warn('[db] memories.conversation_id 补列失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS merged_into BIGINT REFERENCES memories(id) ON DELETE SET NULL');
+  } catch (err) {
+    console.warn('[db] memories.merged_into 补列失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('ALTER TABLE memories ALTER COLUMN project_id DROP NOT NULL');
+  } catch {
+    // PGlite / 已是可空时可能报错，忽略
+  }
+  // 记忆卫生：唯一索引只对 active/pending 生效，merged/archived 不占坑；旧索引先删后建
+  try {
+    await pool.query('DROP INDEX IF EXISTS uniq_memories_user');
+  } catch {}
+  try {
+    await pool.query('DROP INDEX IF EXISTS uniq_memories_agent');
+  } catch {}
+  try {
+    await pool.query('DROP INDEX IF EXISTS uniq_memories_session');
+  } catch {}
+  try {
+    await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL AND conversation_id IS NULL AND status IN ('active','pending')");
+  } catch (err) {
+    console.warn('[db] uniq_memories_user 建索引失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL AND conversation_id IS NULL AND status IN ('active','pending')");
+  } catch (err) {
+    console.warn('[db] uniq_memories_agent 建索引失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_session ON memories (conversation_id, mem_key) WHERE conversation_id IS NOT NULL AND status IN ('active','pending')");
+  } catch (err) {
+    console.warn('[db] uniq_memories_session 建索引失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_owner_agent ON memories (owner_id, agent_id, updated_at DESC)');
+  } catch {}
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_conversation ON memories (conversation_id, updated_at DESC) WHERE conversation_id IS NOT NULL');
+  } catch {}
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_owner_agent_conv ON memories (owner_id, agent_id, conversation_id, updated_at DESC)');
+  } catch {}
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_merged ON memories (merged_into) WHERE merged_into IS NOT NULL');
+  } catch {}
+}
+
+/**
+ * 记忆合并第一批 · 数据迁移
+ * - 从 user_memories / agent_memories 幂等搬到 memories
+ * - 迁移时过敏感闸（按 mem_key 判定，已加密的 content_enc 无法解密时以 key 为准）
+ * - 搬完 DROP 老表
+ */
+async function migrateMemoriesMerge(pool: Pool): Promise<void> {
+  const hasUser = await tableExists(pool, 'user_memories');
+  const hasAgent = await tableExists(pool, 'agent_memories');
+  if (!hasUser && !hasAgent) return;
+
+  let userMoved = 0;
+  let userSkippedSensitive = 0;
+  let agentMoved = 0;
+  let agentSkippedSensitive = 0;
+
+  if (hasUser) {
+    try {
+      const r = await pool.query<{ owner_id: string; mem_key: string; content_enc: string; source: string | null }>(
+        'SELECT owner_id, mem_key, content_enc, source FROM user_memories',
+      );
+      for (const row of r.rows) {
+        const memKey = String(row.mem_key ?? '').trim();
+        if (!memKey) continue;
+        if (isSensitiveMem(memKey)) {
+          userSkippedSensitive += 1;
+          continue;
+        }
+        try {
+          const ins = await pool.query(
+            `INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
+             VALUES (NULL, NULL, NULL, $1, $2, $3, 'preference', $2, $4, 'active', false)
+             ON CONFLICT DO NOTHING`,
+            [memKey, row.content_enc, row.owner_id, row.source || 'migrated_user'],
+          );
+          userMoved += ins.rowCount ?? 0;
+        } catch (err) {
+          console.warn('[db] user_memories 迁移单条失败（忽略）：', (err as Error).message);
+        }
+      }
+    } catch (err) {
+      console.warn('[db] 读取 user_memories 失败（忽略）：', (err as Error).message);
+    }
+  }
+
+  if (hasAgent) {
+    try {
+      const r = await pool.query<{
+        owner_id: string;
+        agent_id: string;
+        mem_key: string;
+        content_enc: string;
+        source: string | null;
+      }>('SELECT owner_id, agent_id, mem_key, content_enc, source FROM agent_memories');
+      for (const row of r.rows) {
+        const memKey = String(row.mem_key ?? '').trim();
+        if (!memKey) continue;
+        if (isSensitiveMem(memKey)) {
+          agentSkippedSensitive += 1;
+          continue;
+        }
+        try {
+          const ins = await pool.query(
+            `INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
+             VALUES (NULL, $1, NULL, $2, $3, $4, 'preference', $3, $5, 'active', false)
+             ON CONFLICT DO NOTHING`,
+            [row.agent_id, memKey, row.content_enc, row.owner_id, row.source || 'migrated_agent'],
+          );
+          agentMoved += ins.rowCount ?? 0;
+        } catch (err) {
+          console.warn('[db] agent_memories 迁移单条失败（忽略）：', (err as Error).message);
+        }
+      }
+    } catch (err) {
+      console.warn('[db] 读取 agent_memories 失败（忽略）：', (err as Error).message);
+    }
+  }
+
+  console.log(
+    `[db] 记忆合并迁移：user ${userMoved} 条（敏感跳过 ${userSkippedSensitive}）、agent ${agentMoved} 条（敏感跳过 ${agentSkippedSensitive}）`,
+  );
+
+  try {
+    await pool.query('DROP TABLE IF EXISTS user_memories CASCADE');
+  } catch (err) {
+    console.warn('[db] DROP user_memories 失败（忽略）：', (err as Error).message);
+  }
+  try {
+    await pool.query('DROP TABLE IF EXISTS agent_memories CASCADE');
+  } catch (err) {
+    console.warn('[db] DROP agent_memories 失败（忽略）：', (err as Error).message);
+  }
+}
+
 export async function migrate(pool: Pool): Promise<void> {
   await pool.query(DDL);
+  await migrateMemoriesStructure(pool);
+  await migrateMemoriesMerge(pool);
   await migrateProjectScope(pool);
   await dedupeAgentConversations(pool);
   await ensureAgentConversationIndex(pool);

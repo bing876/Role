@@ -22,6 +22,10 @@ import { initOrchestrator } from '../../apps/server/src/orchestrator/tools';
 import { executeDelegate } from '../../apps/server/src/orchestrator/delegation';
 import { resetRegistryForTest, initRegistry, markAgentBusy, markAgentWaiting } from '../../apps/server/src/orchestrator/registry';
 import type { ServerExecutionContext } from '../../apps/server/src/toolRegistry';
+import { readHandoffFile } from '../../apps/server/src/orchestrator/handoff';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 let fails = 0;
 let passes = 0;
@@ -86,6 +90,8 @@ function installStub(): void {
 async function main(): Promise<void> {
   log('=== 多智能体编排 · S6 委派闸 + 内部频道验收 ===');
   installStub();
+  // 交接文件写到临时目录，别污染 apps/server/data/handoffs（以前每跑一次就往真数据目录里写一份）
+  process.env.HANDOFF_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'orc-delegate-handoffs-'));
   const pool = makePool('pglite://memory');
   await migrate(pool);
   const cipher = makeCipher(ENV.dataKey);
@@ -172,12 +178,17 @@ async function main(): Promise<void> {
       assert.ok(new Date(row.deadline_at).getTime() > Date.now(), 'deadline 该在未来');
       assert.ok(row.child_loop_id, '该记下子循环 id');
     });
-    await check('频道里有一条 task 消息（发起方 101 → 102），正文含任务', async () => {
+    await check('频道里有一条 task 消息（发起方 101 → 102），只传 handoff 路径，任务在交接文件里', async () => {
+      // 批次 A（f26a643）起「委派消息只传路径不传内容」：频道 task 消息正文 = handoff://<项目>/<委派>.md，
+      // 任务全文写在交接文件里。原断言 /三家竞品/.test(task.text) 没跟着改，verify:orch 从批次 A 起一直红。
       const msgs = await messagesOf(101, 102);
       const task = msgs.find((m) => m.kind === 'task');
       assert.ok(task, `频道里没有 task 消息：${JSON.stringify(msgs.map((m) => m.kind))}`);
       assert.equal(task.from, 101);
-      assert.ok(/三家竞品/.test(task.text));
+      const m = /^handoff:\/\/10\/(\d+)\.md$/.exec(task.text);
+      assert.ok(m, `task 正文应是 handoff 路径，实际：${task.text.slice(0, 80)}`);
+      const file = readHandoffFile(10, Number(m[1]));
+      assert.ok(file && /三家竞品/.test(file), '交接文件里应有任务全文');
     });
     await check('正文是**密文**存的（content_enc 里读不到原文）', async () => {
       const ch = await pool.query<{ id: string }>('SELECT id FROM agent_channels WHERE user_id = 1 LIMIT 1');

@@ -24,7 +24,8 @@
 import type { ChatSource, WorkerBatchResult, WorkerReport, WorkerTaskSpec } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
 import { llmFetch, type LlmMessage } from '../llm';
-import { WEB_SEARCH_SERVER_TOOL, formatSearchForModel, runWebSearch } from './search';
+import { WEB_SEARCH_TOOL_DEFINITION } from '../search/toolDef';
+import { formatSearchForModel, runWebSearch } from './search';
 import { WORKER_SYSTEM_PROMPT } from './prompts';
 import { redactForStorage } from './redact';
 
@@ -159,7 +160,19 @@ async function runOneWorker(
     const sources: ChatSource[] = [];
     let rounds = 0;
     const canSearch = input.allowSearch && input.maxSearchRounds > 0;
-    const tools = canSearch ? [WEB_SEARCH_SERVER_TOOL] : undefined;
+    // 单一来源：用 toolDef 的定义转成 OpenAI tool（之前直接传 ToolDefinition 形状不对，靠桩测试没暴露）
+    const tools = canSearch
+      ? [
+          {
+            type: 'function' as const,
+            function: {
+              name: WEB_SEARCH_TOOL_DEFINITION.name,
+              description: WEB_SEARCH_TOOL_DEFINITION.description,
+              parameters: WEB_SEARCH_TOOL_DEFINITION.parameters as any,
+            },
+          },
+        ]
+      : undefined;
 
     // 检索阶段：最多 maxSearchRounds 轮；模型不调工具就直接进汇总阶段
     while (canSearch && rounds < input.maxSearchRounds) {

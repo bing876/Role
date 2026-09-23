@@ -50,6 +50,9 @@ import {
 import { findAgentByNameAnyProject, loadProjectRoster, projectOfAgent, resolveDelegateTarget } from './roster';
 import { orchestrationBlock, subAgentSystemPrompt } from './prompts';
 import { orchestratorDeps } from './tools';
+import { writeCollabBoth, writeCollabToAgentChat } from './collabChat';
+import { triggerByEvent } from './routines';
+import { writeHandoffFile, getHandoffUri, appendBoardWithLock, updateHandoffStatus } from './handoff';
 
 const TASK_MAX = 600;
 const CONTEXT_MAX = 2000;
@@ -119,7 +122,7 @@ export const DELEGATE_TOOL: ToolDefinition = {
   },
 };
 
-/** 委派被拒：当场回执（不 park）+ 频道留痕，让发起方自己决定下一步 */
+/** 委派被拒：当场回执（不 park）+ 频道留痕 + 对话流留痕（无感核心：协同进对话流） */
 async function reject(
   ctx: ServerExecutionContext,
   reason: keyof typeof REJECT_TEXT | string,
@@ -127,6 +130,23 @@ async function reject(
 ): Promise<LoopToolResult> {
   const text = REJECT_TEXT[reason] ?? `这次委派被拒了（${reason}）。`;
   await writeSystem(ctx, target, reason, text).catch(() => undefined);
+  // 无感核心：被拒也要进对话流，折叠成一行摘要（前端后续渲染成折叠卡）
+  try {
+    const { pool, cipher } = orchestratorDeps();
+    const fromId = ctx.agentId;
+    if (fromId && target && target.id) {
+      const fromName = `#${fromId}`;
+      await writeCollabToAgentChat(pool, cipher, fromId, {
+        kind: 'system',
+        fromId,
+        fromName,
+        toId: target.id,
+        toName: target.name,
+        status: 'rejected',
+        detail: text,
+      });
+    }
+  } catch {}
   return {
     ok: false,
     error: reason,
@@ -218,19 +238,61 @@ export async function executeDelegate(
     status: 'running',
     deadlineAt,
   });
+  // 批次 A | 交接结构化：每个委派一个文件 handoffs/<delegationId>.md，含 目标/输入/产出要求/审批边界，委派消息只传路径
+  try {
+    writeHandoffFile(projectId, delegationId, {
+      delegationId,
+      projectId,
+      fromAgentId: fromId,
+      fromAgentName: fromName,
+      toAgentId: target.id,
+      toAgentName: target.name,
+      goal: task,
+      input: context,
+      outputRequire: expect || '明确结论 + 要点提纲，stop(reason=done) 收尾',
+      approvalBoundary: '敏感信息不外发、不索要；高风险必须 stop(reason=need_user)；没有浏览器手不能说已打开',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      deadlineAt: deadlineAt.toISOString(),
+    });
+  } catch (err) {
+    console.warn(`[handoff] 写入交接文件失败（忽略）：`, (err as Error).message);
+  }
+  // board.md：落库锁（board_locks 行锁）保护的追加 —— 跨进程 / 跨重启都不丢（收尾 2）
+  // 失败要说出来（以前是 .catch(() => undefined) 静默吞掉 —— 丢了都不知道）
+  void appendBoardWithLock(pool, projectId, fromId, `- [${new Date().toISOString()}] #${delegationId} ${fromName}→${target.name}: ${task.slice(0, 80)} (${getHandoffUri(projectId, delegationId)})`).catch((err) => {
+    console.warn(`[handoff] board.md 追加失败（委派 #${delegationId} 本身照常进行）：`, (err as Error).message);
+  });
+
   await addChannelMessage(pool, cipher, {
     channelId,
     fromAgentId: fromId,
     toAgentId: target.id,
     kind: 'task',
-    text: task + (context ? `\n\n【背景资料】\n${context}` : '') + (expect ? `\n\n【希望你回】\n${expect}` : ''),
-    payload: { status: 'running', delegationId },
+    text: getHandoffUri(projectId, delegationId),
+    payload: { status: 'running', delegationId, handoffPath: getHandoffUri(projectId, delegationId) },
     delegationId,
   });
+  // 无感核心：协同进对话流（派单方和接单方各一条，折叠摘要）—— 对话流仍带任务摘要，频道只传路径
+  void writeCollabBoth(pool, cipher, {
+    kind: 'dispatch',
+    fromId,
+    fromName,
+    toId: target.id,
+    toName: target.name,
+    task,
+    delegationId,
+  }).catch(() => undefined);
 
   // 子循环：**分离式**（不进主 loops Map）、没有页、工具表里没有浏览器工具
   const roster = await loadProjectRoster(pool, ctx.userId, projectId, target.id);
   const targetPersona = await loadAgentPersona(pool, target.id);
+  // 记忆合并第一批：子循环也带记忆块（账号级+被委派智能体级）
+  let delegateMemoryBlock: string | undefined;
+  try {
+    const { buildMemoryBlock } = await import('../routes/memories');
+    delegateMemoryBlock = await buildMemoryBlock(pool, cipher, ctx.userId, task.slice(0, 500), target.id);
+  } catch {}
   const sub = startLoop(env, {
     userId: ctx.userId,
     agentId: target.id,
@@ -245,6 +307,7 @@ export async function executeDelegate(
     detached: true,
     systemPrompt: subAgentSystemPrompt({ selfName: target.name, persona: targetPersona, fromName }),
     orchestrationBlock: orchestrationBlock(target.id, roster),
+    memoryBlock: delegateMemoryBlock,
   });
   registerSubLoop(sub);
   await setDelegationChildLoop(pool, delegationId, sub.id);
@@ -301,10 +364,21 @@ export async function executeDelegate(
           payload: { reason, delegationId, status: 'failed' },
           delegationId,
         }).catch(() => undefined);
+        void writeCollabBoth(pool, cipher, {
+          kind: 'system',
+          fromId,
+          fromName,
+          toId: target.id,
+          toName: target.name,
+          status: 'failed',
+          detail: `委派被取消：${reason}`,
+          delegationId,
+        }).catch(() => undefined);
         return;
       }
       /**
        * ★ 用户要求 2（超时熔断）：**如实告知「暂未完成」**，不假装完成、不留它挂着。
+       * 无感核心：超时也要进对话流
        */
       const mins = Math.round(orch.delegateTimeoutMs / 60_000);
       void finishDelegation(pool, delegationId, { status: 'timeout', error: `超过 ${mins} 分钟未完成` });
@@ -315,6 +389,16 @@ export async function executeDelegate(
         kind: 'system',
         text: `超过 ${mins} 分钟没有做完，这次委派按超时熔断处理（已完成的部分留在上面的过程记录里）。`,
         payload: { reason: 'timeout', delegationId, status: 'timeout' },
+        delegationId,
+      }).catch(() => undefined);
+      void writeCollabBoth(pool, cipher, {
+        kind: 'system',
+        fromId,
+        fromName,
+        toId: target.id,
+        toName: target.name,
+        status: 'timeout',
+        detail: `超过 ${mins} 分钟未完成，按超时熔断`,
         delegationId,
       }).catch(() => undefined);
       deliver({
@@ -345,6 +429,7 @@ export async function executeDelegate(
     jobId: created.job.id,
     delegationId,
     channelId,
+    projectId,
     fromId,
     fromName,
     target,
@@ -372,7 +457,7 @@ export async function executeDelegate(
       kind: 'delegate',
       etaMs,
       note: `我已经把这件事交给「${target.name}」了，最多等 ${Math.round(etaMs / 60_000)} 分钟。` +
-        '这一步我先停下来等它，结果一回来就自动接着做。过程可以在「内部频道」里看。',
+        '这一步我先停下来等它，结果一回来就自动接着做。协同过程已写入对话流，折叠展示。',
     },
   };
 }
@@ -387,6 +472,7 @@ interface RunnerInput {
   jobId: string;
   delegationId: number;
   channelId: number;
+  projectId: number;
   fromId: number;
   fromName: string;
   target: { id: number; name: string };
@@ -441,6 +527,8 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
         result: { summary, outline: decision.document_outline ?? [] },
       });
       await reply(summary, decision.document_outline ?? []);
+      // 事件触发：委派完成 → 扫 event 类型的 Routines
+      void triggerByEvent(pool, cipher, 'delegation_done', { userId: input.fromId, projectId: 0, agentId: input.target.id }).catch(() => undefined);
       if (!markResultReady(input.jobId)) return;
       input.deliver({
         ok: true,
@@ -515,7 +603,7 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
     data: { delegationId, status: 'failed', steps: sub.step },
   });
 
-  // ------------------------------------------------------------ 局部小工具
+  // ------------------------------------------------------------ 局部小工具（无感核心：协同进对话流，频道仍保留 + 交接结构化更新文件）
   async function progress(text: string): Promise<void> {
     await addChannelMessage(pool, cipher, {
       channelId,
@@ -526,6 +614,18 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       payload: { delegationId, steps: sub.step },
       delegationId,
     }).catch(() => undefined);
+    void writeCollabToAgentChat(pool, cipher, fromId, {
+      kind: 'progress',
+      fromId: target.id,
+      fromName: target.name,
+      toId: fromId,
+      toName: input.fromName,
+      detail: text,
+      delegationId,
+    }).catch(() => undefined);
+    try {
+      updateHandoffStatus(input.projectId, delegationId, 'running', `进度 ${sub.step}: ${text}`);
+    } catch {}
   }
 
   async function reply(text: string, outline: string[]): Promise<void> {
@@ -538,6 +638,19 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       payload: { delegationId, status: 'done', steps: sub.step, findings: outline.slice(0, 12) },
       delegationId,
     }).catch(() => undefined);
+    void writeCollabBoth(pool, cipher, {
+      kind: 'reply',
+      fromId: fromId,
+      fromName: input.fromName,
+      toId: target.id,
+      toName: target.name,
+      summary: text,
+      status: 'done',
+      delegationId,
+    }).catch(() => undefined);
+    try {
+      updateHandoffStatus(input.projectId, delegationId, 'done', `结论：${text.slice(0, 300)}\n要点：${outline.slice(0, 5).join('、')}`);
+    } catch {}
   }
 
   /** 把子循环这一步新用掉的工具写成频道过程注记（用户「查看交流过程」看的就是这些） */
