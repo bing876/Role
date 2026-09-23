@@ -596,6 +596,32 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
     }
   });
 
+  // 总协调路由：查询任务该派给谁（只读，不写库，供前端预判与验收）
+  app.get('/agents/route', async (req: FastifyRequest, reply: FastifyReply) => {
+    const claims = authed(req, env);
+    if (!claims) return errJson(reply, 401, '未登录或登录已过期');
+    const q = req.query as { projectId?: unknown; task?: unknown } | null;
+    const task = typeof q?.task === 'string' ? q.task.trim().slice(0, 600) : '';
+    if (!task) return errJson(reply, 400, 'task 不能为空');
+    let projectId: number | null = null;
+    if (q?.projectId !== undefined && q?.projectId !== null && String(q.projectId).trim() !== '') {
+      const n = Number(String(q.projectId).trim());
+      if (!Number.isSafeInteger(n) || n <= 0) return errJson(reply, 400, 'projectId 不正确');
+      projectId = n;
+    }
+    try {
+      const { currentProjectId } = await import('../projectScope');
+      const { routeTask } = await import('../orchestrator/chiefOfStaff');
+      const pid = projectId ?? (await currentProjectId(pool, claims.sub));
+      if (pid === null) return errJson(reply, 404, '项目不存在');
+      const decision = await routeTask(pool, claims.sub, pid, task, {});
+      if (!decision) return { routed: false, reason: '没有可路由的智能体' };
+      return { routed: true, decision };
+    } catch (err) {
+      return dbErr(reply, err);
+    }
+  });
+
   app.post('/memory/forget', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');

@@ -133,3 +133,17 @@ export function orchestrationBlock(selfId: number | null, roster: RosterEntry[])
   );
   return lines.join('\n');
 }
+
+export function chiefOfStaffBlock(selfName: string, selfId: number | null, roster: RosterEntry[]): string {
+  const isChief = selfName.includes('管家') || selfName.includes('小助') || selfId === null;
+  if (!isChief) return '';
+  return [
+    '',
+    '【总协调路由·管家职责】',
+    '你是项目管家（Chief-of-Staff），用户只管委派，判据“又多给一件事管？”',
+    '1. 用户没指定谁干时，你先判断：这件事更适合名单里的谁（看职责描述），适合就 `delegate` 给它；',
+    '2. 自己能直接干的就自己干，不要为了派而派；',
+    '3. 派出去后等结果，结果回来你负责汇总给用户；',
+    '4. 路由决策要简短说明“为什么派给它”，写入对话流折叠摘要。',
+  ].join('\n');
+}

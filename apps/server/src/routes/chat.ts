@@ -59,6 +59,7 @@ import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
 import { orchestrationBlockFor } from '../orchestrator/roster';
+import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 
 export interface ChatDeps {
   pool: Pool;
@@ -272,7 +273,24 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
     }
 
     try {
-      const conv = await resolveConversation(pool, claims.sub, conversationId, message, agentId);
+      // 总协调路由：未指定 agent 且是新会话时，先按职责路由到最合适的智能体
+      let routedAgentId: number | null = agentId;
+      let routeDecision: any = null;
+      if (!conversationId && !agentId) {
+        try {
+          const curProj = await currentProjectId(pool, claims.sub);
+          if (curProj !== null) {
+            const decision = await routeTask(pool, claims.sub, curProj, message, { explicitAgentId: null, currentAgentId: null });
+            if (decision) {
+              routedAgentId = decision.toAgentId;
+              routeDecision = decision;
+              // 记录路由到对话流（无感核心）
+              void logRouteDecision(pool, cipher, decision, message, '管家路由').catch(() => undefined);
+            }
+          }
+        } catch {}
+      }
+      const conv = await resolveConversation(pool, claims.sub, conversationId, message, routedAgentId ?? agentId);
       if ('err' in conv) return errJson(reply, conv.status, conv.err);
       const convId = conv.id;
 

@@ -12,7 +12,7 @@
 import type { Pool } from 'pg';
 import type { ServerEnv } from '../env';
 import { agentBusyCount, isAgentWaiting } from './registry';
-import { orchestrationBlock, type RosterEntry } from './prompts';
+import { chiefOfStaffBlock, orchestrationBlock, type RosterEntry } from './prompts';
 
 interface RosterRow {
   id: string;
@@ -148,16 +148,32 @@ export async function orchestrationBlockFor(
   agentId: number | null,
 ): Promise<string | undefined> {
   if (!env.orch?.enabled) return undefined;
-  if (!Number.isInteger(agentId) || (agentId as number) <= 0) return undefined; // 匿名循环没有身份，谈不上委派
+  if (!Number.isInteger(agentId) || (agentId as number) <= 0) return undefined;
   try {
     const projectId = await projectOfAgent(pool, userId, agentId as number);
     if (projectId === null) return undefined;
     const roster = await loadProjectRoster(pool, userId, projectId, agentId);
-    if (roster.length === 0) return undefined; // 项目里就它一个，给了反而诱导它委派给不存在的人
-    return orchestrationBlock(agentId as number, roster);
+    // 即使只有自己，也要给管家路由块
+    const selfName = await getAgentName(pool, agentId as number);
+    const base = roster.length === 0 ? '' : orchestrationBlock(agentId as number, roster);
+    const chief = chiefOfStaffBlock(selfName ?? '', agentId as number, roster);
+    const combined = [base, chief].filter(Boolean).join('\n');
+    return combined || undefined;
   } catch (err) {
     console.warn('[orc] 拼同事名单失败（这一路按「没有编排」继续跑）：', (err as Error)?.message ?? String(err));
     return undefined;
+  }
+}
+
+async function getAgentName(pool: Pool, agentId: number): Promise<string | null> {
+  try {
+    const r = await pool.query<{ name: string; persona: { name?: string } | null }>('SELECT name, persona FROM agents WHERE id=$1 LIMIT 1', [agentId]);
+    const row = r.rows[0];
+    if (!row) return null;
+    const pName = typeof row.persona?.name === 'string' ? row.persona.name.trim() : '';
+    return pName || row.name || null;
+  } catch {
+    return null;
   }
 }
 
