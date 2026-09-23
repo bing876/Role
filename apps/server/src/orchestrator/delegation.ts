@@ -258,8 +258,11 @@ export async function executeDelegate(
   } catch (err) {
     console.warn(`[handoff] 写入交接文件失败（忽略）：`, (err as Error).message);
   }
-  // board.md 单写者：只有发起方能写，序列化追加
-  void appendBoardWithLock(projectId, fromId, `- [${new Date().toISOString()}] #${delegationId} ${fromName}→${target.name}: ${task.slice(0, 80)} (${getHandoffUri(projectId, delegationId)})`).catch(() => undefined);
+  // board.md：落库锁（board_locks 行锁）保护的追加 —— 跨进程 / 跨重启都不丢（收尾 2）
+  // 失败要说出来（以前是 .catch(() => undefined) 静默吞掉 —— 丢了都不知道）
+  void appendBoardWithLock(pool, projectId, fromId, `- [${new Date().toISOString()}] #${delegationId} ${fromName}→${target.name}: ${task.slice(0, 80)} (${getHandoffUri(projectId, delegationId)})`).catch((err) => {
+    console.warn(`[handoff] board.md 追加失败（委派 #${delegationId} 本身照常进行）：`, (err as Error).message);
+  });
 
   await addChannelMessage(pool, cipher, {
     channelId,

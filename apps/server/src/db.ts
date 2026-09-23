@@ -442,6 +442,18 @@ ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS messages_enc TEXT;
 ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS pending_call_id TEXT;
 ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS executed_tool_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 
+-- 收尾 2 | board.md 落库锁：跨进程 / 跨重启的互斥（替代原来的进程内 Promise 链）
+-- 写 board.md 时在事务里 SELECT ... FOR UPDATE 这一行，持锁完成「读 → 追加 → 原子替换文件」再提交。
+--   * 跨进程有效：两个服务进程（重启交接期新旧进程并存 / tsx watch 重启）抢的是同一行锁；
+--   * 持锁进程被 kill -9：PG 发现连接断开即回滚事务、释放行锁，后来者不会死等；
+--   * version：每次成功追加 +1，只是写计数（诊断 / 验收用），不参与加锁判断。
+CREATE TABLE IF NOT EXISTS board_locks (
+  project_id  BIGINT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  version     BIGINT NOT NULL DEFAULT 0,
+  last_writer TEXT,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- 批次 F | Skills — teach-a-task 落成 skills 表
 -- 触发条件+步骤+决策规则+产出要求+审批边界，命中时注入 identityBlock 技能槽，跑完能自我修订
 CREATE TABLE IF NOT EXISTS skills (

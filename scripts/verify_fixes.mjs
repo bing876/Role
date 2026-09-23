@@ -164,8 +164,9 @@ console.log('修4 chat.ts 接入 PASS');
 
 console.log('\n=== 修5 board.md 锁与白板/记忆关系 ===');
 let handoff = fs.readFileSync('apps/server/src/orchestrator/handoff.ts','utf8');
-assert(handoff.includes('进程内锁'), '应说明进程内锁');
-assert(handoff.includes('跨重启无效'), '应说明跨重启无效');
+// 收尾 2：修 5 当时只「说明」了进程内锁跨重启无效；现在已真正换成落库锁
+assert(handoff.includes('board_locks') && handoff.includes('FOR UPDATE'), 'board 应使用 board_locks 落库锁');
+assert(!/new Map<number, Promise<void>>/.test(handoff), '不应再有进程内 Promise 链锁');
 assert(handoff.includes('批次 D') || handoff.includes('重启'), '应关联批次 D 重启');
 assert(wb.includes('project_whiteboard vs') || wb.includes('project_whiteboard 与') || wb.includes('project scope memories'), '白板应说明与 memories 关系');
 assert(wb.includes('去重') || wb.includes('重复注入'), '应说明去重注入');

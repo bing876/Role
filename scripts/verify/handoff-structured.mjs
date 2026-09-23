@@ -17,15 +17,17 @@ const handoff = fs.readFileSync(handoffPath,'utf8');
 must(handoff.includes('getHandoffDir') && handoff.includes('board.md'), 'handoff.ts 定义 handoffs/ 目录与 board.md');
 must(handoff.includes('writeHandoffFile') && handoff.includes('目标') && handoff.includes('输入') && handoff.includes('产出要求') && handoff.includes('审批边界'), 'handoff.ts 每个委派一个文件，含 目标/输入/产出要求/审批边界');
 must(handoff.includes('getHandoffUri') && handoff.includes('handoff://'), 'handoff.ts 委派消息只传路径 handoff://');
-must(handoff.includes('appendBoardWithLock') && handoff.includes('单写者'), 'handoff.ts board.md 单写者：只有发起方能写');
-must(handoff.includes('boardLocks') && handoff.includes('withBoardLock'), 'handoff.ts 有锁序列化，防止并发丢数据');
-must(handoff.includes('appendBoardWithoutLock'), 'handoff.ts 有无锁版本用于反证');
+must(handoff.includes('appendBoardWithLock'), 'handoff.ts board.md 追加入口 appendBoardWithLock');
+// 收尾 2：进程内 Promise 链锁（boardLocks / appendBoardWithoutLock）已换成落库锁 board_locks。
+//   这里只做结构检查；真正的并发 + 重启反证在 scripts/verify/board-lock-db.mjs（连真库、多进程、kill -9）。
+must(handoff.includes('board_locks') && handoff.includes('FOR UPDATE'), 'handoff.ts 用 board_locks 行锁（跨进程/跨重启）');
+must(!/new Map<number, Promise<void>>/.test(handoff), 'handoff.ts 不再有进程内 Promise 链锁');
 
 const delegationPath = path.join(root,'apps/server/src/orchestrator/delegation.ts');
 const delegation = fs.readFileSync(delegationPath,'utf8');
 must(delegation.includes('writeHandoffFile') && delegation.includes('getHandoffUri'), 'delegation.ts 创建交接文件并传路径');
 must(delegation.includes('handoff://') || delegation.includes('getHandoffUri'), 'delegation.ts 委派消息只传路径不传内容');
-must(delegation.includes('appendBoardWithLock'), 'delegation.ts board 单写者追加（只有发起方）');
+must(/appendBoardWithLock\(pool,/.test(delegation), 'delegation.ts 追加 board 时把 pool 传给落库锁');
 
 const routesPath = path.join(root,'apps/server/src/routes/handoffs.ts');
 must(fs.existsSync(routesPath), 'routes/handoffs.ts 存在（项目工作区 API）');
@@ -41,76 +43,9 @@ const sharedPath = path.join(root,'packages/shared/src/index.ts');
 const shared = fs.readFileSync(sharedPath,'utf8');
 must(!shared.includes('group_chats'), 'shared 未建 group_chats 表（项目本身就是容器，天然群）');
 
-// ---------------- 并发反证：board 不丢数据 ----------------
-console.log('\n--- 并发反证：board 单写者锁 ---');
-const testProjectId = 99999;
-const testDir = path.join(root, `apps/server/data/handoffs/${testProjectId}`);
-const boardFile = path.join(testDir, 'board.md');
-
-function ensureTestDir() {
-  fs.mkdirSync(testDir, { recursive: true });
-  if (fs.existsSync(boardFile)) fs.unlinkSync(boardFile);
-  fs.writeFileSync(boardFile, `# 项目 ${testProjectId} 交接板\n\n`, 'utf8');
-}
-
-function readBoard() {
-  return fs.existsSync(boardFile) ? fs.readFileSync(boardFile, 'utf8') : '';
-}
-
-// 无锁版本：模拟竞态，必丢
-async function appendWithoutLock(entry) {
-  let current = '';
-  try { current = fs.readFileSync(boardFile, 'utf8'); } catch {}
-  await new Promise(r => setTimeout(r, 20));
-  fs.writeFileSync(boardFile, current + entry + '\n', 'utf8');
-}
-
-// 有锁版本：Promise 链序列化
-const locks = new Map();
-async function withLock(projectId, fn) {
-  const prev = locks.get(projectId) ?? Promise.resolve();
-  let release;
-  const next = new Promise(res => release = res);
-  locks.set(projectId, prev.then(() => next));
-  await prev;
-  try { return await fn(); } finally { release(); }
-}
-
-async function appendWithLock(projectId, entry) {
-  return withLock(projectId, async () => {
-    let current = '';
-    try { current = fs.readFileSync(boardFile, 'utf8'); } catch {}
-    await new Promise(r => setTimeout(r, 10));
-    fs.writeFileSync(boardFile, current + entry + '\n', 'utf8');
-  });
-}
-
-async function testConcurrent() {
-  // 反证：无锁 → 丢数据
-  ensureTestDir();
-  const e1 = '- [T1] A→B task1';
-  const e2 = '- [T2] A→C task2';
-  await Promise.all([appendWithoutLock(e1), appendWithoutLock(e2)]);
-  const afterNoLock = readBoard();
-  const hasBothNoLock = afterNoLock.includes('task1') && afterNoLock.includes('task2');
-  // 无锁时大概率只剩一个（竞态）
-  console.log(`无锁并发结果含 task1: ${afterNoLock.includes('task1')}, task2: ${afterNoLock.includes('task2')}`);
-  must(!hasBothNoLock, '反证：去掉单写者锁→并发写 board 丢数据（复现丢失）');
-
-  // 正证：有锁 → 不丢
-  ensureTestDir();
-  locks.clear();
-  await Promise.all([appendWithLock(testProjectId, e1), appendWithLock(testProjectId, e2)]);
-  const afterLock = readBoard();
-  const hasBothLock = afterLock.includes('task1') && afterLock.includes('task2');
-  console.log(`有锁并发结果含 task1: ${afterLock.includes('task1')}, task2: ${afterLock.includes('task2')}`);
-  must(hasBothLock, '正证：单写者锁→并发写 board 不丢数据');
-
-  // 清理
-  try { fs.rmSync(testDir, { recursive: true, force: true }); } catch {}
-}
-
-await testConcurrent();
+// ---------------- 并发反证 ----------------
+// 原来这里是脚本**自己复刻**一把进程内锁再测它 —— 测的不是生产代码，而且单进程里进程内锁当然不丢。
+// 收尾 2 起改为：scripts/verify/board-lock-db.mjs（真库、独立进程、kill -9 模拟重启）。
 
 console.log(`\n=== 结论：失败 ${fails} 项 ===`);
 process.exit(fails>0?1:0);

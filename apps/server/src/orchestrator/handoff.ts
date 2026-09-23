@@ -13,20 +13,23 @@
  * - handoff 文件结构化：目标/输入/产出要求/审批边界/状态/来源
  * - 委派消息只传路径：handoff://<projectId>/<delegationId>.md
  *
- * 锁实现与修 5 说明（board.md 单写者锁的作用域）：
- * - 内存锁 per projectId：Promise 链，序列化 board 的 read-modify-write —— 这是**进程内锁**
- * - 进程内锁跨重启无效：批次 D 引入重启恢复（kill→restoreLoops），进程重启后内存锁清空，
- *   但 board.md 落盘文件仍在；重启后首次写会重建锁链，不会丢已落盘数据，但重启瞬间若有
- *   并发写（例如恢复的循环同时 append），可能出现短暂竞态。缓解：board 写前 always
- *   read-modify-write 且文件操作原子（writeFileSync 覆盖），且只有总协调/发起方能写，
- *   执行方不写 board，只写自己的 handoff 文件，因此重启竞态窗口极小。
- * - 若需跨进程/跨机器强一致，应用文件锁（flock）或 DB 锁；当前单机单进程部署已满足
- *   Grok 单写者要求，验收仍通过：有锁并发不丢，无锁并发必丢。
- * - 无锁版本用于反证：故意制造 read→delay→write 竞态，必丢数据
+ * 锁（收尾 2 重做，取代修 5 的「进程内 Promise 链 + 只有发起方写的约定」）：
+ * - 旧实现是 `Map<projectId, Promise>` 进程内锁：批次 D 引入重启恢复后，新旧进程可能同时在写
+ *   （tsx watch 重启、部署交接、恢复出来的循环与新请求并发），进程内锁互相看不见 → 丢数据。
+ *   「只有发起方写」只是约定：同一项目里两个智能体各自发起委派，就是两个发起方并发写。
+ * - 现在：**落库锁** `board_locks`（每项目一行）。写 board.md 时开事务 `SELECT … FOR UPDATE`
+ *   拿行锁，持锁完成「读文件 → 追加 → 写临时文件 → rename 原子替换」，再 `version+1` 提交。
+ *     · 跨进程、跨重启有效：锁在 PostgreSQL 里，不在任何一个进程的内存里；
+ *     · 持锁进程被 kill -9：连接断开 → PG 回滚事务、释放行锁，后来者不会死等；
+ *     · rename 原子替换：读者永远看到完整的旧文件或完整的新文件，不会读到写了一半的文件；
+ *     · 锁等待有上限（lock_timeout），超时抛错，由调用方决定重试/放弃，不会把请求挂死。
+ * - 反证见 scripts/verify/board-lock-db.mjs：两个**独立进程**、中途 kill -9 其中一个再重启，
+ *   并发写同一项目 board.md —— 落库锁 0 丢失；换成旧的进程内锁则必丢。
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Pool } from 'pg';
 
 // data/handoffs/<projectId>/ - 兼容多种 cwd
 function getDataRoot(): string {
@@ -69,12 +72,19 @@ export function getHandoffUri(projectId: number, delegationId: number | string):
   return `handoff://${projectId}/${delegationId}.md`;
 }
 
+function boardHeader(projectId: number): string {
+  return `# 项目 ${projectId} 交接板\n\n> 追加由 board_locks 落库锁串行化（跨进程 / 跨重启），文件整体原子替换\n\n`;
+}
+
 export function ensureHandoffDir(projectId: number): void {
   const dir = getHandoffDir(projectId);
   fs.mkdirSync(dir, { recursive: true });
-  const boardPath = getBoardPath(projectId);
-  if (!fs.existsSync(boardPath)) {
-    fs.writeFileSync(boardPath, `# 项目 ${projectId} 交接板\n\n> 单写者：只有总协调/发起方能写，序列化追加，防丢\n\n`, 'utf8');
+  // ★ 'wx' = 排他创建（文件已存在就失败）。原来是 existsSync 再 writeFileSync：
+  //   两个进程同时首次创建时，后到的会把先到者**已经追加进去的条目**整个覆盖掉。
+  try {
+    fs.writeFileSync(getBoardPath(projectId), boardHeader(projectId), { encoding: 'utf8', flag: 'wx' });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
   }
 }
 
@@ -152,36 +162,72 @@ export function updateHandoffStatus(projectId: number, delegationId: number, sta
   fs.writeFileSync(filePath, content, 'utf8');
 }
 
-// ---------------- 单写者锁（防并发丢数据） ----------------
+// ---------------- board.md 落库锁（收尾 2：跨进程 / 跨重启） ----------------
 
-const boardLocks = new Map<number, Promise<void>>();
+/** 等锁上限：超过就抛错，交给调用方决定重试还是放弃（不把请求挂死） */
+const BOARD_LOCK_TIMEOUT_MS = 10_000;
 
-async function withBoardLock<T>(projectId: number, fn: () => Promise<T>): Promise<T> {
-  const prev = boardLocks.get(projectId) ?? Promise.resolve();
-  let release!: () => void;
-  const next = new Promise<void>((res) => (release = res));
-  boardLocks.set(projectId, prev.then(() => next));
-  await prev;
+/**
+ * 原子替换：先写同目录临时文件，再 rename 覆盖（POSIX 下 rename 是原子的）。
+ * 读者永远只会看到「完整的旧文件」或「完整的新文件」。
+ */
+function writeFileAtomic(filePath: string, content: string): void {
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  fs.writeFileSync(tmp, content, 'utf8');
+  fs.renameSync(tmp, filePath);
+}
+
+/**
+ * 在 PostgreSQL 行锁内执行 fn。锁 = board_locks 里该项目的那一行。
+ *
+ * ★ 不用 withTx：需要在 BEGIN 之后设 lock_timeout（SET LOCAL 只在本事务内生效）。
+ * ★ 不用 pg_advisory_xact_lock：行锁 + version 列能留下「谁、第几次写」的痕迹，方便诊断；
+ *   两者跨进程语义相同（都随事务 / 连接释放）。
+ */
+export async function withBoardDbLock<T>(pool: Pool, projectId: number, writer: string, fn: () => Promise<T> | T): Promise<T> {
+  const client = await pool.connect();
   try {
-    return await fn();
+    await client.query('BEGIN');
+    await client.query(`SET LOCAL lock_timeout = '${BOARD_LOCK_TIMEOUT_MS}ms'`);
+    // 行不存在先建（并发建由 ON CONFLICT 兜住），再 FOR UPDATE 锁住它
+    await client.query(
+      'INSERT INTO board_locks (project_id) VALUES ($1) ON CONFLICT (project_id) DO NOTHING',
+      [projectId],
+    );
+    await client.query('SELECT version FROM board_locks WHERE project_id = $1 FOR UPDATE', [projectId]);
+    const result = await fn();
+    await client.query(
+      'UPDATE board_locks SET version = version + 1, last_writer = $2, updated_at = now() WHERE project_id = $1',
+      [projectId, writer.slice(0, 120)],
+    );
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
   } finally {
-    release();
+    client.release();
   }
 }
 
 /**
- * 单写者：只有发起方能写 board.md，且序列化
+ * 追加一行到 board.md（**落库锁**保护的 read-modify-write）。
  * entry 示例：- [2026-09-23T10:00:00Z] #1 A→B: 任务...
+ *
+ * fromAgentId 仍然校验（board 只记「谁派给谁」，发起方身份必须合法），
+ * 但并发安全**不再依赖**「只有发起方写」这条约定 —— 锁本身就保证不丢。
  */
 export async function appendBoardWithLock(
+  pool: Pool,
   projectId: number,
   fromAgentId: number,
   entry: string,
 ): Promise<void> {
+  if (!Number.isInteger(fromAgentId) || fromAgentId <= 0) throw new Error('board：fromAgentId 非法');
   ensureHandoffDir(projectId);
-  // 单写者校验：fromAgentId 必须 >0（发起方），被委派方不应直接写 board
-  if (!Number.isInteger(fromAgentId) || fromAgentId <= 0) throw new Error('board 单写者：fromAgentId 非法');
-  return withBoardLock(projectId, async () => {
+  // ★ 临界区故意写成**纯同步**（读 → 拼 → 原子替换之间没有 await）：
+  //   同一进程内的并发追加因此天然不会交错；跨进程的互斥则完全由 PG 行锁负责。
+  await withBoardDbLock(pool, projectId, `agent#${fromAgentId}@pid${process.pid}`, () => {
     const boardPath = getBoardPath(projectId);
     let current = '';
     try {
@@ -189,30 +235,14 @@ export async function appendBoardWithLock(
     } catch {
       current = '';
     }
-    // 模拟一点 IO 延迟，让并发更易复现（有锁时仍安全）
-    await new Promise((r) => setTimeout(r, 10));
-    const next = current + entry + '\n';
-    fs.writeFileSync(boardPath, next, 'utf8');
+    writeFileAtomic(boardPath, (current || boardHeader(projectId)) + entry + '\n');
   });
 }
 
-/**
- * 无锁版本：故意制造竞态，用于反证（必丢数据）
- * 两个并发调用同时 read，第二个 write 覆盖第一个
- */
-export async function appendBoardWithoutLock(projectId: number, entry: string): Promise<void> {
-  ensureHandoffDir(projectId);
-  const boardPath = getBoardPath(projectId);
-  let current = '';
-  try {
-    current = fs.readFileSync(boardPath, 'utf8');
-  } catch {
-    current = '';
-  }
-  // 故意延迟，放大竞态窗口
-  await new Promise((r) => setTimeout(r, 20));
-  const next = current + entry + '\n';
-  fs.writeFileSync(boardPath, next, 'utf8');
+/** 读 board 的写计数（验收 / 诊断用：并发写 N 次后 version 应恰好 +N） */
+export async function boardVersion(pool: Pool, projectId: number): Promise<number> {
+  const r = await pool.query<{ version: string }>('SELECT version FROM board_locks WHERE project_id = $1', [projectId]);
+  return r.rows[0] ? Number(r.rows[0].version) : 0;
 }
 
 export function readBoard(projectId: number): string {
