@@ -59,17 +59,31 @@ function safeDecryptJson(cipher: JsonCipher | null | undefined, enc: string | nu
   }
 }
 
+/**
+ * ★ 收尾 1（fail-closed）：**没有 cipher 或加密失败 → 这次 checkpoint 不写**，绝不回退成明文。
+ *
+ * 原来的写法是 `cipher ? null : session.goal` —— 调用方只要漏传 cipher（或 encryptText 抛错被吞），
+ * 就**悄悄**把 goal / messages 明文写进 loop_checkpoints。收尾 1 用变异测试证实过：
+ * 把 index.ts 里的 `setCheckpointDeps(pool, cipher)` 改成 `setCheckpointDeps(pool)`，
+ * 整条任务（含银行卡号、密码、身份证）原样落库，而当时的验收脚本照样 PASS。
+ *
+ * 取舍：少一次 checkpoint 的代价只是「这一步重启后续不上」；写一次明文的代价是敏感数据落盘。
+ * 前者可以接受，后者不行。所以这里宁可不写、打一行警告（警告里不带任何内容）。
+ */
 export async function saveCheckpoint(pool: Pool, session: LoopSession, cipher?: JsonCipher | null): Promise<void> {
+  if (!cipher) {
+    console.warn(`[checkpoint] 未注入 cipher，拒绝写入 ${session.id}（不回退明文）`);
+    return;
+  }
   try {
-    let goalEnc: string | null = null;
-    let messagesEnc: string | null = null;
-    if (cipher) {
-      try {
-        goalEnc = session.goal ? cipher.encryptText(session.goal) : null;
-      } catch {}
-      try {
-        messagesEnc = cipher.encryptText(JSON.stringify(session.messages ?? []));
-      } catch {}
+    let goalEnc: string | null;
+    let messagesEnc: string;
+    try {
+      goalEnc = session.goal ? cipher.encryptText(session.goal) : null;
+      messagesEnc = cipher.encryptText(JSON.stringify(session.messages ?? []));
+    } catch (err) {
+      console.warn(`[checkpoint] 加密失败，拒绝写入 ${session.id}（不回退明文）：`, (err as Error).message);
+      return;
     }
     // 修 3 幂等：记录 pending_call_id 与已执行过的 tool_call_ids，重启后去重
     const pendingCallId = (session as any).pendingCallId ?? null;
@@ -85,9 +99,9 @@ export async function saveCheckpoint(pool: Pool, session: LoopSession, cipher?: 
         session.agentId,
         session.conversationId,
         session.wcId,
-        cipher ? null : (session.goal ?? null),
+        null, // goal 明文列：永远 NULL（旧列只为兼容读老数据保留）
         goalEnc,
-        cipher ? '[]' : JSON.stringify(session.messages ?? []),
+        '[]', // messages 明文列：永远 '[]'
         messagesEnc,
         pendingCallId,
         JSON.stringify(Array.isArray(executedIds) ? executedIds : []),

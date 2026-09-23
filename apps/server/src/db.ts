@@ -257,12 +257,15 @@ ALTER TABLE agents ADD COLUMN IF NOT EXISTS computer_visibility TEXT NOT NULL DE
 -- 批次 H | 电脑三级可见度：Status/Preview/Takeover，默认收起
 -- 约束：只允许 status/preview/takeover 三档
 -- 幂等：老库补列
-DO $ BEGIN
+-- ★ 必须是 $$（美元引号）。3cd7c14 里被写成了单个 $ —— 补丁用 JS String.replace 写入，
+--   替换串里的 "$$" 会被解释成一个 "$"。结果整段 DDL 在真 PostgreSQL 上语法错误、一张表都建不出来，
+--   而当时的验收脚本只读源码不连库，没发现。scripts/verify/checkpoint-encryption-db.mjs 连真库才抓到。
+DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_agents_computer_visibility') THEN
     ALTER TABLE agents ADD CONSTRAINT chk_agents_computer_visibility CHECK (computer_visibility IN ('status','preview','takeover'));
   END IF;
 EXCEPTION WHEN duplicate_object THEN NULL;
-END $;
+END $$;
 ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_project ON knowledge_documents (project_id, id DESC);
