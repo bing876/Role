@@ -139,6 +139,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS result_enc TEXT;
 -- 第 10 步：用户档案记忆挂 owner_id（全员共用）；老列 project_id/mem_key/value_enc 保留兼容
 -- 记忆合并第一批：project_id 改可空（NULL=不按项目隔离），agent_id 两级作用域（NULL=账号级，值=智能体级）
 -- 记忆合并第二批：conversation_id 三级作用域（NULL=账号/智能体级，值=会话级，会话级只在该会话注入）
+-- 记忆卫生：merged 状态表示被合并（原文保留可查），merged_into 指向新合并后的那条
 CREATE TABLE IF NOT EXISTS memories (
   id                BIGSERIAL PRIMARY KEY,
   project_id        BIGINT REFERENCES projects(id) ON DELETE CASCADE,
@@ -152,6 +153,7 @@ CREATE TABLE IF NOT EXISTS memories (
   source            TEXT,
   status            TEXT NOT NULL DEFAULT 'pending',
   needs_confirm     BOOLEAN NOT NULL DEFAULT false,
+  merged_into       BIGINT REFERENCES memories(id) ON DELETE SET NULL,
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -166,15 +168,17 @@ ALTER TABLE memories ADD COLUMN IF NOT EXISTS content_encrypted TEXT;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS source TEXT;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS needs_confirm BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS merged_into BIGINT REFERENCES memories(id) ON DELETE SET NULL;
 ALTER TABLE memories ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories (owner_id, status);
--- 记忆合并：三级作用域唯一性（用户级/智能体级/会话级各自去重）
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL AND conversation_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL AND conversation_id IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_session ON memories (conversation_id, mem_key) WHERE conversation_id IS NOT NULL;
+-- 记忆合并：三级作用域唯一性（用户级/智能体级/会话级各自去重），只对 active/pending 生效，merged/archived 不占坑
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL AND conversation_id IS NULL AND status IN ('active','pending');
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL AND conversation_id IS NULL AND status IN ('active','pending');
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_session ON memories (conversation_id, mem_key) WHERE conversation_id IS NOT NULL AND status IN ('active','pending');
 CREATE INDEX IF NOT EXISTS idx_memories_owner_agent ON memories (owner_id, agent_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_conversation ON memories (conversation_id, updated_at DESC) WHERE conversation_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_memories_owner_agent_conv ON memories (owner_id, agent_id, conversation_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memories_merged ON memories (merged_into) WHERE merged_into IS NOT NULL;
 
 -- 第 11 步：知识库和第 10 步 memories 完全分表。上传的原文件不落盘；
 -- 文件名 filename_enc 与每个资料正文片段 content_enc 均为 AES-256-GCM 密文。
@@ -518,11 +522,16 @@ async function migrateMemoriesStructure(pool: Pool): Promise<void> {
     console.warn('[db] memories.conversation_id 补列失败（忽略）：', (err as Error).message);
   }
   try {
+    await pool.query('ALTER TABLE memories ADD COLUMN IF NOT EXISTS merged_into BIGINT REFERENCES memories(id) ON DELETE SET NULL');
+  } catch (err) {
+    console.warn('[db] memories.merged_into 补列失败（忽略）：', (err as Error).message);
+  }
+  try {
     await pool.query('ALTER TABLE memories ALTER COLUMN project_id DROP NOT NULL');
   } catch {
     // PGlite / 已是可空时可能报错，忽略
   }
-  // 旧两级索引可能已存在，需重建为三级条件（先删后建，幂等）
+  // 记忆卫生：唯一索引只对 active/pending 生效，merged/archived 不占坑；旧索引先删后建
   try {
     await pool.query('DROP INDEX IF EXISTS uniq_memories_user');
   } catch {}
@@ -530,17 +539,20 @@ async function migrateMemoriesStructure(pool: Pool): Promise<void> {
     await pool.query('DROP INDEX IF EXISTS uniq_memories_agent');
   } catch {}
   try {
-    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL AND conversation_id IS NULL');
+    await pool.query('DROP INDEX IF EXISTS uniq_memories_session');
+  } catch {}
+  try {
+    await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_user ON memories (owner_id, mem_key) WHERE agent_id IS NULL AND conversation_id IS NULL AND status IN ('active','pending')");
   } catch (err) {
     console.warn('[db] uniq_memories_user 建索引失败（忽略）：', (err as Error).message);
   }
   try {
-    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL AND conversation_id IS NULL');
+    await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_agent ON memories (agent_id, mem_key) WHERE agent_id IS NOT NULL AND conversation_id IS NULL AND status IN ('active','pending')");
   } catch (err) {
     console.warn('[db] uniq_memories_agent 建索引失败（忽略）：', (err as Error).message);
   }
   try {
-    await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_session ON memories (conversation_id, mem_key) WHERE conversation_id IS NOT NULL');
+    await pool.query("CREATE UNIQUE INDEX IF NOT EXISTS uniq_memories_session ON memories (conversation_id, mem_key) WHERE conversation_id IS NOT NULL AND status IN ('active','pending')");
   } catch (err) {
     console.warn('[db] uniq_memories_session 建索引失败（忽略）：', (err as Error).message);
   }
@@ -552,6 +564,9 @@ async function migrateMemoriesStructure(pool: Pool): Promise<void> {
   } catch {}
   try {
     await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_owner_agent_conv ON memories (owner_id, agent_id, conversation_id, updated_at DESC)');
+  } catch {}
+  try {
+    await pool.query('CREATE INDEX IF NOT EXISTS idx_memories_merged ON memories (merged_into) WHERE merged_into IS NOT NULL');
   } catch {}
 }
 

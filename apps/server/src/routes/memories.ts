@@ -37,6 +37,7 @@ import { llmFetch } from '../llm';
 import { REFERENCE_PREFIX, sanitizeReferenceLine } from '../promptPolicy';
 import { normalizeText, isSensitive } from '../memoryNormalize';
 import { extractJsonLoose, EXTRACT_PROMPT, looksLikeWorkRule, writeMemoryRow } from '../memoryShared';
+import { runGlobalHygiene, MEMORY_LIMITS } from '../memoryHygiene';
 
 export interface MemoryDeps {
   pool: Pool;
@@ -416,9 +417,14 @@ export function triggerTaskExtract(
 
 /**
  * 闲置 15 分钟自动提取：每分钟扫一轮（进程内记“处理到哪个消息号”，同一切点不重抽）。
+ * 记忆卫生：挂到此调度器旁，每 5 分钟扫一次超限（账号 30 / 智能体 20），喂模型合并同类，旧条改 merged 不删原文。
  */
 export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJS.Timeout {
   const done = new Set<string>();
+  let hygieneRunning = false;
+  let lastHygieneAt = 0;
+  const HYGIENE_INTERVAL_MS = 5 * 60 * 1000;
+
   const timer = setInterval(() => {
     void (async () => {
       const { pool } = deps;
@@ -460,6 +466,25 @@ export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJ
         const agentId = row.agent_id ? Number(row.agent_id) : null;
         const convId = Number(row.conv_id);
         await extractCore(deps, Number(row.user_id), 'chat_idle', transcript, `conv:${row.conv_id}:idle`, agentId, convId);
+      }
+
+      // ---- 记忆卫生：超限整理（账号 30 / 智能体 20，会话级不设上限） ----
+      const hygieneEnabled = (deps.env as unknown as Record<string, unknown>).MEMORY_HYGIENE_ENABLED !== 'false';
+      if (!hygieneEnabled) return;
+      if (hygieneRunning) return;
+      if (now - lastHygieneAt < HYGIENE_INTERVAL_MS) return;
+      lastHygieneAt = now;
+      hygieneRunning = true;
+      try {
+        const res = await runGlobalHygiene(pool, deps.cipher, deps.env as never, { enabled: true });
+        const total = [...res.account, ...res.agent].reduce((a, r) => a + r.mergedGroups, 0);
+        if (total > 0) {
+          console.log(`[memories] 记忆卫生：合并 ${total} 组（账号 ${res.account.length} 作用域 / 智能体 ${res.agent.length} 作用域），上限 ${MEMORY_LIMITS.account}/${MEMORY_LIMITS.agent}`);
+        }
+      } catch (err) {
+        console.warn('[memories] 记忆卫生失败（忽略）：', (err as Error).message);
+      } finally {
+        hygieneRunning = false;
       }
     })().catch((err) => {
       if (!isDbUnreachable(err)) console.warn('[memories] 闲置扫描跳过：', (err as Error).message);

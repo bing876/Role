@@ -872,6 +872,10 @@ export default function App() {
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [knowledgeUploading, setKnowledgeUploading] = useState(false);
   const [knowledgeNote, setKnowledgeNote] = useState('');
+  /** 建完能改人设：编辑态 */
+  const [personaEditOpen, setPersonaEditOpen] = useState(false);
+  const [personaEditAgentId, setPersonaEditAgentId] = useState<number | null>(null);
+  const [personaEditDraft, setPersonaEditDraft] = useState<AgentPersona>({ name: '', who: '', tone: '', duty: '' });
   /** 第 19 步：正在删的那条资料 id（按钮显示「删除中…」并防连点），null = 没有删除在跑 */
   const [knowledgeDeletingId, setKnowledgeDeletingId] = useState<number | null>(null);
   const knowledgeFileRef = useRef<HTMLInputElement | null>(null);
@@ -1285,7 +1289,7 @@ export default function App() {
     }
   };
 
-  /** 引导表确认：存人设 → 这个智能体从这一刻起按这份描述干活 */
+  /** 引导表确认：存人设 → 这个智能体从这一刻起按这份描述干活（建完也能改） */
   const savePersona = async (agentId: number, persona: AgentPersona) => {
     const sess = sessionRef.current;
     if (!sess) throw new Error('还没登录');
@@ -1296,6 +1300,19 @@ export default function App() {
     });
     setAgents((prev) => prev.map((x) => (x.id === agentId ? r.agent : x)));
     setChatNote(`好，${r.agent.name} 已就位——从现在起它按你填的这份描述干活。`);
+    setPersonaEditOpen(false);
+    setPersonaEditAgentId(null);
+  };
+
+  const openPersonaEdit = (agent: AgentView) => {
+    setPersonaEditAgentId(agent.id);
+    setPersonaEditDraft({
+      name: agent.persona?.name || agent.name || '',
+      who: agent.persona?.who || '',
+      tone: agent.persona?.tone || '',
+      duty: agent.persona?.duty || '',
+    });
+    setPersonaEditOpen(true);
   };
 
   /** 删自建智能体（「小助」服务端会拒）：它的聊天与项目记忆一并清掉，不碰别的智能体 */
@@ -3132,6 +3149,16 @@ export default function App() {
             >
               🗂 内部频道
             </button>
+            {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
+              <button
+                type="button"
+                className="workbenchNav__btn"
+                onClick={() => openPersonaEdit(curAgent)}
+                title="建完也能改人设：改名称/它是谁/怎么说话/干什么"
+              >
+                ✏️ 编辑人设
+              </button>
+            )}
           </div>
         </header>
 
@@ -3143,6 +3170,51 @@ export default function App() {
         */}
         {showChannels && session && (
           <ChannelsPanel apiBase={API_BASE()} token={session.token} onClose={() => setShowChannels(false)} />
+        )}
+
+        {personaEditOpen && personaEditAgentId !== null && (
+          <div className="personaEditOverlay" role="dialog" aria-label="编辑人设">
+            <div className="personaEditCard">
+              <div className="guide__head">编辑人设（建完也能改）</div>
+              <div className="small">改完点确认，立刻按新描述干活；不改就点取消。</div>
+              <table className="guide__table">
+                <tbody>
+                  <tr>
+                    <th>名称</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.name} maxLength={24} placeholder="它叫什么？" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, name: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>它是谁</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.who} maxLength={120} placeholder="例如：一个只懂电商运营的老手" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, who: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>怎么说话</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.tone} maxLength={120} placeholder="例如：短句、直接、别客套" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, tone: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>干什么</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.duty} maxLength={120} placeholder="例如：帮我盯店铺数据、写商品标题" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, duty: e.target.value }))} />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div className="buttons-row">
+                <button type="button" className="btn btn--go" disabled={!personaEditDraft.name.trim()} onClick={() => void savePersona(personaEditAgentId, personaEditDraft)}>
+                  确认保存
+                </button>
+                <button type="button" className="btn" onClick={() => { setPersonaEditOpen(false); setPersonaEditAgentId(null); }}>
+                  取消
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {browser.allTabs.length > 0 && (
