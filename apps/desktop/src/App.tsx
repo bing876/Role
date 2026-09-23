@@ -43,7 +43,6 @@ import {
   useBrowserWorkspace,
 } from './browser';
 import type { EmbedRect } from './browser';
-import { ChannelsPanel } from './channels';
 import { useResourceGuard } from './resources/useResourceGuard';
 
 /**
@@ -729,7 +728,6 @@ export default function App() {
    * 只是个视图开关（与 `browser.view` 同一性质）：开了盖在中栏上面看智能体之间的
    * 委派对话，关掉就回到原来的样子 —— **不 start / 不 resume / 不碰任何一路驾驶**。
    */
-  const [showChannels, setShowChannels] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(() => Boolean(localStorage.getItem(TOKEN_KEY)));
   const [pwOld, setPwOld] = useState('');
   const [pwNew, setPwNew] = useState('');
@@ -3141,14 +3139,6 @@ export default function App() {
               多智能体编排 · 内部频道入口。
               ★ 只是视图开关，不影响任何一路驾驶（与上面两个按钮同一性质）。
             */}
-            <button
-              type="button"
-              className={`workbenchNav__btn ${showChannels ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => setShowChannels((v) => !v)}
-              title="看智能体之间的委派与回复（只读）"
-            >
-              🗂 内部频道
-            </button>
             {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
               <button
                 type="button"
@@ -3168,10 +3158,6 @@ export default function App() {
           ★ token 从 session 传下去，组件自己不碰 localStorage —— 切号时 sessionRef
             那套「晚到的响应丢掉」的逻辑也就自然覆盖到它。
         */}
-        {showChannels && session && (
-          <ChannelsPanel apiBase={API_BASE()} token={session.token} onClose={() => setShowChannels(false)} />
-        )}
-
         {personaEditOpen && personaEditAgentId !== null && (
           <div className="personaEditOverlay" role="dialog" aria-label="编辑人设">
             <div className="personaEditCard">

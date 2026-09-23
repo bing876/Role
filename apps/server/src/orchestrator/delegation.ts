@@ -50,6 +50,7 @@ import {
 import { findAgentByNameAnyProject, loadProjectRoster, projectOfAgent, resolveDelegateTarget } from './roster';
 import { orchestrationBlock, subAgentSystemPrompt } from './prompts';
 import { orchestratorDeps } from './tools';
+import { writeCollabBoth, writeCollabToAgentChat } from './collabChat';
 
 const TASK_MAX = 600;
 const CONTEXT_MAX = 2000;
@@ -119,7 +120,7 @@ export const DELEGATE_TOOL: ToolDefinition = {
   },
 };
 
-/** 委派被拒：当场回执（不 park）+ 频道留痕，让发起方自己决定下一步 */
+/** 委派被拒：当场回执（不 park）+ 频道留痕 + 对话流留痕（无感核心：协同进对话流） */
 async function reject(
   ctx: ServerExecutionContext,
   reason: keyof typeof REJECT_TEXT | string,
@@ -127,6 +128,23 @@ async function reject(
 ): Promise<LoopToolResult> {
   const text = REJECT_TEXT[reason] ?? `这次委派被拒了（${reason}）。`;
   await writeSystem(ctx, target, reason, text).catch(() => undefined);
+  // 无感核心：被拒也要进对话流，折叠成一行摘要（前端后续渲染成折叠卡）
+  try {
+    const { pool, cipher } = orchestratorDeps();
+    const fromId = ctx.agentId;
+    if (fromId && target && target.id) {
+      const fromName = `#${fromId}`;
+      await writeCollabToAgentChat(pool, cipher, fromId, {
+        kind: 'system',
+        fromId,
+        fromName,
+        toId: target.id,
+        toName: target.name,
+        status: 'rejected',
+        detail: text,
+      });
+    }
+  } catch {}
   return {
     ok: false,
     error: reason,
@@ -227,6 +245,16 @@ export async function executeDelegate(
     payload: { status: 'running', delegationId },
     delegationId,
   });
+  // 无感核心：协同进对话流（派单方和接单方各一条，折叠摘要）
+  void writeCollabBoth(pool, cipher, {
+    kind: 'dispatch',
+    fromId,
+    fromName,
+    toId: target.id,
+    toName: target.name,
+    task,
+    delegationId,
+  }).catch(() => undefined);
 
   // 子循环：**分离式**（不进主 loops Map）、没有页、工具表里没有浏览器工具
   const roster = await loadProjectRoster(pool, ctx.userId, projectId, target.id);
@@ -308,10 +336,21 @@ export async function executeDelegate(
           payload: { reason, delegationId, status: 'failed' },
           delegationId,
         }).catch(() => undefined);
+        void writeCollabBoth(pool, cipher, {
+          kind: 'system',
+          fromId,
+          fromName,
+          toId: target.id,
+          toName: target.name,
+          status: 'failed',
+          detail: `委派被取消：${reason}`,
+          delegationId,
+        }).catch(() => undefined);
         return;
       }
       /**
        * ★ 用户要求 2（超时熔断）：**如实告知「暂未完成」**，不假装完成、不留它挂着。
+       * 无感核心：超时也要进对话流
        */
       const mins = Math.round(orch.delegateTimeoutMs / 60_000);
       void finishDelegation(pool, delegationId, { status: 'timeout', error: `超过 ${mins} 分钟未完成` });
@@ -322,6 +361,16 @@ export async function executeDelegate(
         kind: 'system',
         text: `超过 ${mins} 分钟没有做完，这次委派按超时熔断处理（已完成的部分留在上面的过程记录里）。`,
         payload: { reason: 'timeout', delegationId, status: 'timeout' },
+        delegationId,
+      }).catch(() => undefined);
+      void writeCollabBoth(pool, cipher, {
+        kind: 'system',
+        fromId,
+        fromName,
+        toId: target.id,
+        toName: target.name,
+        status: 'timeout',
+        detail: `超过 ${mins} 分钟未完成，按超时熔断`,
         delegationId,
       }).catch(() => undefined);
       deliver({
@@ -379,7 +428,7 @@ export async function executeDelegate(
       kind: 'delegate',
       etaMs,
       note: `我已经把这件事交给「${target.name}」了，最多等 ${Math.round(etaMs / 60_000)} 分钟。` +
-        '这一步我先停下来等它，结果一回来就自动接着做。过程可以在「内部频道」里看。',
+        '这一步我先停下来等它，结果一回来就自动接着做。协同过程已写入对话流，折叠展示。',
     },
   };
 }
@@ -522,7 +571,7 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
     data: { delegationId, status: 'failed', steps: sub.step },
   });
 
-  // ------------------------------------------------------------ 局部小工具
+  // ------------------------------------------------------------ 局部小工具（无感核心：协同进对话流，频道仍保留）
   async function progress(text: string): Promise<void> {
     await addChannelMessage(pool, cipher, {
       channelId,
@@ -531,6 +580,16 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       kind: 'progress',
       text,
       payload: { delegationId, steps: sub.step },
+      delegationId,
+    }).catch(() => undefined);
+    // 进度也进对话流（折叠摘要，细节前端可展开）
+    void writeCollabToAgentChat(pool, cipher, fromId, {
+      kind: 'progress',
+      fromId: target.id,
+      fromName: target.name,
+      toId: fromId,
+      toName: input.fromName,
+      detail: text,
       delegationId,
     }).catch(() => undefined);
   }
@@ -543,6 +602,17 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       kind: 'reply',
       text,
       payload: { delegationId, status: 'done', steps: sub.step, findings: outline.slice(0, 12) },
+      delegationId,
+    }).catch(() => undefined);
+    // 交回也进对话流
+    void writeCollabBoth(pool, cipher, {
+      kind: 'reply',
+      fromId: fromId,
+      fromName: input.fromName,
+      toId: target.id,
+      toName: target.name,
+      summary: text,
+      status: 'done',
       delegationId,
     }).catch(() => undefined);
   }
