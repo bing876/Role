@@ -1,349 +1,147 @@
 # AI 工作台（ai-workbench）
 
-Electron + React + TypeScript + Vite 的桌面应用，npm workspaces monorepo 结构。
+桌面端的「多智能体工作台」：每个项目里有一组智能体（Bots），你在对话里把活交给它们；
+它们能驾驶工作台里**内嵌的真实浏览器**、联网搜索、互相委派，并记住你定下的规矩。
 
-当前进度：**第 3 步「遥控器先通（本地驾驶）」已完成**。
+- **桌面端** `apps/desktop` —— Electron + React + TypeScript + Vite。
+- **服务端** `apps/server` —— Fastify 5 + PostgreSQL，接 DeepSeek（可换 OpenAI 兼容接口）。**模型调用、密钥和数据都在服务端**。
+- **共享类型** `packages/shared` —— 两端共用的接口 / 工具定义。
 
-一条命令同时拉起 Vite 和 Electron，主窗口是一个**简易聊天界面**（左联系人「小助」/ 中聊天 / 右控制区 + 任务卡片），
-右侧那一栏**内嵌一个 `<webview>`**，能直接显示真实网页（默认 example.com）—— 不是独立窗口，也不是 iframe。
-
-第 3 步让程序能**驾驶这块内嵌页**：打开网址 / 点击 / 输入 / 滚动 / 读页面 / 暂停。
-驱动方式是主进程 `webContents.debugger`（CDP），右栏底部有一块**很丑的调试区**用来验证。
-**不接大模型**（`ask_user` / `done` 只定义了类型）。
-
-数据全部只活在内存里（刷新即丢）；尚未接入 AI、登录、数据库。
+> 本 README 按 2026-09-24 分支 `arena/01a0ce4f-role` 的实际代码改写。旧版里「第 3 步已完成 / 不接大模型 / 数据只活在内存」早已不成立。
+> 界面和文案还没定稿：**前端要按设计稿 1:1 重做**，本仓库这一轮只负责数据、接口和「跑通」。
 
 ---
 
-## 目录结构
+## 现在能做什么
 
-```
-ai-workbench/
-├── package.json                    # 根 workspace，统一 dev / build / typecheck 入口
-├── tsconfig.base.json              # 共享 TS 编译基线
-├── scripts/
-│   └── clean.mjs                   # 清理各包构建产物
-├── apps/
-│   ├── desktop/                    # 前端 + Electron
-│   │   ├── package.json
-│   │   ├── index.html              # Vite 入口 HTML
-│   │   ├── vite.config.ts
-│   │   ├── tsconfig.json           # 渲染进程（DOM + JSX）
-│   │   ├── tsconfig.electron.json  # 主进程 / preload（CommonJS + Node）
-│   │   ├── scripts/
-│   │   │   └── start-electron.mjs  # Electron 启动包装器（见「关于启动包装器」）
-│   │   ├── electron/
-│   │   │   ├── main.ts             # 主进程：建主窗口、注册 IPC（浏览器区域靠 IPC 转发驱动）
-│   │   │   ├── driver.ts           # 第 3 步：本地驾驶执行器（webContents + CDP）
-│   │   │   └── preload.ts          # 安全桥：contextBridge 白名单
-│   │   └── src/
-│   │       ├── main.tsx            # React 挂载
-│   │       ├── App.tsx             # 简易聊天界面（假数据 / 内存态）+ 任务卡片 + 第 3 步调试区
-│   │       ├── styles.css
-│   │       └── global.d.ts         # window.workbench 类型声明
-│   └── server/                     # 后端，暂为空（只有 README）
-│       └── README.md
-├── docs/
-│   └── acceptance/                 # 各步验收证据（截图 + 报告）
-└── packages/
-    └── shared/                     # 跨端共享 TypeScript 类型
-        ├── package.json
-        ├── tsconfig.json
-        └── src/index.ts            # ChatMessage / ChatSession / WorkbenchBridge / BrowserAction
-```
-
----
-
-## 环境要求
-
-- Node.js ≥ 18（本项目在 Node 22 + npm 10 上验证通过）
-
----
-
-## 安装
-
-```bash
-npm install
-```
-
-首次安装会下载 Electron 二进制（约 100MB），耗时可能几分钟，属于正常现象。
-
----
-
-## 打包与本机安装（第 12 步）
-
-桌面安装包只包含 Electron 主窗口和已经编译的桌面界面；**不会**打包 `apps/server`、Postgres 数据、`.env` 或任何 API Key。后端仍按 [`apps/server/README.md`](apps/server/README.md) 在用户本机单独启动，保持现有的 Postgres + `apps/server` 架构。
-
-```bash
-npm run package
-```
-
-该命令会先编译共享类型、Electron 主进程和 Vite 渲染页面，再由 `electron-builder` 为**当前操作系统**生成可安装产物。默认输出目录是 `apps/desktop/release/`（已忽略，不进 Git）：
-
-| 当前系统 | 产物 | 打开方式 |
+| 能力 | 在哪 | 说明 |
 | --- | --- | --- |
-| Windows | `AI-Workbench-<version>-win-<arch>.exe` | 双击 NSIS 安装程序，安装后从开始菜单打开“AI 工作台” |
-| macOS | `AI-Workbench-<version>-mac-<arch>.dmg` | 打开 DMG，将“AI 工作台”拖进 Applications 后启动 |
-| Linux | `AI-Workbench-<version>-linux-<arch>.AppImage` | `chmod +x <产物>.AppImage && ./<产物>.AppImage` |
+| 账号 | `routes/auth.ts` | 手机验证码登录（未注册自动建号 + 默认项目 + 智能体「小助」）、XYZ 号 + 密码登录。开发模式验证码只进服务器日志 |
+| 项目 = 天然的群 | `routes/projects.ts`、`projectScope.ts` | 项目是智能体的容器，同项目智能体天生同属一个协作空间；**不单独建群聊表** |
+| 智能体 | `routes/agents.ts`、`orchestrator/agentBuilder.ts` | 建 / 改人设 / 删；对话里说「建一个 X 助手」会先确认再建，问句（「建一个是什么意思？」）不会误建 |
+| 流式聊天 | `routes/chat.ts`、`llm.ts` | SSE 流式；模型调用统一出口 `llm.ts`（计数进 `/health`，证明空闲时不调模型） |
+| 浏览器工具循环 | `toolLoop.ts`、`routes/loop.ts`、`electron/driver.ts` | 脑在服务端，手在桌面：`open_url / read_page / click / type / scroll / stop`，由 Electron 主进程通过 CDP 驾驶内嵌 `<webview>`。敏感字段（密码 / 验证码 / 支付 / 证件）不代填 |
+| 联网搜索 | `search/` | Tavily；`web_search` 定义只有一个来源（`search/toolDef.ts`），聊天与编排共用 |
+| 多智能体编排 | `orchestrator/` | `spawn_workers`（临时工并行）、`delegate`（委派同事，默认 10 分钟熔断）、总协调路由（Chief-of-Staff）；协同过程以折叠摘要写进对话流 |
+| 结构化交接 | `orchestrator/handoff.ts` | 每次委派一个 `handoffs/<id>.md`（目标 / 输入 / 产出要求 / 审批边界），频道消息只传 `handoff://` 路径；`board.md` 由**落库锁** `board_locks` 串行化 |
+| 记忆 | `routes/memories.ts`、`memory*.ts` | 单一 `memories` 表，账号 / 智能体 / 会话三级作用域；确认后才注入；敏感内容整条丢弃。检索是**模糊字面匹配**（见「已知缺口」） |
+| 项目白板 | `orchestrator/whiteboard.ts` | 项目级简报，所有成员自动注入；硬上限 2000 字，超出的归档进项目记忆 |
+| 技能（Skills） | `orchestrator/skills.ts` | 「教一次」落成 `skills` 表（触发条件 / 步骤 / 决策规则 / 产出要求 / 审批边界），命中时注入，可自我修订 |
+| 定时 / 事件触发 | `orchestrator/routines.ts` | Routines：`interval`（≥5 分钟）/ 每日定点 / 事件 |
+| 重启恢复 | `orchestrator/checkpoint.ts` | 循环状态落 `loop_checkpoints`，服务重启后续跑；工具调用按 `tool_call_id` 去重 |
+| 上下文压缩 | `orchestrator/contextCompress.ts` | 长任务的工具历史只增不减会爆，按预算压缩 |
+| 模型路由 | `modelRouter.ts` | 用户不选模型，服务端按任务类型（chat / tool / extract / search / worker / delegate）选；可用 `DEEPSEEK_MODEL_<类型>` 分别配置 |
+| 知识库 | `routes/knowledge.ts` | 上传资料（PDF 等），加密分块存储，聊天时字面检索注入 |
+| 桌面端浏览器 | `apps/desktop/src/browser/` | 多标签、按项目隔离登录态（`persist:` 分区按项目），单实例舞台 |
 
-只想检查打包后的目录布局、不生成安装器时可运行 `npm run package:dir`。打包后打开的是安装产物中的 `dist-electron/main.js` 与 `dist/index.html`，不依赖 `npm run dev` 或 Vite；它仍只创建一个主窗口，右栏网页仍由现有 `<webview partition="persist:workbench-browser">` 内嵌。
+### 数据与安全
 
-> 打开安装包前，请先按后端 README 起好 Postgres 和 `npm run dev:server`。桌面包连接本机 `http://127.0.0.1:8787`，后端未启动时会按现有登录界面给出连接提示，而不会在安装包中携带服务端密钥。
+- **数据库里的内容列是密文**（AES-256-GCM，格式 `gcm$iv$tag$ct`，密钥 `DATA_KEY`）：消息、记忆、交接频道、技能各字段、白板、知识库分块、`loop_checkpoints.goal_enc / messages_enc`、手机号等；`agent_delegations.task` 存的是脱敏文本。
+  `loop_checkpoints` **fail-closed**：拿不到 cipher 就不写，绝不回退明文（`npm run verify:db` 用真库 + 变异测试验证过）。
+- **例外：交接文件是明文落盘**。`apps/server/data/handoffs/<项目>/<委派>.md` 与 `board.md` 直接写任务原文，既不加密也不脱敏（目录已 gitignore，但在服务器磁盘上可读）。见「已知缺口」。
+- 手机号只存 `HMAC(PHONE_PEPPER, phone)` + 密文副本；`PHONE_PEPPER` 与 `DATA_KEY` 必须是两把不同的钥匙，缺任何一个服务拒绝启动。
+- 模型 key 只在 `apps/server/.env`（不入库）；桌面安装包**不含**服务端、数据库或任何 key。
 
 ---
 
-## 启动（开发模式）
+## 目录
 
-```bash
-npm run dev
+```
+.
+├── package.json              # workspaces；dev / build / typecheck / verify:* 入口
+├── start-dev.cmd             # Windows 一键：起便携 PostgreSQL + 服务端
+├── apps/
+│   ├── desktop/
+│   │   ├── electron/         # 主进程：driver.ts(CDP 驾驶) agent.ts toolExecutors.ts
+│   │   │                     #         server-supervisor.ts(后端没起就在后台拉起) resource-guard.ts
+│   │   └── src/              # 渲染进程：App.tsx  browser/(浏览器模块，改浏览器只改这里)  channels/
+│   └── server/
+│       └── src/
+│           ├── index.ts      # 启动、路由注册、迁移（带重试）、重启恢复
+│           ├── db.ts         # 全部 DDL（幂等）、withTx
+│           ├── llm.ts        # 模型调用唯一出口      modelRouter.ts  按任务选模型
+│           ├── toolLoop.ts   # 浏览器工具循环        toolRegistry.ts 工具注册表
+│           ├── routes/       # HTTP 接口
+│           ├── orchestrator/ # 编排、委派、交接、白板、技能、Routines、checkpoint、路由
+│           └── search/       # web_search
+├── packages/shared/src/      # index.ts(接口类型)  tools.ts(工具定义)
+├── scripts/verify/           # 全部验收脚本（见下）
+└── docs/                     # 方案、交付 / 验收报告、待办
 ```
 
-这一条命令做了三件事：
-
-1. 编译 `packages/shared`（共享类型先产出 `.d.ts`，desktop 才能引用）
-2. 并行启动 **Vite Dev Server**（http://localhost:5173）和 **Electron**
-3. Electron 等 5173 端口就绪后打开主窗口，加载 React 页面
-
-窗口里应当看到三栏：
-
-- **左**：联系人「小助」（头像占位 + 右上角红点，可用「切换红点」按钮开关）；底部一行 `桥：win32 · pong from electron 33.x.x` —— 这是渲染进程通过 preload 桥向主进程发 IPC 问回来的，说明整条链路是通的。
-- **中**：聊天区，开场有 3 条写死的假消息；底部输入框**能发**，发送后气泡追加到列表（仅内存，刷新即丢；空消息回车不会追加）。
-- **右**：顶部大字「AI 正在控制 / 你正在控制」；下面「暂停 / 继续 / 我来操作」三个按钮**只改这行文案**，同时决定内嵌网页能不能点，并**暂停 / 恢复驾驶**；再下面是任务卡片「示例任务 · running」，带「打开工作台浏览器 / 聚焦浏览器 / 显示 / 隐藏」四个按钮；再下面是**第 3 步调试区**（8 个按钮）；最下面是**内嵌浏览器区域**。
-
-点「打开工作台浏览器」后，右栏下半部分会渲染真实网页（默认 example.com），**不会弹任何新窗口**。
-
-**内嵌页任何时候都能用鼠标点。**「暂停 / 我来操作」只做一件事：让程序停止自动 `click` / `type`，
-把页面交还给你；「继续」只恢复程序自动操作。**不要用 CSS 去挡 webview 的鼠标**（早期版本用
-`pointer-events: none` 表示「AI 控制中」，结果是程序停了、用户也点不动，已废弃）。
-内嵌页里的 `target=_blank` / `window.open` 也不会开新窗口，而是在**当前内嵌页**直接打开（见下节）。
-
-第 3 步调试区（丑是故意的，UI 统一留给前端会话）从左到右：
-
-| 按钮 | 做什么 |
-| --- | --- |
-| 1 打开百度 | `open_url` → 内嵌页跳到 `https://www.baidu.com` |
-| 2 在搜索框输入 | `type` → 往可见的搜索框写入「AI 工作台」 |
-| 3 点击搜索 | `click` → 点「百度一下」，页面跳到搜索结果 |
-| 4 向下滚动 | `scroll` → 向下滚一屏 |
-| 5 读取页面 | `read_page` → 把 url / title / 可见按钮 / 链接 / 输入框文字显示在主窗口 |
-| 6 暂停驾驶 / 7 继续驾驶 | 暂停后 `click` / `type` 不再自动执行，把页面交还给用户 |
-| 8 截图 | `screenshot` → CDP 截图，只放内存（缩略图显示在调试区） |
-
-关闭窗口即退出；终端 `Ctrl + C` 会同时结束 Vite 和 Electron。
-
-> 改 `electron/main.ts` 或 `preload.ts` 后需要重启 `npm run dev`（主进程不做热重载）；改 `src/` 下的 React 代码会即时热更新。
-
 ---
 
-## 其他命令
+## 本地运行
+
+需要 **Node ≥ 18**（在 Node 22 上验证）和 **PostgreSQL**（Docker：`npm run db:up`；Windows 也可用 `start-dev.cmd` 起便携版）。
+
+```bash
+npm install                               # 首次会下载 Electron（约 100MB）
+cp apps/server/.env.example apps/server/.env
+#   必填：DATABASE_URL  JWT_SECRET(≥16)  DATA_KEY(64 位 hex)  PHONE_PEPPER(≥16，且 ≠ DATA_KEY)
+#   模型：DEEPSEEK_API_KEY（不填也能起，聊天接口会明确拒答）；搜索：TAVILY_API_KEY（可选）
+npm run dev:server                        # 服务端 :8787，启动后自动建表
+npm run dev                               # 桌面端（Vite + Electron）
+```
+
+- 服务端监听 `0.0.0.0:8787`；桌面端默认连 `http://127.0.0.1:8787`。
+- 表是启动时自动建的（`db.ts` 的 DDL 全部幂等）；库还在恢复中时会每 3 秒重试，最多约 2 分钟。
+- 桌面端发现后端没起，会在后台自己拉起一份（只管自己拉起的那份，不碰你手动起的）。
+
+### 常用命令
 
 | 命令 | 作用 |
 | --- | --- |
-| `npm run dev` | 开发模式：Vite + Electron 一起起 |
-| `npm run build` | 编译共享包 + 主进程 + 渲染进程产物 |
-| `npm run start` | 先构建，再以生产模式打开窗口（加载 `dist/index.html`） |
-| `npm run package` | 编译桌面端并用 electron-builder 生成当前系统的安装包到 `apps/desktop/release/` |
-| `npm run package:dir` | 编译桌面端并生成 unpacked 目录（不产出安装器），用于检查包内文件布局 |
-| `npm run typecheck` | 全量 TypeScript 类型检查 |
-| `npm run clean` | 清理各包的 `dist` / `dist-electron` |
+| `npm run dev` / `npm run dev:server` | 桌面端 / 服务端开发模式 |
+| `npm run typecheck` | shared + desktop + server 全量类型检查 |
+| `npm run build` | 构建三个 workspace |
+| `npm run package` / `package:dir` | 用 electron-builder 打当前系统的安装包 / 只出目录（产物在 `apps/desktop/release/`，不入库） |
+| `npm run live` | 起整套桌面工作台并自动登录（Windows 验收用） |
+| `npm run clean` | 清理构建产物 |
 
 ---
 
-## 安全设计
+## 验收
 
-主进程创建窗口时使用：
+所有验收脚本都在 `scripts/verify/`，按主题挂在根 `package.json`：
 
-```ts
-webPreferences: {
-  preload: path.join(__dirname, 'preload.js'),
-  contextIsolation: true,   // 渲染进程与 preload 上下文隔离
-  nodeIntegration: false,   // 渲染进程拿不到 Node
-  sandbox: true,            // 开启 Chromium 沙箱
-  webSecurity: true,
-}
-```
-
-渲染进程**没有** `require` / `process` / `ipcRenderer`，只能用 `preload.ts` 里白名单暴露的 `window.workbench`：
-
-```ts
-contextBridge.exposeInMainWorld('workbench', {
-  platform,                                       // 平台标识
-  appVersion,                                     // 版本号
-  ping: () => ipcRenderer.invoke('app:ping'),     // 自检
-  openBrowser: (url?: string) => ipcRenderer.invoke('workbench:open', url),
-  showBrowser: () => ipcRenderer.invoke('workbench:show'),
-  hideBrowser: () => ipcRenderer.invoke('workbench:hide'),
-  focusBrowser: () => ipcRenderer.invoke('workbench:focus'),
-  // 第 3 步：驾驶内嵌页（动作进 → 结果出）
-  drive: (action, targetWebContentsId?) => ipcRenderer.invoke('workbench:drive', action, targetWebContentsId),
-  readPage: (targetWebContentsId?) => ipcRenderer.invoke('workbench:read-page', targetWebContentsId),
-  pauseDriving: () => ipcRenderer.invoke('workbench:pause-driving', true),
-  resumeDriving: () => ipcRenderer.invoke('workbench:pause-driving', false),
-  // 订阅主进程转发过来的 UI 指令，返回取消订阅函数
-  on: (event, cb) => { /* ipcRenderer.on(`workbench:browser:${event}`, ...) */ },
-});
-```
-
-新增能力时三处齐了才算打通：主进程 `ipcMain.handle('xxx', ...)` 注册 → preload 加一个方法转发 → `packages/shared` 的 `WorkbenchBridge` 接口补类型。
-
-主进程另外做了两件防护：外链一律交给系统浏览器（`setWindowOpenHandler` 拒绝应用内开窗），并阻止**主窗口**被导航到外部站点（`will-navigate`）。
-
----
-
-## 内嵌工作台浏览器
-
-主窗口的 `webPreferences` 里开了 `webviewTag: true`，右栏那个 `<webview>` 就是这个开关的直接产物：
-
-```tsx
-<webview
-  src={browserUrl}
-  partition="persist:workbench-browser"   // 独立持久化会话，与主窗口隔离
-  style={{ display: browserVisible ? 'flex' : 'none', pointerEvents }}
-/>
-```
-
-四个实现要点：
-
-1. **主进程不建窗口，只做转发**。渲染进程发 `openBrowser(url)` → 主进程 → `mainWindow.webContents.send('workbench:browser:open', url)` → 渲染层订阅到之后显示/导航。
-   绕这一圈是为了将来让任务系统、快捷键或主进程侧逻辑也能驱动这块区域。
-2. **`display` 必须是 `flex`，不能是 `block`**。`<webview>` 内部靠 flex 才能把 guest 视图撑开；一旦被覆盖成 `block`，
-   guest 会永久卡在默认的 **150px** 高（元素量出来 489px 也没用，给死高度都救不回来）。踩过一次，详见验收报告。
-3. **webview 的 `pointer-events` 恒为 `auto`**。曾经的写法是「AI 控制中 → `none`」，看起来合理，
-   实际后果是**程序停了自动操作，用户也一起点不动**（命中测试直接跳过 guest）。
-   「谁能操作网页」不是 CSS 说了算，而是主进程执行器里的 `paused` 开关：它只拦程序自己的
-   `click` / `type`，不碰用户的鼠标。
-4. **会话隔离靠 `partition`**。guest 的 session 既不是主窗口的 session，又正好等于 `persist:workbench-browser` 分区。
-5. **内嵌页要能像浏览器一样开新链接**。`<webview>` 带 `allowpopups`，主进程对所有 webview guest
-   注册 `setWindowOpenHandler`：只放行 `^https?://`，`setImmediate` 后让**当前 guest** `loadURL(url)`，
-   然后 `deny`。这样点 `target=_blank` 的结果链接是在右栏当前页打开，**不会冒出新窗口**。
-   两个细节都不能省：不加 `allowpopups` 请求根本到不了主进程；不放 `setImmediate` 而在处理函数里
-   同步 `loadURL`，导航会被丢弃（表现就是「点了没反应」）。
-
-`openBrowser` / `showBrowser` / `hideBrowser` / `focusBrowser` 都在主进程侧只做一次 `webContents.send`，渲染进程碰不到 `BrowserWindow`。
-
----
-
-## 第 3 步：本地驾驶（遥控器先通，不接 AI）
-
-目标：让程序能驾驶**上面那块内嵌 webview**（不是独立窗口、不是云端浏览器、不引入 Playwright / Puppeteer）。
-
-### 链路
-
-```
-渲染层  window.workbench.drive(action, webviewId?)
-          ↓ ipcRenderer.invoke
-主进程  ipcMain.handle('workbench:drive')  →  electron/driver.ts
-          ↓ webContents.fromId(webviewId)   ← 拿 guest webContents
-          ↓ webContents.debugger.attach('1.3')   ← CDP
-内嵌页  Runtime.evaluate / Input.dispatchMouseEvent / Page.captureScreenshot
-          ↓
-返回    { ok, action, detail?, pageSnapshot?, error?, screenshot? }
-```
-
-- 驾驶目标 = 内嵌 webview 的 **guest webContents**。渲染层用 `webview.getWebContentsId()` 拿 id 传过来；
-  主进程校验 `getType() === 'webview'` 才用，拿不到就回退为扫描 `getAllWebContents()`。
-- 渲染进程**全程没有** `require('electron')`；`contextIsolation: true` 保持不变，能力只从 preload 白名单进来。
-- 全程**不创建任何 BrowserWindow**。
-
-### 动作表
-
-| action | 含义 | 备注 |
+| 命令 | 覆盖 | 依赖 |
 | --- | --- | --- |
-| `open_url` | 内嵌页跳转到指定 url | 等 `did-stop-loading`，超时 30s |
-| `click` | 按 target 点击 | 先做命中测试，命中走真实鼠标事件；命不中退化为页面侧 `el.click()` |
-| `type` | 按 target 输入文字，可选 submit | 三层兜底 + 读回校验，详见下文 |
-| `scroll` | 上/下滚一屏 | |
-| `wait` | 等待 n 秒 | 上限 30s |
-| `read_page` | 返回 url / title / 可见按钮、链接、输入框文字 | |
-| `screenshot` | CDP 截图 | 只放内存的 data URL，不落库 |
-| `ask_user` / `done` | **只定类型，未接业务** | 第 3 步不接大模型 |
+| `npm run verify` | 下面除 `verify:db` 外的全部 | 无（内存库 PGlite / 读源码） |
+| `npm run verify:tools` | 工具表、注册表契约、回滚开关 | — |
+| `npm run verify:r4` | 发车意图判定口径一致 | — |
+| `npm run verify:orch` | 编排：schema / 临时工 / park / 委派 / 端到端 / 路由 / 频道 / 一键关停 | PGlite |
+| `npm run verify:websearch` | `web_search` 单一定义来源 | — |
+| `npm run verify:memory` | 记忆合并四批、记忆卫生、记忆检索 | PGlite |
+| `npm run verify:persona` | 总协调人设、身份块注入 | — |
+| `npm run verify:collab` | 协同进对话流、头像即状态、总协调路由、Routines、上下文压缩 | — |
+| `npm run verify:batches` | 交接、白板、路由升级、重启恢复、前端引导、五项自查、Skills、电脑可见度、模型路由 | — |
+| `npm run verify:db` | **连真库**：checkpoint 加密（直接 SELECT + 漏传 cipher 变异）、board 落库锁（多进程 + kill -9 重启） | 真 PostgreSQL，`VERIFY_DATABASE_URL=postgres://…`（可写的测试库） |
 
-`target` 支持：CSS 选择器（**可以是逗号列表**，天然降级）→ placeholder / aria-label / name / id / title 精确匹配
-→ 可见文字精确 / 包含匹配。选择器会遍历**所有**匹配取第一个**可见**的（真实站点常把不可见的旧版控件排在前面）。
-
-### ⚠️ 本机驾驶的三个真实坑
-
-1. **CDP 文本注入会静默失败**。在本机（虚拟机环境）上，`Input.insertText`、逐字符
-   `Input.dispatchKeyEvent`、`DOM.focus + insertText` 全都执行成功但不报错、值仍为空。
-   所以 `type` 是「三层兜底 + 每次写回后读回 `el.value` 校验」：
-   `Input.insertText` → `document.execCommand('insertText')` → 原生 setter + `InputEvent`；
-   实际用了哪种会写在回执的 `detail` 里，三种都失败就返回 `ok:false`。
-   （**鼠标**事件不受影响，`Input.dispatchMouseEvent` 正常。）
-2. **点击必须先做命中测试**。内嵌页视口只有约 551px 宽，站点横向溢出时按钮会跑到视口外面，
-   此时鼠标事件命不中任何元素、点击静默失败但回执仍是 `ok:true`。
-   现在用 `elementFromPoint` 判定，命不中就退化并在 `detail` 里说明。
-3. **选择器要取第一个可见的匹配**。`querySelector` 会返回不可见的元素（百度首页隐藏的
-   `#kw` / `#su` 排在可见的新版搜索框前面），导致误判"找不到元素"。
-
-### 暂停
-
-- 主进程持 `paused` 开关；暂停后 `click` / `type` 直接拒绝执行并回报原因
-  （`open_url` / `scroll` / `read_page` / `screenshot` 不受影响）。
-- 界面上的「暂停 / 我来操作」按钮只负责把控制权交给你；内嵌页本来就是可点的，不需要「恢复」。
-
-验收证据见 `docs/acceptance/step-3-main-window.png`、`step-3-driven-page.png`
-与 `docs/acceptance/step-3-验收报告.md`；暂停/手点的复验见
-`docs/acceptance/step-3-p0-input-验收报告.md`。
-
-### 已知问题（第 3 步未解决）
-
-- **百度结果里的蓝色标题，用户手点点不进去**。根因是内嵌页视口只有约 551px 宽，
-  而百度那排搜索 UI 有 771px 宽，标题被挤到视口右侧外面，命中测试过不了。
-  程序自己驾驶时有 `el.click()` 降级可以绕过，用户手点没有降级——要根治只能加宽右栏（属前端 UI）。
-- `read_page` 只取 url / title / 可见按钮 / 链接 / 输入框，正文抽取偏弱。
+> 很多脚本是「读源码做结构检查」，只能证明代码长什么样，证明不了行为；涉及安全和并发的结论以 `verify:db` 这类真库 / 真进程的测试为准。
+> `scripts/verify/` 里还有大量 `.py` 与探针脚本是历史上在 Windows 真机上跑的 E2E / 性能取证，依赖本机环境，不在 `npm run verify` 里。
 
 ---
 
-## 关于启动包装器
+## 已知缺口（如实写，别当已完成）
 
-`apps/desktop/scripts/start-electron.mjs` 是一个约 60 行的启动包装器，dev 和 start 都走它。
-
-**为什么需要**：部分虚拟机 / 远程桌面 / 容器环境缺少初始化 Chromium 沙箱所需的系统能力，Electron 会在启动 1~2 秒后直接崩掉：
-
-```
-FATAL:gpu_data_manager_impl_private.cc  GPU process isn't usable. Goodbye.
-```
-
-**它做什么**：先按上面的默认（安全）参数启动；**只有**确认命中这种环境时，才自动加一次 `--no-sandbox` 重试，并在终端打印醒目提示。普通桌面环境永远不会走到这个分支，安全设置保持默认；走到时也不会静默降级。
-
-回退时渲染进程依然拿不到 Node —— `contextIsolation: true` 和 `nodeIntegration: false` 不受影响，被放宽的只是 Chromium 的进程级沙箱。
+- **前端未定稿**：界面、文案、版式等设计稿到了再 1:1 重做。现有桌面 UI 是能跑通用的，不是成品。
+- **电脑三级可见度（Status / Preview / Takeover）只做了后端和组件**：`agents.computer_visibility` 字段和 `GET/POST /agents/:id/visibility` 接口已可用；`ComputerVisibility.tsx` 组件**还没挂进界面**，而且它请求的是相对路径 `/api/...`，与桌面端其余请求使用的 `API_BASE` 不一致 —— 前端重做时一起接。
+- **记忆 / 路由是模糊字面匹配，不是语义检索**：分词 + 加权 + Jaccard，零字面重叠的同义句（「爱喝拿铁」vs「喜欢喝咖啡」）照样检索不到。真语义要另接 embedding 模型（DeepSeek 没有 embedding API），调用点只有 `memories.ts` 的 `wordHits` 与 `chiefOfStaff.ts` 的 `routeByFuzzy`。
+- **模型路由目前只按任务类型选**：闲聊里「简单 / 复杂」的判断只写进日志，两者选的是同一个模型配置；不配 `DEEPSEEK_MODEL_*` 时所有任务都走 `DEEPSEEK_MODEL`。
+- **交接文件明文落盘**：`handoffs/*.md` 和 `board.md` 写的是任务原文，与数据库「内容全密文」的口径不一致（库里同一份任务 `agent_delegations.task` 是脱敏存的）。修法二选一：写盘前走 `redactForStorage`，或整体改为存库密文、文件只做导出视图。
+- **重启恢复的工具去重**只有逻辑模拟测试（`self-check-fixes.mjs`），还没有「执行后、结果落库前 kill 进程」的真进程测试。
+- 生产环境的 CSP 未加（避免打断 Vite HMR）。
 
 ---
 
-## 进度与下一步
+## 桌面端备忘（踩过的坑，改之前先看）
 
-已完成：
+- **浏览器是单实例组件**：`embedWcId` 单值、所有 tab 同一舞台按 z-index 分层、登录态按项目分区 —— 换前端时这些是功能，不能动。
+- `<webview>` 的 `display` 必须是 `flex`（`block` 会让 guest 卡在 150px 高）；`pointer-events` 恒为 `auto`，「谁能操作网页」由主进程执行器的 `paused` 开关决定，不靠 CSS 挡鼠标。
+- CDP 文本注入在部分虚拟机上会**静默失败**：`type` 走三层兜底（`Input.insertText` → `execCommand` → 原生 setter）并读回校验；点击先做命中测试，命不中退化为 `el.click()`。
+- 内嵌页的 `target=_blank` / `window.open` 在当前页打开，不弹新窗口（`allowpopups` + `setWindowOpenHandler` + `setImmediate` 后 `loadURL`，缺一不可）。
+- 部分虚拟机缺 Chromium 沙箱能力会崩在 `GPU process isn't usable`：`apps/desktop/scripts/start-electron.mjs` 只在确认命中时才加 `--no-sandbox` 重试，并打印提示；`contextIsolation` / `nodeIntegration:false` 不受影响。
+- 自动化反复启停容易留孤儿进程（`Port 5173 is already in use` + Electron 单实例锁静默退出）：先杀 `electron.exe` 和占 5173 的进程再起。
 
-- [x] **第 1 步** 骨架跑通：`npm run dev` 一条命令起 Vite + Electron，IPC 链路通
-- [x] **第 2 步「脸和门」**：简易聊天界面（内存态假数据）+ 右栏内嵌 `<webview>` 显示真实网页
-      验收证据见 `docs/acceptance/step-2-main-window.png` 与 `docs/acceptance/step-2-验收报告.md`
-- [x] **第 3 步「遥控器先通」**：用主进程 `webContents.debugger`（CDP）驾驶内嵌 webview
-      （`open_url` / `click` / `type` / `scroll` / `read_page` / `screenshot` + 暂停开关），右栏加调试区按钮
-      验收证据见 `docs/acceptance/step-3-main-window.png`、`step-3-driven-page.png`
-      与 `docs/acceptance/step-3-验收报告.md`
-
-尚未实现：
-
-- [ ] 接入大模型 API，流式返回（目前聊天是纯本地假数据，发出去不会有人回）
-- [ ] 任务编排真正驱动驾驶（`ask_user` / `done` 目前只定义了类型）
-- [ ] 会话持久化与历史列表
-- [ ] `apps/server` 后端服务
-- [ ] 生产环境补充 CSP（目前 `index.html` 未加，避免打断 Vite HMR；Electron 在 dev 下会打印一条 CSP 提示，打包后自动消失）
-- [ ] 打包分发（electron-builder / electron-forge）
-
-**待定**：内嵌页视口只有约 551px 宽（右栏 50vw），很多站点会横向溢出。
-后续若要驾驶"完整桌面版"页面，需要先决定是加宽右栏（属前端 UI）还是接受窄视口。
-
----
-
-## 排查提示
-
-非交互式反复启停（自动化 / 验收脚本）容易攒下孤儿进程，症状是下次 `npm run dev` 报
-`Port 5173 is already in use`，同时 Electron 因为单实例锁「1 秒内静默退出、退出码 0」。
-两者叠加看起来像启动失败，其实只是旧实例还在。清理方式：
-
-```bash
-taskkill /F /IM electron.exe
-PID=$(netstat -ano | grep ":5173.*LISTENING" | awk '{print $5}' | head -1)
-[ -n "$PID" ] && taskkill /F /T /PID "$PID"
-```
+更细的接口表见 [`apps/server/README.md`](apps/server/README.md)（部分内容停留在早期步骤，以代码为准），各阶段方案与验收报告见 `docs/`。
