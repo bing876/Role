@@ -39,6 +39,7 @@ import { llmFetch } from '../llm';
 import { REFERENCE_PREFIX, sanitizeReferenceLine } from '../promptPolicy';
 import { keepaliveOfAgent } from '../sessionState';
 import { HEN_KIND, isProtectedKind, loadOwnedProject, resolveAgentCreator } from '../projectScope';
+import { resolveAgentStatus } from '../orchestrator/agentStatus';
 import { isSensitive, normalizeText } from '../memoryNormalize';
 import { extractJsonLoose, TIDY_PROMPT, UNIFIED_TIDY_PROMPT, writeTidyLayer } from '../memoryShared';
 import { buildIdentityBlock, validatePersonaInput } from '../identityBlock';
@@ -346,6 +347,13 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
       const out: AgentListResult = { agents: r.rows.map(toAgentView) };
       for (const a of out.agents) {
         a.listening = await keepaliveOfAgent(pool, claims.sub, a.id);
+        try {
+          const st = resolveAgentStatus(a.id);
+          a.status = st.status;
+          a.statusDetail = st.detail;
+          a.statusLoopId = st.loopId ?? null;
+          a.statusStep = st.step;
+        } catch {}
       }
       return out;
     } catch (err) {

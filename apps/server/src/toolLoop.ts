@@ -857,6 +857,23 @@ export function hasLoop(loopId: string): boolean {
   return getLoop(loopId) !== null;
 }
 
+export function loopsOfAgent(agentId: number): LoopSession[] {
+  const out: LoopSession[] = [];
+  for (const s of loops.values()) {
+    if (s.agentId === agentId) out.push(s);
+  }
+  return out;
+}
+
+export function latestLoopOfAgent(agentId: number): LoopSession | null {
+  let best: LoopSession | null = null;
+  for (const s of loops.values()) {
+    if (s.agentId !== agentId) continue;
+    if (!best || s.touchedAt > best.touchedAt) best = s;
+  }
+  return best;
+}
+
 /** 按「哪张页」停：桌面放下某一路时用它 */
 /**
  * 「还能被停掉」的状态。
