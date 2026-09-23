@@ -376,15 +376,13 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
     }
   });
 
+  // 批次 E | 对话式建智能体：支持直接传 persona，立刻建好不挡你（不走 pending 引导表）
   app.post('/agents', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     try {
-      const found = await resolveAgentCreator(
-        pool,
-        claims.sub,
-        (req.body as { asAgentId?: unknown } | null)?.asAgentId,
-      );
+      const body = (req.body ?? {}) as { asAgentId?: unknown; name?: unknown; duty?: unknown; who?: unknown; tone?: unknown; persona?: unknown };
+      const found = await resolveAgentCreator(pool, claims.sub, body.asAgentId);
       if (!found.ok) {
         return found.reason === 'missing'
           ? errJson(reply, 400, '缺少 asAgentId：建智能体必须显式指定调用者（不会替你挑身份）')
@@ -399,6 +397,40 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
         );
       }
       const projectId = caller.projectId;
+
+      // 对话式建：若直接传了 name/duty，立刻建好 ready，不走 pending
+      let directPersona: { name: string; who: string; tone: string; duty: string } | null = null;
+      const rawName = typeof body.name === 'string' ? body.name.trim().slice(0, NAME_MAX) : '';
+      const rawDuty = typeof body.duty === 'string' ? body.duty.trim().slice(0, PERSONA_FIELD_MAX) : '';
+      const rawWho = typeof body.who === 'string' ? body.who.trim().slice(0, PERSONA_FIELD_MAX) : '';
+      const rawTone = typeof body.tone === 'string' ? body.tone.trim().slice(0, PERSONA_FIELD_MAX) : '';
+      const rawPersona = body.persona as Record<string, unknown> | undefined;
+      if (rawName && rawDuty) {
+        directPersona = { name: rawName, duty: rawDuty, who: rawWho || `一个专注${rawName}的同事`, tone: rawTone || '简洁、直接' };
+      } else if (rawPersona && typeof rawPersona === 'object') {
+        const vp = validatePersonaInput(rawPersona);
+        if (vp.ok) directPersona = vp.persona as any;
+      }
+
+      if (directPersona) {
+        const created = await withTx(pool, async (client) => {
+          const a = await client.query<{ id: string; name: string }>(
+            "INSERT INTO agents (project_id, name, kind, persona, persona_status, can_create_agents) VALUES ($1, $2, 'custom', $3, 'ready', false) RETURNING id, name",
+            [projectId, directPersona!.name, JSON.stringify(directPersona)],
+          );
+          const c = await client.query<{ id: string }>(
+            'INSERT INTO conversations (project_id, agent_id, title) VALUES ($1, $2, $3) RETURNING id',
+            [projectId, a.rows[0].id, directPersona!.name],
+          );
+          return { agentId: a.rows[0].id, conversationId: c.rows[0].id };
+        });
+        const row = await loadOwnedAgent(pool, claims.sub, Number(created.agentId));
+        if (!row) return errJson(reply, 500, '智能体建好了但读不回来，请刷新一次');
+        const out: AgentCreateResult = { agent: toAgentView(row) };
+        return out;
+      }
+
+      // 旧路径：建空壳 pending，引导表在聊天里填
       const created = await withTx(pool, async (client) => {
         const a = await client.query<{ id: string; name: string }>(
           "INSERT INTO agents (project_id, name, kind, persona_status) VALUES ($1, $2, 'custom', 'pending') RETURNING id, name",

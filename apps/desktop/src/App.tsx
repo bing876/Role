@@ -1234,6 +1234,49 @@ export default function App() {
   };
 
   /**
+   * 批次 E | 对话式建智能体、立刻建好不挡你
+   * quickBuildAgent：从提议或对话里直接建一个带人设的智能体，不走 pending 引导表，立刻 ready
+   */
+  const quickBuildAgent = async (name: string, duty: string) => {
+    const sess = sessionRef.current;
+    if (!sess || agentBusy) return;
+    setAgentBusy(true);
+    setAgentNote('');
+    try {
+      let creator = pickCreator(agentsRef.current);
+      if (!creator) {
+        const fresh = await fetchAgentsFor(curProjectRef.current);
+        if (!fresh) return;
+        setAgents(fresh.agents);
+        creator = pickCreator(fresh.agents);
+      }
+      if (!creator) {
+        setAgentNote('这个项目里没有能建智能体的角色（母鸡 / 自带小助），先新建一个项目再试。');
+        return;
+      }
+      const r = await authFetchJson<AgentCreateResult>('/agents', {
+        method: 'POST',
+        body: JSON.stringify({ asAgentId: creator.id, name: name.slice(0, 24), duty: duty.slice(0, 120) }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      const a = r.agent;
+      if (curProjectRef.current !== null) agentProjectRef.current.set(a.id, curProjectRef.current);
+      setAgents((prev) => prev.concat(a));
+      historyLoadedRef.current.add(a.id);
+      patchChat(a.id, () => ({ messages: [], convId: a.conversationId }));
+      curAgentRef.current = a.id;
+      setCurAgentId(a.id);
+      setProjMem([]);
+      setProjMemOpen(false);
+      setChatNote(`已建好「${a.name}」：${duty}。直接和TA聊就行。`);
+    } catch (e) {
+      setAgentNote(`快捷建没成：${(e as Error).message}`);
+    } finally {
+      setAgentBusy(false);
+    }
+  };
+
+  /**
    * 点「添加」：服务端建一个智能体 + 立刻给它建一条空会话，界面直接切到那个新会话。
    * 不弹独立设置窗、不开新 BrowserWindow —— 引导表就摆在这个新会话里。
    *
@@ -2548,19 +2591,7 @@ export default function App() {
     }, 400);
   };
 
-  // ---- 阶段简报 · 方案 B：临时测试条（暂停 / 继续）----------------------------
-  /**
-   * 为什么要有这条：**正式的暂停/继续 UI 不在本阶段做**（右栏驾驶台已经在 UI-1.6
-   * 回滚里整块撤掉了，源码里没有任何可点的入口），但方案 B 的核心体验是
-   * 「点暂停 → 自己到浏览器里手动操作 → 点继续 → AI 重新感知、不覆盖你刚才的动作」——
-   * 没有可点的按钮，这条链就亲手验不了。
-   *
-   * 所以这里只补一条**最小临时条**：两个按钮直接走主进程已有的 per-target IPC
-   * （`workbench:task:pause` / `:resume`，点名当前这张页的 wcId），
-   * 因此「暂停这一路」不会碰到别的页、也不会碰到别的智能体。
-   */
-  const [driveBar, setDriveBar] = useState<TaskState | null>(null);
-  const [driveNote, setDriveNote] = useState('');
+  // 批次 E：砍掉一切仪表盘，临时测试条已移除（暂停/继续走浏览器原生控制或输入「停」）
 
   // ---- ★ P0 止血（2026-09-21）·「这一轮的上下文没了」确认卡 ------------------
   /**
@@ -2669,63 +2700,9 @@ export default function App() {
       browser.exitEmbed();
     }
   };
-  /** 当前切到前面的那张页（tabId）——切页就换一路，测试条跟着换 */
-  const activeTabId = browser.active?.id ?? null;
+  // 批次 E：activeTabId 轮询已移除（仪表盘砍掉）
 
-  useEffect(() => {
-    if (activeTabId === null) {
-      setDriveBar(null);
-      return;
-    }
-    let off = false;
-    const tick = async () => {
-      const wcId = browser.webContentsIdOf(activeTabId);
-      if (typeof wcId !== 'number') return;
-      try {
-        const st = await window.workbench?.getTaskState?.(wcId);
-        if (!off && st) setDriveBar(st);
-      } catch {
-        /* 读不到就保留上一次的显示，不打断用户操作 */
-      }
-    };
-    void tick();
-    // 1.2s 轮询：只为了让人肉眼看到相位在变（idle → running → paused），
-    // 真正的暂停/继续是由按钮触发的主进程动作，不依赖这个轮询。
-    const timer = window.setInterval(() => void tick(), 1200);
-    return () => {
-      off = true;
-      window.clearInterval(timer);
-    };
-    // 只认「当前这张页」：切页就重新起一轮
-  }, [activeTabId]);
-
-  /** 临时测试条的两个动作：都点名当前这张页的 wcId */
-  const driveBarAct = async (kind: 'pause' | 'resume') => {
-    const tabId = browser.active?.id;
-    if (typeof tabId !== 'number') {
-      setDriveNote('还没有打开的网页——先让 AI 开一张页再点。');
-      return;
-    }
-    const wcId = await browser.awaitWebContentsId(tabId);
-    if (typeof wcId !== 'number') {
-      setDriveNote('这张页还没准备好（拿不到内嵌页句柄）。');
-      return;
-    }
-    try {
-      const st =
-        kind === 'pause'
-          ? await window.workbench?.pauseTask(wcId)
-          : await window.workbench?.resumeTask(wcId);
-      if (st) setDriveBar(st);
-      setDriveNote(
-        kind === 'pause'
-          ? `已暂停（wcId ${wcId}）：现在你可以在这张页里自己点、自己跳转，AI 不会再动一下。改完点「继续」。`
-          : `已继续（wcId ${wcId}）：AI 会先重新读一遍**当前**这张页再接着干，不会重放暂停前的旧动作。`,
-      );
-    } catch (e) {
-      setDriveNote(`没成功：${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
+  // 批次 E：driveBarAct 已移除（仪表盘砍掉，暂停/继续走 detectStopIntent 或浏览器控制）
 
   // 第 5 步门控：未登录（或正在用存好的 JWT 换会话）时，工作台整体不渲染——不做“游客看假数据”
   if (checkingAuth) {
@@ -3219,13 +3196,7 @@ export default function App() {
               作用对象是「当前切到前面的那张页」（按钮点名它的 wcId），
               所以暂停这一路 = 只停这一路，别的页、别的智能体照跑。
             */}
-            <div className="driveBar">
-              {/*
-                ★ P0 止血（2026-09-21）：**「上下文没了」的确认卡**。
-                放在驾驶条里是因为它本来就是驾驶态的一部分 —— 用户刚点了「继续」，
-                视线就在这里；放别处等于弹了看不见。
-              */}
-              {loopGone && (
+            {loopGone && (
                 <div className="loopGone">
                   <span className="loopGone__q">{loopGone.question}</span>
                   <button className="btn loopGone__warn" type="button" onClick={() => answerLoopGone('restart')}>
@@ -3236,26 +3207,6 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <span className="driveBar__tag">临时测试条</span>
-              <button className="btn" type="button" onClick={() => void driveBarAct('pause')}>
-                暂停
-              </button>
-              <button className="btn driveBar__go" type="button" onClick={() => void driveBarAct('resume')}>
-                继续
-              </button>
-              <span className="small">
-                当前页：
-                <b>
-                  {driveStateView(driveBar)?.icon} {DRIVE_PHASE_LABEL[driveBar?.phase ?? 'idle'] ?? driveBar?.phase ?? '空闲'}
-                </b>
-                {/* 第 27 步：谁发起的，在测试条上也一眼看得出来（不再只写一句"已暂停"） */}
-                {driveBar?.phase === 'paused' && driveBar.pausedBy && (
-                  <b> · {driveBar.pausedBy === 'agent' ? 'AI 发起' : '你发起'}</b>
-                )}
-                {driveBar?.wcId != null && ` · wcId ${driveBar.wcId}`}
-              </span>
-              {driveNote && <span className="small driveBar__note">{driveNote}</span>}
-            </div>
             <BrowserPanel
               ws={browser}
               agentLabel={agents.find((a) => a.id === curAgentId)?.name}
@@ -3310,7 +3261,7 @@ export default function App() {
             颜色/图标/文案全部跟着 `pausedBy` 走：蓝=AI 求助、琥珀=你接管、灰=分不清。
           */}
           {(() => {
-            const view = driveStateView(driveBar);
+            const view = driveStateView(task as any);
             if (!view) return null;
             return (
               <div className={`driveState driveState--${view.cls}`} role="status">
@@ -3414,13 +3365,25 @@ export default function App() {
             </div>
           )}
           {messages.map((m, idx) => (
-            /**
-             * 第 18 步：聊天里**只有话和结论**——不再有「网页行」芯片。
-             * 开页成功看中栏工作区的 tab；关页只从工作区消失（最多留一句人话在下面的提示条里）。
-             * 这样连续开百度/必应/知乎、再关掉几张，聊天也不会被一串「已关闭」刷屏。
-             */
             <div key={m.id}>
               <div className={`msg ${m.role}`}>{m.text}</div>
+              {/* 批次 E：第一个智能体提议同事，快捷建按钮（对话式建智能体、立刻建好不挡你） */}
+              {m.role === 'assistant' && m.text.includes('建议先建这几位同事') && (
+                <div className="colleagueProposal" style={{ padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {(() => {
+                    const matches = [...m.text.matchAll(/\d+\. \*\*([^*]+)\*\*：([^（\n]+)/g)];
+                    return matches.map((mat, i) => {
+                      const name = mat[1].trim();
+                      const duty = mat[2].trim();
+                      return (
+                        <button key={i} type="button" className="btn btn--go" onClick={() => void quickBuildAgent(name, duty)} title={duty}>
+                          ＋ 建「{name}」
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
               {/*
                 第 26 步：来源标注 —— 这条回答是从哪些网页查到的。
                 点一条就跳原始网页：`target="_blank"` 会走到主进程第 17 步就装好的
@@ -3537,7 +3500,7 @@ export default function App() {
                   ? '正在打字…'
                   : awaitHere
                     ? '回复小助的提问即可，发出后自动继续…'
-                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（消息加密存服务端，刷新后还在）`
+                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“建一个销售助手”立刻建好，不挡你）`
             }
             value={input}
             onChange={(e) => setInput(e.target.value)}

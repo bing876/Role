@@ -62,6 +62,7 @@ import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
 import { buildWhiteboardBlock } from '../orchestrator/whiteboard';
+import { detectBuildIntent, buildAgentImmediately } from '../orchestrator/agentBuilder';
 
 export interface ChatDeps {
   pool: Pool;
@@ -311,6 +312,56 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         browserOpened: openedUrl,
         page: body?.taskMode === true && taskWcId !== null ? { wcId: taskWcId, userId: claims.sub, agentId } : null,
       });
+
+      // 批次 E | 对话式建智能体：检测建智能体意图，立刻建好不挡你
+      try {
+        const buildIntent = detectBuildIntent(message);
+        if (buildIntent) {
+          const projForBuild = await currentProjectId(pool, claims.sub);
+          if (projForBuild !== null) {
+            const creatorRow = await pool.query<{ id: string }>(
+              `SELECT id FROM agents WHERE project_id=$1 AND can_create_agents=true ORDER BY CASE WHEN kind='hen' THEN 0 WHEN kind='assistant' THEN 1 ELSE 2 END, id ASC LIMIT 1`,
+              [projForBuild],
+            );
+            const creatorId = creatorRow.rows[0] ? Number(creatorRow.rows[0].id) : null;
+            const fallbackRow = creatorId === null ? await pool.query<{ id: string }>(`SELECT id FROM agents WHERE project_id=$1 ORDER BY id ASC LIMIT 1`, [projForBuild]) : null;
+            const finalCreatorId = creatorId ?? (fallbackRow?.rows[0] ? Number(fallbackRow.rows[0].id) : null);
+            if (finalCreatorId !== null) {
+              const built = await buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, buildIntent);
+              // 立刻回一条助手消息：建好了
+              const builtMsg = `已建好「${built.name}」：${buildIntent.duty}。直接和TA聊就行，对话里说"建一个XXX"就能继续建同事，不挡你。`;
+              // 写入用户消息
+              const umTmp = await pool.query<{ id: string }>(
+                "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
+                [convId, cipher.encryptText(message)],
+              );
+              await pool.query(
+                "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2)",
+                [convId, cipher.encryptText(builtMsg)],
+              );
+              reply.hijack();
+              const res = reply.raw;
+              res.writeHead(200, {
+                'content-type': 'text/event-stream; charset=utf-8',
+                'cache-control': 'no-cache, no-transform',
+                connection: 'keep-alive',
+                'x-accel-buffering': 'no',
+                'access-control-allow-origin': req.headers.origin ?? '*',
+              });
+              const sseLocal = (ev: string | null, data: unknown) => {
+                res.write(`${ev ? `event: ${ev}\\n` : ''}data: ${JSON.stringify(data)}\\n\\n`);
+              };
+              sseLocal('meta', { conversationId: convId, userMessageId: Number(umTmp.rows[0].id), agentId: routedAgentId ?? agentId });
+              sseLocal(null, { delta: builtMsg });
+              sseLocal('done', { conversationId: convId, messageId: Date.now(), contentLength: builtMsg.length, searches: 0, sources: [] });
+              res.end();
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[chat] 对话式建智能体失败，回落到普通聊天：', (e as Error).message);
+      }
 
       // 1) 先读历史（不含本句），再落用户消息
       const hist = await pool.query<{ role: string; content_enc: string }>(
