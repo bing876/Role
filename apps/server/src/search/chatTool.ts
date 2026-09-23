@@ -1,89 +1,41 @@
 /**
  * 第 26 步：把「联网搜索」注册成模型手边可调用的**一个工具**（function calling）。
  *
- * ★ 为什么是工具、而不是关键词规则：
- *   之前的毛病正出在"死板规则"上 —— 本地看到某些字就当成"要开网页"。
- *   这里**一个关键词都不判**：只把工具表交给模型，由**模型自己**决定要不要查资料。
- *   本地只负责"模型说要查 → 我就真去查"，不做任何语义猜测。
+ * 收口后：唯一定义活在 `./toolDef.ts`，本文件只保留：
+ *   - 兼容 re-export（旧路径仍可用）
+ *   - 搜索策略提示词块（chatSearchPolicyBlock / searchPolicyForTurn）
+ *   - isWebSearchToolName 辅助
  *
- * ★ 与「浏览器操作」的边界（写进工具描述里，让模型自己分清）：
- *   本工具 = 一次 HTTPS 请求拿回公开资料 → **不打开任何网页、界面上什么都看不见**。
- *   浏览器操作 = 用户要你去某个**具体网站**上**做具体的事**（登录 / 点 / 填 / 比价 / 出报告），
- *   那是工作台另一套能力（`apps/desktop/src/browser/**` + 服务端 `toolLoop.ts`），
- *   **不是本工具**。所以这里必须把"什么时候**不该**用它"也写清楚，
- *   否则模型会拿搜索去敷衍一个本该真开网页的任务。
- *
- * ★ 模型无关：本文件只是 OpenAI 兼容的 function 定义（name/description/parameters），
- *   不认识任何厂商、不 import llm.ts，换任何支持 function calling 的模型都能用。
+ * 旧的 WEB_SEARCH_TOOL 常量已删除，改为从统一定义派生（见 toolDef.ts）。
+ * chatLoop.ts 现在直接从 toolDef.ts 取定义，不再依赖本文件的裸对象。
  */
 
-/** 工具名。服务端与测试都从这里取，避免两处写死不同字符串。 */
-export const WEB_SEARCH_TOOL_NAME = 'web_search';
+import {
+  WEB_SEARCH_TOOL_DEFINITION,
+  WEB_SEARCH_TOOL_NAME as UNIFIED_NAME,
+  WEB_SEARCH_MAX_ROUNDS as UNIFIED_MAX,
+} from './toolDef';
+
+/** 工具名。单一来源：toolDef.ts */
+export const WEB_SEARCH_TOOL_NAME = UNIFIED_NAME;
 
 /**
  * 一次对话里最多真搜几轮（防止模型来回查个不停）。
- * 到顶之后下一轮会把 `tool_choice` 设成 `none`，逼它用已有资料作答（不是报错）。
+ * 单一来源：toolDef.ts
  */
-export const WEB_SEARCH_MAX_ROUNDS = 3;
+export const WEB_SEARCH_MAX_ROUNDS = UNIFIED_MAX;
 
 /**
- * 给模型的工具表。**只放搜索这一个**——
- * 浏览器那套工具不在这里（它由 toolLoop.ts 在"页面任务"那一条路上单独给），
- * 两条路互不干扰，闲聊轮拿不到任何能开页的工具。
+ * 兼容：旧代码 import { WEB_SEARCH_TOOL } 的路径仍可用。
+ * 它是从统一定义派生的 OpenAI function tool（与注册表 toOpenAITools 输出一致）。
+ * 新代码应直接从 toolDef.ts 取 WEB_SEARCH_TOOL_DEFINITION 或用 registry。
  */
 export const WEB_SEARCH_TOOL = {
   type: 'function' as const,
   function: {
-    name: WEB_SEARCH_TOOL_NAME,
-    description: [
-      '联网搜索公开资料，返回若干条结果（标题 / 网址 / 摘要）。',
-      '',
-      '【该用它】问题需要"此时此刻的外部信息"才能答对时，例如：',
-      '  最新新闻 / 时事进展、天气、赛事比分、股价汇率、航班车次、',
-      '  某人某公司的最新动态、某个名词或产品的含义与现状、你训练数据里没有或可能过期的信息。',
-      '',
-      '【不要用它】下面这些一律直接回答，不要搜：',
-      '  · 闲聊、问候、感谢、自我介绍、写作、翻译、算术、写代码、解释通用概念；',
-      '  · 用户要你去**某个具体网站做具体操作**（打开某站、在那站搜索、登录、下单、比价、出报告）',
-      '    —— 那是工作台的"浏览器操作"能力，不是搜索；这种情况下正常回答用户即可，',
-      '      不要用搜索去假装你去了那个网站；',
-      '  · **用户点明了某个具体网站时（例如「打开必应…」「去淘宝…」「在抖音上…」），绝对不要调用本工具**：',
-      '    那是在那个网站上做事，不是让你搜公开资料；也**绝对不要**说「已打开 / 已为你打开」——',
-      '    你没有打开网页的能力（打开网页是工作台另一套能力，走的是另一条路）。',
-      '  · 你自己已经能确定答案的常识问题（例如「1+1 等于几」）。',
-      '  · **问题里含有个人敏感信息时（密码、验证码/短信码、身份证、银行卡/卡号、支付/付款等）**：',
-      '    不要调用搜索 —— 本地安全规则会直接拦截这次调用。请直接告诉用户这类问题不能搜，',
-      '    请他换个不带敏感信息的问法，或自己到官方渠道核对；不要编造答案。',
-      '',
-      '【怎么用】一次只提一个具体的 query（用自然的问句或关键词都行）。',
-      '如果第一次的结果不够，可以换个 query 再搜一次，但不要反复搜同一个问题。',
-      '拿到结果后，用**系统当前语言**（见系统提示词的语言规则）把结论讲给用户，',
-      '不要直接把一堆原始摘要倒给用户，也不要输出搜索结果的网址清单当答案。',
-    ].join('\n'),
-    parameters: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: '要搜索的问题或关键词。尽量具体（例如「2026年9月20日 国内新闻」而不是「新闻」）。',
-        },
-        topic: {
-          type: 'string',
-          enum: ['general', 'news'],
-          description: '可选。时事/新闻类问题用 news，其余用 general（默认 general）。',
-        },
-        days: {
-          type: 'integer',
-          description: '可选，仅 topic=news 时有效：只要最近 N 天（1~30）。问"今天/最近"时填 1~3。',
-        },
-        max_results: {
-          type: 'integer',
-          description: '可选：要几条结果（1~20，默认 5）。',
-        },
-      },
-      required: ['query'],
-      additionalProperties: false,
-    },
+    name: WEB_SEARCH_TOOL_DEFINITION.name,
+    description: WEB_SEARCH_TOOL_DEFINITION.description,
+    parameters: WEB_SEARCH_TOOL_DEFINITION.parameters,
   },
 } as const;
 

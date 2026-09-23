@@ -25,7 +25,13 @@ import { SENSITIVE_TARGET_RE } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
 import { llmFetch, type LlmMessage, type LlmToolCall } from '../llm';
 import { webSearch, webSearchConfigFromEnv, WebSearchError, redactSecrets, type WebSearchItem } from './tavily';
-import { WEB_SEARCH_TOOL, WEB_SEARCH_TOOL_NAME, WEB_SEARCH_MAX_ROUNDS } from './chatTool';
+import {
+  WEB_SEARCH_TOOL_DEFINITION,
+  WEB_SEARCH_TOOL_NAME,
+  WEB_SEARCH_MAX_ROUNDS,
+} from './toolDef';
+// 兼容：chatTool 仍 re-export 旧常量，但新路径以 toolDef 为单一来源
+import { serverToolRegistry } from '../toolRegistry';
 
 /**
  * 一次搜索的留痕（给日志/测试看，也用来聚合界面上的来源标注）。
@@ -247,13 +253,33 @@ export async function streamChatWithSearch(
     /** 到顶了就**不许再调工具**，逼它用已有资料作答（是收敛，不是报错） */
     const forceAnswer = round > maxRounds;
 
+    // 统一定义：优先从注册表取（编排开启时），否则直接用 toolDef 的单一来源
+    const webSearchOpenAITools = (() => {
+      try {
+        const fromRegistry = serverToolRegistry.get(WEB_SEARCH_TOOL_NAME);
+        if (fromRegistry) return serverToolRegistry.toOpenAITools([WEB_SEARCH_TOOL_NAME]);
+      } catch {
+        /* 注册表还没装好或未注册，fallback 到单一来源 */
+      }
+      return [
+        {
+          type: 'function' as const,
+          function: {
+            name: WEB_SEARCH_TOOL_DEFINITION.name,
+            description: WEB_SEARCH_TOOL_DEFINITION.description,
+            parameters: WEB_SEARCH_TOOL_DEFINITION.parameters as any,
+          },
+        },
+      ];
+    })();
+
     let res: Response;
     try {
       res = await llmFetch(env, msgs, {
         tag: forceAnswer ? `${opts.tag}/answer` : round === 0 ? opts.tag : `${opts.tag}/after-search${round}`,
         stream: true,
         signal: opts.signal,
-        tools: [WEB_SEARCH_TOOL],
+        tools: webSearchOpenAITools,
         toolChoice: forceAnswer ? 'none' : 'auto',
       });
     } catch (err) {

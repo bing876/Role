@@ -1,76 +1,25 @@
 /**
- * 多智能体编排 · `web_search` 作为**服务端工具**的定义 + 执行器。
+ * 多智能体编排 · `web_search` 的执行器 + 唯一定义的 re-export。
  *
- * ★ 为什么要在这里再写一份定义，而不是直接用 `search/chatTool.ts` 的 `WEB_SEARCH_TOOL`：
- *   那一份是「聊天路径」的独立常量（`chatLoop.ts` 自己 `tools:[WEB_SEARCH_TOOL]` 喂模型、
- *   自己解析、自己执行），**没有**进 Tool Registry —— 阶段 0 只注册化了 5 个浏览器工具 + stop（共 6 个）。
- *   编排需要的是「能被 `serverToolRegistry` 注册、能被循环内联执行、有 validate 闸」的那一份。
- *
- *   ⚠️ 所以本项目现在有**两份** web_search 定义。这是有意的过渡状态，不是疏忽：
- *     · 聊天路径那份带一大段「什么时候不该用」的话术，是为闲聊场景实测调出来的；
- *     · 这份是给「有任务的执行体」（临时工 / 被委派方 / 浏览器循环）用的，话术更短。
- *   收口计划见 `docs/待办-编排-websearch双定义收口-20260923.md`（本批不做，避免同时动两条路）。
- *
- * 安全闸（与 R1 完全同一套，别在这里另立标准）：
- *   query 先过 `SENSITIVE_TARGET_RE` —— 命中就**拒绝执行、不外发、日志不记原文**。
+ * 收口后：定义只有一份，活在 `search/toolDef.ts`（中立位置，聊天与编排都 import 它）。
+ * 本文件只保留执行逻辑（runWebSearch / formatSearchForModel / executeWebSearchTool），
+ * 定义本身从 toolDef.ts 导入并 re-export，保持旧 import 路径兼容。
  */
-import { SENSITIVE_TARGET_RE, type ChatSource, type LoopToolResult, type ToolDefinition } from '@ai-workbench/shared';
+import { SENSITIVE_TARGET_RE, type ChatSource, type LoopToolResult } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
 import { isWebSearchConfigured, webSearch, webSearchConfigFromEnv, WebSearchError } from '../search/tavily';
+import {
+  WEB_SEARCH_TOOL_DEFINITION,
+  WEB_SEARCH_TOOL_NAME,
+  WEB_SEARCH_MAX_ROUNDS,
+  WEB_SEARCH_SERVER_TOOL as UNIFIED_TOOL,
+} from '../search/toolDef';
 
-/** 工具名与聊天路径保持同一个字符串（模型看到的是同一个工具） */
-export const WEB_SEARCH_TOOL_NAME = 'web_search';
-
-export const WEB_SEARCH_SERVER_TOOL: ToolDefinition = {
-  name: WEB_SEARCH_TOOL_NAME,
-  description: [
-    '联网搜索公开资料，返回若干条结果（标题 / 网址）。',
-    '【该用它】答案需要「此时此刻的外部信息」时：新闻时事、天气、行情比分、某公司近况、你训练数据里可能过期的信息。',
-    '【不要用它】闲聊/写作/翻译/算术/写代码/解释通用概念；以及**用户点明了某个具体网站要你在那上面做事**的时候',
-    '（「打开某站」「去某站搜」）—— 那属于浏览器操作，不是搜索。**绝不要**说「已打开 / 已为你打开」：这个工具不打开任何网页。',
-    '【敏感信息】问题里含密码、验证码/短信码、银行卡号、身份证、支付信息时**不要调用**：本地安全规则会直接拦下这次调用。',
-    '一次只提一个具体的 query；拿到结果后用简体中文讲结论，不要把一堆原始摘要倒出来。',
-  ].join('\n'),
-  parameters: {
-    type: 'object',
-    properties: {
-      query: { type: 'string', description: '要搜索的问题或关键词，尽量具体' },
-      topic: { type: 'string', enum: ['general', 'news'], description: '时事/新闻类用 news，其余 general（默认 general）' },
-      days: { type: 'integer', description: '仅 topic=news 有效：只要最近 N 天（1~30）' },
-      max_results: { type: 'integer', description: '要几条结果（1~20，默认 5）' },
-    },
-    required: ['query'],
-  },
-  side: 'server',
-  kind: 'action',
-  // Tavily 自己默认 15s 超时；这里给 20s 与浏览器工具同量级，别让一格卡住整条循环
-  timeoutMs: 20_000,
-  validate: (args) => {
-    const query = typeof args.query === 'string' ? args.query.trim().slice(0, 300) : '';
-    if (!query) {
-      return { ok: false, reason: 'bad_args', question: '要搜什么没写清楚。给我一个具体的问题或关键词。' };
-    }
-    /**
-     * R1 的闸：敏感 query **不外发**。
-     * 注意话术里不重复原文（日志与回执都可能被留档）。
-     */
-    if (SENSITIVE_TARGET_RE.test(query)) {
-      return {
-        ok: false,
-        reason: 'blocked_sensitive',
-        question:
-          '这次搜索的问题里含敏感信息（密码/验证码/银行卡/身份证/支付类），我没有发出去。' +
-          '这类问题不能搜，请换个不带敏感信息的问法，或自己到官方渠道核对。',
-      };
-    }
-    const topic = args.topic === 'news' ? 'news' : 'general';
-    const days = Number.isFinite(Number(args.days)) ? Math.min(30, Math.max(1, Math.floor(Number(args.days)))) : undefined;
-    const maxResults = Number.isFinite(Number(args.max_results))
-      ? Math.min(20, Math.max(1, Math.floor(Number(args.max_results))))
-      : 5;
-    return { ok: true, args: { query, topic, ...(days ? { days } : {}), max_results: maxResults } };
-  },
-};
+// 唯一定义：re-export，保持旧路径可用
+export { WEB_SEARCH_TOOL_NAME, WEB_SEARCH_MAX_ROUNDS, WEB_SEARCH_TOOL_DEFINITION };
+export const WEB_SEARCH_SERVER_TOOL = WEB_SEARCH_TOOL_DEFINITION;
+// 兼容：有些地方 import WEB_SEARCH_TOOL_DEFINITION
+export const WEB_SEARCH_TOOL_DEFINITION_ALIAS = UNIFIED_TOOL;
 
 export interface WebSearchRunInput {
   query: string;
