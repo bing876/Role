@@ -40,7 +40,7 @@ import { REFERENCE_PREFIX, sanitizeReferenceLine } from '../promptPolicy';
 import { keepaliveOfAgent } from '../sessionState';
 import { HEN_KIND, isProtectedKind, loadOwnedProject, resolveAgentCreator } from '../projectScope';
 import { isSensitive, normalizeText } from '../memoryNormalize';
-import { extractJsonLoose, TIDY_PROMPT, writeTidyLayer } from '../memoryShared';
+import { extractJsonLoose, TIDY_PROMPT, UNIFIED_TIDY_PROMPT, writeTidyLayer } from '../memoryShared';
 
 export interface AgentDeps {
   pool: Pool;
@@ -491,10 +491,12 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
 
       let parsed: { user?: unknown; project?: unknown } | null = null;
       try {
-        const r = await llmFetch(
+        // 第四批：优先用统一版提示词（带 type/needs_confirm，支持确认卡），失败回落旧版
+        let prompt = UNIFIED_TIDY_PROMPT;
+        let r = await llmFetch(
           env,
           [
-            { role: 'system', content: TIDY_PROMPT },
+            { role: 'system', content: prompt },
             { role: 'user', content: `对话如下：\n${transcript.slice(-TRANSCRIPT_MAX)}` },
           ],
           { tag: 'agents/tidy', json: true, temperature: 0.2 },
@@ -503,8 +505,24 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
           const out: AgentTidyResult = { userAdded: 0, projectAdded: 0, skipped: `upstream_http_${r.status}` };
           return out;
         }
-        const data = (await r.json()) as { choices?: { message?: { content?: string } }[] };
-        const loose = extractJsonLoose(data.choices?.[0]?.message?.content ?? '');
+        let data = (await r.json()) as { choices?: { message?: { content?: string } }[] };
+        let loose = extractJsonLoose(data.choices?.[0]?.message?.content ?? '');
+        // 若统一版解析失败，回落旧版（兼容旧模型输出）
+        if (!loose || typeof loose !== 'object' || (loose as any).user === undefined) {
+          const r2 = await llmFetch(
+            env,
+            [
+              { role: 'system', content: TIDY_PROMPT },
+              { role: 'user', content: `对话如下：\n${transcript.slice(-TRANSCRIPT_MAX)}` },
+            ],
+            { tag: 'agents/tidy:fallback', json: true, temperature: 0.2 },
+          );
+          if (r2.ok) {
+            const data2 = (await r2.json()) as { choices?: { message?: { content?: string } }[] };
+            const loose2 = extractJsonLoose(data2.choices?.[0]?.message?.content ?? '');
+            if (loose2 && typeof loose2 === 'object') loose = loose2;
+          }
+        }
         if (loose && typeof loose === 'object') parsed = loose as { user?: unknown; project?: unknown };
       } catch (err) {
         const out: AgentTidyResult = {

@@ -796,6 +796,44 @@ body {
   color: #6b7280;
 }
 
+/* 记忆合并第四批：待确认记忆确认卡 */
+.btn--pending {
+  border-color: #f59e0b;
+  background: #fffbeb;
+  color: #92400e;
+  font-weight: 600;
+}
+.btn--pending:hover {
+  background: #fef3c7;
+}
+.memList--pending {
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 6px;
+}
+.memList__row--pending {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 0;
+}
+.memList__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.memList__confirm {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.memList__reject {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
 /* ---- 第 15 步：聊天里的「引导表」。
    它不是后台配置页、也不是独立窗口，就是新会话里的一张四行小表（名称/它是谁/怎么说话/干什么）。
    宽度跟消息一样撑满中栏，不碰右栏宽度。 ---- */

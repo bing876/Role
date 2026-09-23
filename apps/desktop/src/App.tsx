@@ -18,6 +18,8 @@ import type {
   KnowledgeUploadResult,
   MemoryEntry,
   MemoryLayerList,
+  MemoryItem,
+  MemoryListResult,
   OpenTabRequest,
   ProjectCreateResult,
   ProjectListResult,
@@ -852,6 +854,9 @@ export default function App() {
   /** 第 15 步 · 第二层：**当前智能体**的项目记忆（智能体级，切智能体就整块换掉） */
   const [projMem, setProjMem] = useState<MemoryEntry[]>([]);
   const [projMemOpen, setProjMemOpen] = useState(false);
+  /** 记忆合并第四批：待确认记忆（decision/fact 需用户确认才生效） */
+  const [pendingMem, setPendingMem] = useState<MemoryItem[]>([]);
+  const [pendingMemOpen, setPendingMemOpen] = useState(false);
   /**
    * 第 16 步：每个智能体的**会话状态**（服务端现有 Postgres 的 conversations 表为准）。
    * current_task / browser_confirmed / keepalive 都从这里来；进程重启后靠它恢复「当前任务」。
@@ -947,6 +952,20 @@ export default function App() {
       setProjMem(r.items);
     } catch {
       /* 同上 */
+    }
+  };
+  /** 记忆合并第四批：待确认记忆（账号级+智能体级+会话级，三级合并） */
+  const loadPendingMemory = async (agentId?: number | null, conversationId?: number | null) => {
+    if (!sessionRef.current) return;
+    try {
+      const params = new URLSearchParams();
+      if (agentId) params.set('agentId', String(agentId));
+      if (conversationId) params.set('conversationId', String(conversationId));
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const r = await authFetchJson<MemoryListResult>(`/memories${qs}`, { headers: memHeaders() });
+      setPendingMem(r.pending);
+    } catch {
+      /* 后端/库没起就不打扰 */
     }
   };
 
@@ -1061,6 +1080,7 @@ export default function App() {
       if (stillThere) {
         void loadProjectMemory(cur as number);
         void loadAgentState(cur as number);
+        void loadPendingMemory(cur as number, chatsRef.current[cur as number]?.convId ?? null);
       } else if (r.agents.length > 0) {
         const first = r.agents[0];
         curAgentRef.current = first.id;
@@ -1068,6 +1088,7 @@ export default function App() {
         void loadProjectMemory(first.id);
         void loadAgentHistory(first);
         void loadAgentState(first.id);
+        void loadPendingMemory(first.id, first.conversationId);
       }
     } catch (e) {
       setAgentNote(`读不到智能体列表：${(e as Error).message}`);
@@ -1126,6 +1147,7 @@ export default function App() {
       void loadProjectMemory(first.id);
       void loadAgentHistory(first);
       void loadAgentState(first.id);
+      void loadPendingMemory(first.id, first.conversationId);
     }
     void loadKnowledge(id);
   };
@@ -1189,6 +1211,7 @@ export default function App() {
     setChatNote('');
     setAgentNote('');
     void loadProjectMemory(agent.id);
+    void loadPendingMemory(agent.id, chatsRef.current[agent.id]?.convId ?? agent.conversationId ?? null);
     if (!historyLoadedRef.current.has(agent.id)) void loadAgentHistory(agent);
   };
 
@@ -1335,6 +1358,7 @@ export default function App() {
       else setChatNote(`整理完了：用户记忆库 +${r.userAdded} 条，本项目记忆 +${r.projectAdded} 条。`);
       void loadUserMemory();
       void loadProjectMemory(agentId);
+      void loadPendingMemory(agentId, convId);
     } catch (e) {
       setChatNote(`整理记忆没成：${(e as Error).message}`);
     }
@@ -1354,6 +1378,72 @@ export default function App() {
       else if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
     } catch (e) {
       setChatNote(`忘掉失败：${(e as Error).message}`);
+    }
+  };
+
+  /** 记忆合并第四批：确认/拒绝待确认记忆 */
+  const confirmMemory = async (id: number) => {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    try {
+      await authFetchJson('/memories/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ ids: [id] }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem((prev) => prev.filter((m) => m.id !== id));
+      void loadUserMemory();
+      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
+      setChatNote('已确认一条记忆，今后会按它执行。');
+    } catch (e) {
+      setChatNote(`确认失败：${(e as Error).message}`);
+    }
+  };
+  const rejectMemory = async (id: number) => {
+    const sess = sessionRef.current;
+    if (!sess) return;
+    try {
+      await authFetchJson('/memories/reject', {
+        method: 'POST',
+        body: JSON.stringify({ ids: [id] }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem((prev) => prev.filter((m) => m.id !== id));
+      setChatNote('已忽略一条记忆。');
+    } catch (e) {
+      setChatNote(`忽略失败：${(e as Error).message}`);
+    }
+  };
+  const confirmAllPending = async () => {
+    const sess = sessionRef.current;
+    if (!sess || pendingMem.length === 0) return;
+    try {
+      await authFetchJson('/memories/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ all: true }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem([]);
+      void loadUserMemory();
+      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
+      setChatNote(`已确认全部 ${pendingMem.length} 条记忆。`);
+    } catch (e) {
+      setChatNote(`批量确认失败：${(e as Error).message}`);
+    }
+  };
+  const rejectAllPending = async () => {
+    const sess = sessionRef.current;
+    if (!sess || pendingMem.length === 0) return;
+    try {
+      await authFetchJson('/memories/reject', {
+        method: 'POST',
+        body: JSON.stringify({ all: true }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setPendingMem([]);
+      setChatNote(`已忽略全部 ${pendingMem.length} 条待确认记忆。`);
+    } catch (e) {
+      setChatNote(`批量忽略失败：${(e as Error).message}`);
     }
   };
 
@@ -1522,6 +1612,7 @@ export default function App() {
     setAgentNote('');
     setUserMem([]);
     setProjMem([]);
+    setPendingMem([]);
     setProjects([]);
     curProjectRef.current = null;
     // Phase 3：换号了就把「agentId → projectId」清掉（id 会跨账号复用，留着会把分区认错人）
@@ -1589,6 +1680,8 @@ export default function App() {
     setUserMemOpen(false);
     setProjMem([]);
     setProjMemOpen(false);
+    setPendingMem([]);
+    setPendingMemOpen(false);
     // 子阶段 2-B：项目层也清掉（换号不该看见上一个号的项目名/名单）
     setProjects([]);
     curProjectRef.current = null;
@@ -2844,12 +2937,16 @@ export default function App() {
             开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
           </div>
           {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
+          {/* 记忆合并第四批：待确认记忆确认卡 */}
           <div className="buttons-row">
             <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
               用户记忆（{userMem.length}）
             </button>
             <button type="button" className="btn" onClick={() => setProjMemOpen((v) => !v)}>
               项目记忆（{projMem.length}）
+            </button>
+            <button type="button" className={pendingMem.length > 0 ? 'btn btn--pending' : 'btn'} onClick={() => setPendingMemOpen((v) => !v)}>
+              待确认（{pendingMem.length}）
             </button>
           </div>
           {userMemOpen && (
@@ -2878,6 +2975,37 @@ export default function App() {
                   <button type="button" className="memList__forget" onClick={() => void forgetEntry('agent', m.id)}>
                     忘掉这条
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {pendingMemOpen && (
+            <div className="memList memList--pending" role="list" aria-label="待确认记忆">
+              <div className="small memList__title">待确认 · 需你确认后才生效（decision/fact）</div>
+              {pendingMem.length === 0 && <div className="small">没有待确认的记忆。</div>}
+              {pendingMem.length > 0 && (
+                <div className="buttons-row" style={{ marginBottom: 8 }}>
+                  <button type="button" className="btn btn--go" onClick={() => void confirmAllPending()}>
+                    全部确认
+                  </button>
+                  <button type="button" className="btn" onClick={() => void rejectAllPending()}>
+                    全部忽略
+                  </button>
+                </div>
+              )}
+              {pendingMem.map((m) => (
+                <div className="memList__row memList__row--pending" key={m.id}>
+                  <span className="small">
+                    <b>[{m.type === 'decision' ? '决定' : m.type === 'fact' ? '事实' : '偏好'}]</b> {m.content}
+                  </span>
+                  <div className="memList__actions">
+                    <button type="button" className="btn btn--go memList__confirm" onClick={() => void confirmMemory(m.id)}>
+                      确认
+                    </button>
+                    <button type="button" className="btn memList__reject" onClick={() => void rejectMemory(m.id)}>
+                      不用
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
