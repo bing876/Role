@@ -396,6 +396,9 @@ CREATE INDEX IF NOT EXISTS idx_project_whiteboard_project ON project_whiteboard 
 CREATE INDEX IF NOT EXISTS idx_project_whiteboard_user ON project_whiteboard (user_id, project_id);
 
 -- 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job
+-- 修 1（安全）：messages 若为明文 JSONB，改为加密——整列 messages_enc TEXT 走 cipher，goal 同理 goal_enc TEXT
+-- 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，R2 当年专门给 task_pauses 加 goal_enc
+-- 旧列 messages/goal 保留作兼容，读取时优先 messages_enc/goal_enc，落库一律写加密列
 CREATE TABLE IF NOT EXISTS loop_checkpoints (
   id              TEXT PRIMARY KEY,
   user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -403,7 +406,11 @@ CREATE TABLE IF NOT EXISTS loop_checkpoints (
   conversation_id BIGINT,
   wc_id           BIGINT,
   goal            TEXT,
+  goal_enc        TEXT,
   messages        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  messages_enc    TEXT,
+  pending_call_id TEXT,
+  executed_tool_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
   step            INTEGER NOT NULL DEFAULT 0,
   status          TEXT NOT NULL,
   tool_names      JSONB,
@@ -415,6 +422,12 @@ CREATE TABLE IF NOT EXISTS loop_checkpoints (
 );
 CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_user ON loop_checkpoints (user_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_agent ON loop_checkpoints (agent_id, status);
+-- 修 1 幂等补列：老库已有 loop_checkpoints 时补 goal_enc/messages_enc
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS goal_enc TEXT;
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS messages_enc TEXT;
+-- 修 3 幂等：记录 pending 的 tool_call_id，重启后可去重，避免工具被执行第二次
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS pending_call_id TEXT;
+ALTER TABLE loop_checkpoints ADD COLUMN IF NOT EXISTS executed_tool_ids JSONB NOT NULL DEFAULT '[]'::jsonb;
 `;
 
 

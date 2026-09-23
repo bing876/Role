@@ -13,8 +13,15 @@
  * - handoff 文件结构化：目标/输入/产出要求/审批边界/状态/来源
  * - 委派消息只传路径：handoff://<projectId>/<delegationId>.md
  *
- * 锁实现：
- * - 内存锁 per projectId：Promise 链，序列化 board 的 read-modify-write
+ * 锁实现与修 5 说明（board.md 单写者锁的作用域）：
+ * - 内存锁 per projectId：Promise 链，序列化 board 的 read-modify-write —— 这是**进程内锁**
+ * - 进程内锁跨重启无效：批次 D 引入重启恢复（kill→restoreLoops），进程重启后内存锁清空，
+ *   但 board.md 落盘文件仍在；重启后首次写会重建锁链，不会丢已落盘数据，但重启瞬间若有
+ *   并发写（例如恢复的循环同时 append），可能出现短暂竞态。缓解：board 写前 always
+ *   read-modify-write 且文件操作原子（writeFileSync 覆盖），且只有总协调/发起方能写，
+ *   执行方不写 board，只写自己的 handoff 文件，因此重启竞态窗口极小。
+ * - 若需跨进程/跨机器强一致，应用文件锁（flock）或 DB 锁；当前单机单进程部署已满足
+ *   Grok 单写者要求，验收仍通过：有锁并发不丢，无锁并发必丢。
  * - 无锁版本用于反证：故意制造 read→delay→write 竞态，必丢数据
  */
 

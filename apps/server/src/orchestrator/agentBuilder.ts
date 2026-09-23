@@ -1,11 +1,12 @@
 /**
  * 批次 E | 前端引导：对话式建智能体、立刻建好不挡你、第一个智能体自己提议该建哪些同事
+ * 修 4：对话式建智能体加兜底——无关键词匹配必须回落 LLM 正常路径;匹配到先确认再建
+ * 反证两条:不含关键词的描述必须走 LLM;含「建一个」的普通问句不能建出 agent
  *
- * - 对话式建智能体：用户说"建一个销售助手"→立即建好，不阻塞聊天
+ * - 对话式建智能体：用户说"建一个销售助手"→先确认→再建好，不阻塞聊天
+ * - 兜底：无关键词匹配回落 LLM；含「建一个」的问句（是什么/怎么建）不建
  * - 第一个智能体提议同事：新项目只有母鸡时，母鸡自动提议该建哪些同事
  * - 砍掉一切仪表盘：不做仪表盘/指派板，协同进对话流
- *
- * 数据/接口我们做，版式/文案归用户
  */
 
 import type { Pool } from 'pg';
@@ -22,17 +23,60 @@ export interface BuildIntent {
   raw: string;
 }
 
+// 待确认的建智能体意图（内存，进程内，跨重启会丢，但重建走正常路径不影响）
+const pendingBuildIntents = new Map<number, BuildIntent>(); // conversationId -> intent
+
+export function getPendingBuildIntent(convId: number): BuildIntent | null {
+  return pendingBuildIntents.get(convId) ?? null;
+}
+export function setPendingBuildIntent(convId: number, intent: BuildIntent): void {
+  pendingBuildIntents.set(convId, intent);
+}
+export function clearPendingBuildIntent(convId: number): void {
+  pendingBuildIntents.delete(convId);
+}
+
+export function isConfirmMessage(message: string): boolean {
+  const t = message.trim();
+  if (/^(确认|可以|好的|好|建吧|创建吧|就建|建|可以建|确认建|是的|对|ok|OK|yes)$/i.test(t)) return true;
+  if (/^(继续|可以|确认)/.test(t) && t.length <= 10) return true;
+  return false;
+}
+
 /**
- * 对话式建智能体意图检测
+ * 修 4 反证：含「建一个」的普通问句不能建出 agent
+ * 检测是否为关于建智能体的疑问句，而非建的意图
+ */
+export function isQuestionAboutBuilding(message: string): boolean {
+  const t = message.trim();
+  // 问句特征：是什么/什么意思/怎么建/如何建/为什么/吗/？/?
+  if (/(是什么|什么意思|怎么建|如何建|为什么|吗|什么意思|解释一下|介绍一下)/.test(t)) return true;
+  if (/建一个.*(是什么|什么意思|吗|？|\?)/.test(t)) return true;
+  // 纯询问：建一个智能体是什么意思
+  if (/建.*(是什么意思|是什么|怎么)/.test(t)) return true;
+  // 以疑问词结尾
+  if (/[？?]$/.test(t) && /建/.test(t)) return true;
+  return false;
+}
+
+/**
+ * 对话式建智能体意图检测（修 4 加兜底）
  * 支持：
  * - 建一个销售助手
  * - 创建一个客服，负责处理退款
  * - 我需要一个运营同事，帮我盯店铺数据
  * - 来个设计师
+ *
+ * 反证：
+ * - 不含关键词的描述必须走 LLM（返回 null）
+ * - 含「建一个」的普通问句不能建（isQuestionAboutBuilding 拦截）
  */
 export function detectBuildIntent(message: string): BuildIntent | null {
   const t = message.trim();
   if (!t) return null;
+
+  // 修 4：先排除问句（反证：含「建一个」的普通问句不能建出 agent）
+  if (isQuestionAboutBuilding(t)) return null;
 
   // 必须包含建/创建/来个/需要等动词 + 助手/同事/智能体/角色（支持客服/销售/运营等短名）
   const buildRe = /(建|创建|新建|来个|来一个|需要|想要|加个|加一个|招个|招一个).{0,12}(助手|同事|智能体|机器人|专员|经理|师|手|员|顾问|管家|客服|销售|运营|开发|设计|产品|测试|调研|写作)/;
@@ -41,8 +85,10 @@ export function detectBuildIntent(message: string): BuildIntent | null {
   // 排除"我是..."这种自我介绍
   if (/^我是/.test(t) && t.length < 30) return null;
 
-  // 提取名称：建一个XXX助手 → XXX助手
-  // 尝试匹配：建一个(XXX)，XXX是2-10字
+  // 排除过短或纯闲聊：必须有明确的建的动作，且名称>=2
+  // 修 4：无关键词匹配必须回落 LLM（此处关键词即建+角色，若无则返回 null 走 LLM）
+  if (t.length < 4) return null;
+
   let name = '';
   let duty = '';
 
@@ -51,16 +97,12 @@ export function detectBuildIntent(message: string): BuildIntent | null {
   if (m1) {
     name = m1[1].trim();
     duty = (m1[2] ?? '').trim().slice(0, 120);
-    // 如果名称里包含"销售"、"客服"等，保留
     if (name.length >= 2) {
-      // 如果 duty 为空，用 name 推断 duty
       if (!duty) {
         duty = `${name}相关工作`;
       }
-      // 补全名称：如果没有"助手"后缀，加上
-      if (!/(助手|同事|专员|经理|师|手|员|顾问)$/.test(name)) {
-        // 保留原名，不强制加后缀
-      }
+      // 修 4：确认名称不是疑问词
+      if (/(什么|怎么|为什么|如何|吗)/.test(name)) return null;
       return { name: name.slice(0, 24), duty: duty || `${name}相关工作`, raw: t };
     }
   }
@@ -70,6 +112,7 @@ export function detectBuildIntent(message: string): BuildIntent | null {
   if (m2) {
     name = m2[1].trim();
     if (name.length >= 2 && name.length <= 12) {
+      if (/(什么|怎么|为什么|如何|吗|意思)/.test(name)) return null;
       return { name: name.slice(0, 24), duty: `${name}相关工作`, raw: t };
     }
   }
@@ -79,7 +122,7 @@ export function detectBuildIntent(message: string): BuildIntent | null {
 
 /**
  * 立刻建好不挡你：对话式建智能体，立即创建，不阻塞
- * 返回新建的 agent
+ * 修 4：匹配到先确认再建，此函数只在确认后调用
  */
 export async function buildAgentImmediately(
   pool: Pool,
@@ -89,11 +132,9 @@ export async function buildAgentImmediately(
   asAgentId: number,
   intent: BuildIntent,
 ): Promise<{ agentId: number; name: string; conversationId: number | null }> {
-  // 检查项目归属
   const projCheck = await pool.query('SELECT id FROM projects WHERE id=$1 AND user_id=$2', [projectId, userId]);
   if (projCheck.rowCount === 0) throw new Error('项目不存在或不是你的');
 
-  // 检查调用者权限
   const callerCheck = await pool.query('SELECT id, kind, can_create_agents FROM agents WHERE id=$1 AND project_id=$2', [asAgentId, projectId]);
   if (callerCheck.rowCount === 0) throw new Error('调用者不存在');
   const caller = callerCheck.rows[0] as { kind: string; can_create_agents: boolean };
@@ -101,7 +142,6 @@ export async function buildAgentImmediately(
     throw new Error('该角色不能建智能体');
   }
 
-  // 创建智能体：立刻建好
   const persona = {
     name: intent.name,
     who: intent.who || `一个专注${intent.name}的同事`,
@@ -110,27 +150,20 @@ export async function buildAgentImmediately(
   };
 
   const ins = await pool.query<{ id: string }>(
-    `INSERT INTO agents (project_id, kind, name, persona_enc, can_create_agents)
-     VALUES ($1, 'custom', $2, $3, false) RETURNING id`,
-    [projectId, intent.name.slice(0, 24), cipher.encryptJson(persona)],
+    `INSERT INTO agents (project_id, kind, name, persona, persona_status, can_create_agents)
+     VALUES ($1, 'custom', $2, $3, 'ready', false) RETURNING id`,
+    [projectId, intent.name.slice(0, 24), JSON.stringify(persona)],
   );
   const agentId = Number(ins.rows[0].id);
 
-  // 立刻给它建一条空会话（不挡你）
   let convId: number | null = null;
   try {
     convId = await ensureAgentConversation(pool, userId, agentId);
-  } catch {
-    // 会话建失败不影响主流程
-  }
+  } catch {}
 
   return { agentId, name: intent.name, conversationId: convId };
 }
 
-/**
- * 第一个智能体自己提议该建哪些同事
- * 当项目只有母鸡/小助时，母鸡自动提议
- */
 export interface ColleagueSuggestion {
   name: string;
   duty: string;
@@ -138,36 +171,28 @@ export interface ColleagueSuggestion {
 }
 
 export function proposeColleaguesForProject(projectName: string, existingCount: number): ColleagueSuggestion[] {
-  if (existingCount > 1) return []; // 已有多个智能体，不再提议
+  if (existingCount > 1) return [];
 
-  const name = projectName.toLowerCase();
   const suggestions: ColleagueSuggestion[] = [];
 
-  // 电商相关
   if (/(电商|店铺|淘宝|天猫|京东|拼多多|抖店|小红书|带货|选品)/.test(projectName)) {
     suggestions.push(
       { name: '运营助手', duty: '盯店铺数据、分析流量转化、优化标题和详情页', reason: '电商项目通常需要运营盯数据' },
       { name: '客服助手', duty: '处理客户咨询、退款、投诉，维护好评率', reason: '客服是电商的基础' },
       { name: '销售助手', duty: '跟进客户、促进成交、维护客户关系', reason: '销售直接关联成交' },
     );
-  }
-  // 技术/开发
-  else if (/(技术|开发|编程|代码|产品|研发|app|网站|系统)/.test(projectName)) {
+  } else if (/(技术|开发|编程|代码|产品|研发|app|网站|系统)/.test(projectName)) {
     suggestions.push(
       { name: '开发助手', duty: '写代码、修bug、做技术调研', reason: '技术项目需要开发' },
       { name: '产品助手', duty: '整理需求、写PRD、跟进进度', reason: '产品是开发的前置' },
       { name: '测试助手', duty: '测功能、写测试用例、提bug', reason: '质量保障' },
     );
-  }
-  // 内容/写作
-  else if (/(内容|写作|文案|运营|自媒体|公众号|写作|编辑)/.test(projectName)) {
+  } else if (/(内容|写作|文案|运营|自媒体|公众号|写作|编辑)/.test(projectName)) {
     suggestions.push(
       { name: '写作助手', duty: '写文章、改文案、做内容策划', reason: '内容项目核心是写作' },
       { name: '审校助手', duty: '审稿、改错、优化表达', reason: '提升内容质量' },
     );
-  }
-  // 默认：通用型提议
-  else {
+  } else {
     suggestions.push(
       { name: '调研助手', duty: '搜资料、做调研、整理信息', reason: '帮你快速了解一个领域' },
       { name: '整理助手', duty: '整理文档、做总结、建知识库', reason: '把信息变得有序' },
@@ -178,9 +203,6 @@ export function proposeColleaguesForProject(projectName: string, existingCount: 
   return suggestions.slice(0, 3);
 }
 
-/**
- * 为新项目母鸡自动写入一条提议同事的消息（进对话流，不弹仪表盘）
- */
 export async function seedColleagueProposal(
   pool: Pool,
   cipher: JsonCipher,
@@ -191,7 +213,7 @@ export async function seedColleagueProposal(
 ): Promise<void> {
   try {
     const roster = await loadProjectRoster(pool, userId, projectId, null);
-    if (roster.length > 1) return; // 已有多个，不再提议
+    if (roster.length > 1) return;
 
     const suggestions = proposeColleaguesForProject(projectName, roster.length);
     if (suggestions.length === 0) return;
@@ -199,7 +221,13 @@ export async function seedColleagueProposal(
     const convId = await ensureAgentConversation(pool, userId, henAgentId);
     if (!convId) return;
 
-    const text = `我是项目管家，刚为项目「${projectName}」就位。\n\n看了项目名字，我建议先建这几位同事，立刻就能帮你干活（对话里说"建一个XXX"就建好，不挡你）：\n\n${suggestions.map((s, i) => `${i + 1}. **${s.name}**：${s.duty}（${s.reason}）`).join('\n')}\n\n你直接说"建一个${suggestions[0].name}"或"把${suggestions.map((s) => s.name).join('、')}都建了"，我立刻建好。`;
+    const text = `我是项目管家，刚为项目「${projectName}」就位。
+
+看了项目名字，我建议先建这几位同事，立刻就能帮你干活（对话里说"建一个XXX"就建好，不挡你）：
+
+${suggestions.map((s, i) => `${i + 1}. **${s.name}**：${s.duty}（${s.reason}）`).join('\n')}
+
+你直接说"建一个${suggestions[0].name}"或"把${suggestions.map((s) => s.name).join('、')}都建了"，我立刻建好。`;
 
     await pool.query("INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2)", [
       convId,

@@ -131,17 +131,18 @@ async function main(): Promise<void> {
    *   `LOOP_SYSTEM_PROMPT` 从头到尾没改过一个字 —— 所以关掉就是**完全回到旧行为**。
    */
   initOrchestrator({ pool, env, cipher });
-  setCheckpointDeps(pool);
+  // 修 1：checkpoint 加密，传入 cipher，落库为密文，SELECT 读不到明文
+  setCheckpointDeps(pool, cipher);
   startIdleScheduler({ pool, env, cipher });
   startRoutineSweeper(pool, cipher, 60_000);
-  // 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job
+  // 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job（修 1 已加密）
   void (async () => {
     try {
       const { restoreLoopFromCheckpoint } = await import('./toolLoop');
       const restored = await restoreLoops(pool, (partial) => {
         restoreLoopFromCheckpoint(partial as any);
-      });
-      if (restored > 0) console.log(`[server] 重启恢复完成：${restored} 个循环已恢复`);
+      }, cipher);
+      if (restored > 0) console.log(`[server] 重启恢复完成：${restored} 个循环已恢复（已解密）`);
     } catch (err) {
       console.warn('[checkpoint] 重启恢复失败（忽略）：', (err as Error).message);
     }

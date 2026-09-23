@@ -1,23 +1,18 @@
 /**
  * 批次 D | 重启恢复 — 借 LangGraph checkpoint 思路：循环状态落库，服务重启能续跑正在进行的 job
+ * 修 1（安全）：messages 若为明文 JSONB，改为加密——整列 messages_enc TEXT 走 cipher，goal_enc 同理
+ * 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，R2 当年专门给 task_pauses 加 goal_enc
  *
  * 设计：
  * - 循环状态（LoopSession）落库到 loop_checkpoints 表，每次 advance 后更新
- * - 服务启动时加载未完成的 checkpoints，恢复到内存 loops Map
- * - job 状态通过 agent_delegations 表已落库，重启后可重建
- * - 数据/事件做，版式归前端
- *
- * 落库字段：
- * - id, user_id, agent_id, conversation_id, wc_id, goal, messages(JSONB), step, status, tool_names, kind, parent_loop_id, chain
- *
- * 恢复：
- * - 启动时扫 status IN ('running','paused','waiting','waiting_job') 的 checkpoints
- * - 重建 LoopSession（不含 abortCtl，touchedAt 设为 now）
- * - 已超时的 delegations 标记 timeout
+ * - 加密：goal_enc / messages_enc 走 JsonCipher（与 messages 表同一套 AES-256-GCM）
+ * - 直接 SELECT 必须读不到明文（验收：发含敏感词消息→触发 checkpoint→SELECT 读不到明文）
+ * - 服务启动时加载未完成的 checkpoints，解密后恢复到内存 loops Map
  */
 
 import type { Pool } from 'pg';
 import type { LoopSession } from '../toolLoop';
+import type { JsonCipher } from '../crypto';
 
 export interface CheckpointRow {
   id: string;
@@ -26,7 +21,11 @@ export interface CheckpointRow {
   conversation_id: string | null;
   wc_id: string | null;
   goal: string | null;
+  goal_enc: string | null;
   messages: any;
+  messages_enc: string | null;
+  pending_call_id: string | null;
+  executed_tool_ids: any;
   step: number;
   status: string;
   tool_names: any;
@@ -37,21 +36,61 @@ export interface CheckpointRow {
   updated_at: string;
 }
 
-export async function saveCheckpoint(pool: Pool, session: LoopSession): Promise<void> {
+function safeDecryptText(cipher: JsonCipher | null | undefined, enc: string | null): string | null {
+  if (!enc || !cipher) return null;
   try {
+    return cipher.decryptText(enc);
+  } catch {
+    return null;
+  }
+}
+
+function safeDecryptJson(cipher: JsonCipher | null | undefined, enc: string | null): any | null {
+  if (!enc || !cipher) return null;
+  try {
+    const txt = cipher.decryptText(enc);
+    return JSON.parse(txt);
+  } catch {
+    try {
+      return (cipher as any).decryptJson(enc);
+    } catch {
+      return null;
+    }
+  }
+}
+
+export async function saveCheckpoint(pool: Pool, session: LoopSession, cipher?: JsonCipher | null): Promise<void> {
+  try {
+    let goalEnc: string | null = null;
+    let messagesEnc: string | null = null;
+    if (cipher) {
+      try {
+        goalEnc = session.goal ? cipher.encryptText(session.goal) : null;
+      } catch {}
+      try {
+        messagesEnc = cipher.encryptText(JSON.stringify(session.messages ?? []));
+      } catch {}
+    }
+    // 修 3 幂等：记录 pending_call_id 与已执行过的 tool_call_ids，重启后去重
+    const pendingCallId = (session as any).pendingCallId ?? null;
+    const executedIds = (session as any).executedToolIds ?? (session as any).usedTools ?? [];
     await pool.query(
-      `INSERT INTO loop_checkpoints (id, user_id, agent_id, conversation_id, wc_id, goal, messages, step, status, tool_names, kind, parent_loop_id, chain, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
+      `INSERT INTO loop_checkpoints (id, user_id, agent_id, conversation_id, wc_id, goal, goal_enc, messages, messages_enc, pending_call_id, executed_tool_ids, step, status, tool_names, kind, parent_loop_id, chain, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())
        ON CONFLICT (id) DO UPDATE SET
-         agent_id=$3, conversation_id=$4, wc_id=$5, goal=$6, messages=$7, step=$8, status=$9, tool_names=$10, kind=$11, parent_loop_id=$12, chain=$13, updated_at=now()`,
+         agent_id=$3, conversation_id=$4, wc_id=$5, goal=$6, goal_enc=$7, messages=$8, messages_enc=$9, pending_call_id=$10, executed_tool_ids=$11, step=$12, status=$13, tool_names=$14, kind=$15, parent_loop_id=$16, chain=$17, updated_at=now()`,
       [
         session.id,
         session.userId,
         session.agentId,
         session.conversationId,
         session.wcId,
-        session.goal ?? null,
-        JSON.stringify(session.messages ?? []),
+        cipher ? null : (session.goal ?? null),
+        goalEnc,
+        cipher ? '[]' : JSON.stringify(session.messages ?? []),
+        messagesEnc,
+        pendingCallId,
+        JSON.stringify(Array.isArray(executedIds) ? executedIds : []),
         session.step,
         session.status,
         JSON.stringify(session.toolNames ?? []),
@@ -73,7 +112,7 @@ export async function deleteCheckpoint(pool: Pool, loopId: string): Promise<void
   }
 }
 
-export async function loadCheckpoints(pool: Pool): Promise<CheckpointRow[]> {
+export async function loadCheckpoints(pool: Pool, cipher?: JsonCipher | null): Promise<CheckpointRow[]> {
   try {
     const r = await pool.query<CheckpointRow>(
       `SELECT * FROM loop_checkpoints WHERE status IN ('running','paused','waiting','waiting_job') ORDER BY updated_at DESC LIMIT 100`,
@@ -85,18 +124,46 @@ export async function loadCheckpoints(pool: Pool): Promise<CheckpointRow[]> {
   }
 }
 
-export function checkpointToSession(row: CheckpointRow): Partial<LoopSession> & { id: string } {
+export function checkpointToSession(row: CheckpointRow, cipher?: JsonCipher | null): Partial<LoopSession> & { id: string } {
+  let goal = row.goal ?? '';
+  let messages: any[] = [];
+
+  if (cipher) {
+    const decGoal = safeDecryptText(cipher, row.goal_enc);
+    if (decGoal !== null) goal = decGoal;
+    const decMessages = safeDecryptJson(cipher, row.messages_enc);
+    if (Array.isArray(decMessages)) messages = decMessages;
+    else if (decMessages !== null) messages = decMessages;
+  }
+
+  if (messages.length === 0) {
+    if (Array.isArray(row.messages)) messages = row.messages;
+    else if (typeof row.messages === 'string') {
+      try {
+        messages = JSON.parse(row.messages);
+      } catch {
+        messages = [];
+      }
+    }
+  }
+  if (!goal && row.goal) goal = row.goal;
+
   return {
     id: row.id,
     userId: Number(row.user_id),
     agentId: row.agent_id ? Number(row.agent_id) : null,
     conversationId: row.conversation_id ? Number(row.conversation_id) : null,
     wcId: row.wc_id ? Number(row.wc_id) : null,
-    goal: row.goal ?? '',
-    messages: Array.isArray(row.messages) ? row.messages : [],
+    goal,
+    messages,
     step: row.step,
     status: row.status as any,
     toolNames: Array.isArray(row.tool_names) ? row.tool_names : undefined,
+    // 修 3 幂等：恢复 pending_call_id 与 executed_tool_ids
+    // @ts-ignore
+    pendingCallId: row.pending_call_id ?? null,
+    // @ts-ignore
+    executedToolIds: Array.isArray(row.executed_tool_ids) ? row.executed_tool_ids : [],
     // @ts-ignore
     kind: row.kind ?? undefined,
     // @ts-ignore
@@ -107,18 +174,22 @@ export function checkpointToSession(row: CheckpointRow): Partial<LoopSession> & 
   } as any;
 }
 
-export async function restoreLoops(pool: Pool, restoreFn: (session: Partial<LoopSession> & { id: string }) => void): Promise<number> {
-  const rows = await loadCheckpoints(pool);
+export async function restoreLoops(
+  pool: Pool,
+  restoreFn: (session: Partial<LoopSession> & { id: string }) => void,
+  cipher?: JsonCipher | null,
+): Promise<number> {
+  const rows = await loadCheckpoints(pool, cipher ?? null);
   let restored = 0;
   for (const row of rows) {
     try {
-      const partial = checkpointToSession(row);
+      const partial = checkpointToSession(row, cipher ?? null);
       restoreFn(partial);
       restored += 1;
     } catch (err) {
       console.warn(`[checkpoint] 恢复失败 ${row.id}（忽略）：`, (err as Error).message);
     }
   }
-  console.log(`[checkpoint] 重启恢复：从库中恢复 ${restored} 个循环`);
+  console.log(`[checkpoint] 重启恢复：从库中恢复 ${restored} 个循环（已解密）`);
   return restored;
 }

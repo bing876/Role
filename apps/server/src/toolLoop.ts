@@ -52,10 +52,12 @@ import {
 } from './pageState';
 import { compressIfNeeded } from './orchestrator/contextCompress';
 let checkpointPool: any = null;
-let checkpointSave: ((pool: any, session: any) => Promise<void>) | null = null;
+let checkpointCipher: any = null;
+let checkpointSave: ((pool: any, session: any, cipher?: any) => Promise<void>) | null = null;
 let checkpointDelete: ((pool: any, loopId: string) => Promise<void>) | null = null;
-export function setCheckpointDeps(pool: any) {
+export function setCheckpointDeps(pool: any, cipher?: any) {
   checkpointPool = pool;
+  checkpointCipher = cipher ?? null;
   import('./orchestrator/checkpoint').then(m => {
     checkpointSave = m.saveCheckpoint;
     checkpointDelete = m.deleteCheckpoint;
@@ -64,7 +66,7 @@ export function setCheckpointDeps(pool: any) {
 
 export function restoreLoopFromCheckpoint(partial: Partial<LoopSession> & { id: string }): LoopSession | null {
   if (loops.has(partial.id)) return loops.get(partial.id) ?? null;
-  // 重建最小可用 session
+  // 重建最小可用 session（修 1 已加密，修 3 幂等恢复 pendingCallId 与 executedToolIds）
   const session: LoopSession = {
     id: partial.id,
     userId: partial.userId ?? 0,
@@ -78,9 +80,10 @@ export function restoreLoopFromCheckpoint(partial: Partial<LoopSession> & { id: 
     toolNames: (partial as any).toolNames ?? undefined,
     touchedAt: Date.now(),
     abortCtl: null,
-    pendingCallId: null,
+    pendingCallId: (partial as any).pendingCallId ?? null,
     lastSnapshot: null,
     usedTools: [],
+    executedToolIds: (partial as any).executedToolIds ?? [],
     pause: null,
     // @ts-ignore
     kind: (partial as any).kind ?? 'task',
@@ -297,6 +300,8 @@ export interface LoopSession {
   pendingCallId: string | null;
   /** 已经用过的工具名（诊断用，也用来证明「闲聊轮没有开页工具」） */
   usedTools: LoopToolName[];
+  /** 修 3 幂等：已执行过的 tool_call_id 列表，重启后去重，避免工具被执行第二次 */
+  executedToolIds?: string[];
   /**
    * 子阶段 A · **推进锁**（重入保护）。
    *
@@ -627,7 +632,7 @@ export function startLoop(env: ServerEnv, input: StartLoopInput): LoopSession {
   const wcId = Number(input.wcId);
   if (Number.isInteger(wcId)) bindPageLoop(wcId, session.id, input.userId, input.agentId);
   loops.set(session.id, session);
-  if (checkpointPool && checkpointSave) void checkpointSave(checkpointPool, session).catch(() => undefined);
+  if (checkpointPool && checkpointSave) void (checkpointSave as any)(checkpointPool, session, checkpointCipher).catch(() => undefined);
   return session;
 }
 
@@ -1340,6 +1345,13 @@ function serverContextOf(session: LoopSession): ServerExecutionContext {
  */
 export function ingestToolResult(session: LoopSession, result: LoopToolResult): void {
   const callId = session.pendingCallId ?? `call_${session.step}`;
+  // 修 3 幂等：若该 callId 已执行过，直接忽略，避免重复执行
+  const executed = (session as any).executedToolIds as string[] | undefined;
+  if (executed && executed.includes(callId)) {
+    console.warn(`[loop] 幂等拦截：tool_call ${callId} 已执行过，跳过重复结果`);
+    session.pendingCallId = null;
+    return;
+  }
   const lastCall = lastToolCall(session);
   session.messages.push({
     role: 'tool',
@@ -1349,6 +1361,9 @@ export function ingestToolResult(session: LoopSession, result: LoopToolResult): 
   if (result.page) session.lastSnapshot = result.page;
   session.pendingCallId = null;
   session.step += 1;
+  // 记录已执行
+  if (!session.executedToolIds) session.executedToolIds = [];
+  session.executedToolIds.push(callId);
   if (result.userAnswer) {
     session.messages.push({ role: 'user', content: `用户补了一句：${result.userAnswer.slice(0, 300)}` });
   }
@@ -1522,6 +1537,11 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
     }
 
     const call = outcome.call;
+    // 修 3 幂等：若该 call.id 已执行过，不再下发，等待结果或跳过
+    if (session.executedToolIds && session.executedToolIds.includes(call.id)) {
+      console.warn(`[loop] 幂等拦截：tool_call ${call.id} 已执行过，不再下发`);
+      return { kind: 'tool', call, step: session.step, ...(text ? { text } : {}) };
+    }
     // 只把**第一个**工具记进历史（其余忽略），保证 assistant.tool_calls 与 tool 回执一一对应
     session.messages.push({
       role: 'assistant',
@@ -1530,6 +1550,12 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
     });
     session.pendingCallId = call.id;
     session.usedTools.push(call.name);
+    // 修 3：下发前先落库 pending_call_id，kill 后重启可去重
+    if (checkpointPool && checkpointSave) {
+      try {
+        void (checkpointSave as any)(checkpointPool, session, checkpointCipher);
+      } catch {}
+    }
 
     // 阶段 0 · 服务端直执行工具（side='server'，阶段 1+ 才会有注册）：
     // 在循环内就地执行、把回执 append 进历史，然后 continue 再问模型，
@@ -1592,7 +1618,7 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
       session.pendingCallId = null;
       session.step += 1;
       session.touchedAt = Date.now();
-      if (checkpointPool && checkpointSave) void checkpointSave(checkpointPool, session).catch(() => undefined);
+      if (checkpointPool && checkpointSave) void (checkpointSave as any)(checkpointPool, session, checkpointCipher).catch(() => undefined);
       continue;
     }
 
