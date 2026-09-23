@@ -10,6 +10,7 @@
  * 明确不做：不在这里做重试风暴、不做计费看板、不做 7×24 集群调度。
  */
 import type { ServerEnv } from './env';
+import { getModelForTask, inferTaskKindFromTag } from './modelRouter';
 
 export interface LlmToolCall {
   id: string;
@@ -66,9 +67,21 @@ export async function llmFetch(env: ServerEnv, messages: LlmMessage[], opts: Llm
   calls += 1;
   lastAt = Date.now();
   lastTag = opts.tag;
-  console.log(`[llm] #${calls} tag=${opts.tag} stream=${opts.stream ? 'yes' : 'no'} model=${env.deepseekModel}`);
+  // 批次 I | 模型自动路由：用户不选模型，后端按任务路由
+  const taskKind = inferTaskKindFromTag(opts.tag);
+  const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const routed = getModelForTask(env, taskKind, lastUserMsg);
+  const effectiveModel = routed.model;
+  const effectiveBaseUrl = routed.baseUrl;
+  const effectiveApiKey = routed.apiKey;
+  console.log(`[llm] #${calls} tag=${opts.tag} taskKind=${taskKind} model=${effectiveModel} reason=${routed.reason} stream=${opts.stream ? 'yes' : 'no'}`);
 
-  if (env.deepseekApiKey === 'mock' || env.deepseekApiKey.startsWith('mock:')) {
+  // 兼容旧日志：保留 env.deepseekModel 的引用，但实际使用路由后的模型
+  const modelToUse = effectiveModel;
+  const baseUrlToUse = effectiveBaseUrl;
+  const apiKeyToUse = effectiveApiKey;
+
+  if (apiKeyToUse === 'mock' || apiKeyToUse.startsWith('mock:')) {
     const lastUser = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
     const lastTool = [...messages].reverse().find((m) => m.role === 'tool');
 
@@ -202,7 +215,7 @@ export async function llmFetch(env: ServerEnv, messages: LlmMessage[], opts: Llm
   }
 
   const body: Record<string, unknown> = {
-    model: env.deepseekModel,
+    model: modelToUse,
     stream: Boolean(opts.stream),
     messages,
   };
@@ -215,9 +228,9 @@ export async function llmFetch(env: ServerEnv, messages: LlmMessage[], opts: Llm
   }
 
   const signal = opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? 60_000);
-  return fetch(`${env.deepseekBaseUrl.replace(/\/+$/, '')}/chat/completions`, {
+  return fetch(`${baseUrlToUse.replace(/\/+$/, '')}/chat/completions`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.deepseekApiKey}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKeyToUse}` },
     body: JSON.stringify(body),
     signal,
   });
