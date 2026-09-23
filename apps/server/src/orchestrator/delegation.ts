@@ -52,6 +52,7 @@ import { orchestrationBlock, subAgentSystemPrompt } from './prompts';
 import { orchestratorDeps } from './tools';
 import { writeCollabBoth, writeCollabToAgentChat } from './collabChat';
 import { triggerByEvent } from './routines';
+import { writeHandoffFile, getHandoffUri, appendBoardWithLock, updateHandoffStatus } from './handoff';
 
 const TASK_MAX = 600;
 const CONTEXT_MAX = 2000;
@@ -237,16 +238,39 @@ export async function executeDelegate(
     status: 'running',
     deadlineAt,
   });
+  // 批次 A | 交接结构化：每个委派一个文件 handoffs/<delegationId>.md，含 目标/输入/产出要求/审批边界，委派消息只传路径
+  try {
+    writeHandoffFile(projectId, delegationId, {
+      delegationId,
+      projectId,
+      fromAgentId: fromId,
+      fromAgentName: fromName,
+      toAgentId: target.id,
+      toAgentName: target.name,
+      goal: task,
+      input: context,
+      outputRequire: expect || '明确结论 + 要点提纲，stop(reason=done) 收尾',
+      approvalBoundary: '敏感信息不外发、不索要；高风险必须 stop(reason=need_user)；没有浏览器手不能说已打开',
+      status: 'running',
+      createdAt: new Date().toISOString(),
+      deadlineAt: deadlineAt.toISOString(),
+    });
+  } catch (err) {
+    console.warn(`[handoff] 写入交接文件失败（忽略）：`, (err as Error).message);
+  }
+  // board.md 单写者：只有发起方能写，序列化追加
+  void appendBoardWithLock(projectId, fromId, `- [${new Date().toISOString()}] #${delegationId} ${fromName}→${target.name}: ${task.slice(0, 80)} (${getHandoffUri(projectId, delegationId)})`).catch(() => undefined);
+
   await addChannelMessage(pool, cipher, {
     channelId,
     fromAgentId: fromId,
     toAgentId: target.id,
     kind: 'task',
-    text: task + (context ? `\n\n【背景资料】\n${context}` : '') + (expect ? `\n\n【希望你回】\n${expect}` : ''),
-    payload: { status: 'running', delegationId },
+    text: getHandoffUri(projectId, delegationId),
+    payload: { status: 'running', delegationId, handoffPath: getHandoffUri(projectId, delegationId) },
     delegationId,
   });
-  // 无感核心：协同进对话流（派单方和接单方各一条，折叠摘要）
+  // 无感核心：协同进对话流（派单方和接单方各一条，折叠摘要）—— 对话流仍带任务摘要，频道只传路径
   void writeCollabBoth(pool, cipher, {
     kind: 'dispatch',
     fromId,
@@ -402,6 +426,7 @@ export async function executeDelegate(
     jobId: created.job.id,
     delegationId,
     channelId,
+    projectId,
     fromId,
     fromName,
     target,
@@ -444,6 +469,7 @@ interface RunnerInput {
   jobId: string;
   delegationId: number;
   channelId: number;
+  projectId: number;
   fromId: number;
   fromName: string;
   target: { id: number; name: string };
@@ -574,7 +600,7 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
     data: { delegationId, status: 'failed', steps: sub.step },
   });
 
-  // ------------------------------------------------------------ 局部小工具（无感核心：协同进对话流，频道仍保留）
+  // ------------------------------------------------------------ 局部小工具（无感核心：协同进对话流，频道仍保留 + 交接结构化更新文件）
   async function progress(text: string): Promise<void> {
     await addChannelMessage(pool, cipher, {
       channelId,
@@ -585,7 +611,6 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       payload: { delegationId, steps: sub.step },
       delegationId,
     }).catch(() => undefined);
-    // 进度也进对话流（折叠摘要，细节前端可展开）
     void writeCollabToAgentChat(pool, cipher, fromId, {
       kind: 'progress',
       fromId: target.id,
@@ -595,6 +620,9 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       detail: text,
       delegationId,
     }).catch(() => undefined);
+    try {
+      updateHandoffStatus(input.projectId, delegationId, 'running', `进度 ${sub.step}: ${text}`);
+    } catch {}
   }
 
   async function reply(text: string, outline: string[]): Promise<void> {
@@ -607,7 +635,6 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       payload: { delegationId, status: 'done', steps: sub.step, findings: outline.slice(0, 12) },
       delegationId,
     }).catch(() => undefined);
-    // 交回也进对话流
     void writeCollabBoth(pool, cipher, {
       kind: 'reply',
       fromId: fromId,
@@ -618,6 +645,9 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       status: 'done',
       delegationId,
     }).catch(() => undefined);
+    try {
+      updateHandoffStatus(input.projectId, delegationId, 'done', `结论：${text.slice(0, 300)}\n要点：${outline.slice(0, 5).join('、')}`);
+    } catch {}
   }
 
   /** 把子循环这一步新用掉的工具写成频道过程注记（用户「查看交流过程」看的就是这些） */
