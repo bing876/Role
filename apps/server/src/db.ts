@@ -394,6 +394,27 @@ CREATE TABLE IF NOT EXISTS project_whiteboard (
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_project_whiteboard ON project_whiteboard (project_id, mem_key) WHERE status IN ('active','pending');
 CREATE INDEX IF NOT EXISTS idx_project_whiteboard_project ON project_whiteboard (project_id, status, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_project_whiteboard_user ON project_whiteboard (user_id, project_id);
+
+-- 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job
+CREATE TABLE IF NOT EXISTS loop_checkpoints (
+  id              TEXT PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id        BIGINT,
+  conversation_id BIGINT,
+  wc_id           BIGINT,
+  goal            TEXT,
+  messages        JSONB NOT NULL DEFAULT '[]'::jsonb,
+  step            INTEGER NOT NULL DEFAULT 0,
+  status          TEXT NOT NULL,
+  tool_names      JSONB,
+  kind            TEXT,
+  parent_loop_id  TEXT,
+  chain           JSONB,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_user ON loop_checkpoints (user_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_agent ON loop_checkpoints (agent_id, status);
 `;
 
 

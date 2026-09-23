@@ -51,6 +51,47 @@ import {
   type PageStatePatch,
 } from './pageState';
 import { compressIfNeeded } from './orchestrator/contextCompress';
+let checkpointPool: any = null;
+let checkpointSave: ((pool: any, session: any) => Promise<void>) | null = null;
+let checkpointDelete: ((pool: any, loopId: string) => Promise<void>) | null = null;
+export function setCheckpointDeps(pool: any) {
+  checkpointPool = pool;
+  import('./orchestrator/checkpoint').then(m => {
+    checkpointSave = m.saveCheckpoint;
+    checkpointDelete = m.deleteCheckpoint;
+  }).catch(() => {});
+}
+
+export function restoreLoopFromCheckpoint(partial: Partial<LoopSession> & { id: string }): LoopSession | null {
+  if (loops.has(partial.id)) return loops.get(partial.id) ?? null;
+  // 重建最小可用 session
+  const session: LoopSession = {
+    id: partial.id,
+    userId: partial.userId ?? 0,
+    agentId: partial.agentId ?? null,
+    conversationId: partial.conversationId ?? null,
+    wcId: partial.wcId ?? null,
+    goal: partial.goal ?? '',
+    messages: (partial.messages as any) ?? [],
+    step: partial.step ?? 0,
+    status: (partial.status as any) ?? 'running',
+    toolNames: (partial as any).toolNames ?? undefined,
+    touchedAt: Date.now(),
+    abortCtl: null,
+    pendingCallId: null,
+    lastSnapshot: null,
+    usedTools: [],
+    pause: null,
+    // @ts-ignore
+    kind: (partial as any).kind ?? 'task',
+    // @ts-ignore
+    parentLoopId: (partial as any).parentLoopId ?? null,
+    // @ts-ignore
+    chain: (partial as any).chain ?? [],
+  } as unknown as LoopSession;
+  loops.set(session.id, session);
+  return session;
+}
 // 阶段 0 · Tool Registry：工具表与校验走注册表（旧逻辑保留在 *Legacy 函数里做回滚用）
 import {
   LOOP_TOOL_NAMES,
@@ -586,6 +627,7 @@ export function startLoop(env: ServerEnv, input: StartLoopInput): LoopSession {
   const wcId = Number(input.wcId);
   if (Number.isInteger(wcId)) bindPageLoop(wcId, session.id, input.userId, input.agentId);
   loops.set(session.id, session);
+  if (checkpointPool && checkpointSave) void checkpointSave(checkpointPool, session).catch(() => undefined);
   return session;
 }
 
@@ -661,6 +703,7 @@ export function stopLoop(loopId: string, reason = 'user_stop'): boolean {
   const s = getLoop(loopId);
   if (!s) return false;
   s.status = 'stopped';
+  if (checkpointPool && checkpointDelete) void checkpointDelete(checkpointPool, loopId).catch(() => undefined);
   s.touchedAt = Date.now();
   // 在飞的那次 LLM 请求一并掐掉：只改 status 的话它会在后台把 90 秒跑完（钱照烧）
   s.abortCtl?.abort();
@@ -1549,6 +1592,7 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
       session.pendingCallId = null;
       session.step += 1;
       session.touchedAt = Date.now();
+      if (checkpointPool && checkpointSave) void checkpointSave(checkpointPool, session).catch(() => undefined);
       continue;
     }
 
@@ -1556,6 +1600,7 @@ async function advanceInner(env: ServerEnv, session: LoopSession, result?: LoopT
       const reason = String(call.args.reason ?? 'done');
       if (reason === 'done') {
         session.status = 'done';
+        if (checkpointPool && checkpointDelete) void checkpointDelete(checkpointPool, session.id).catch(() => undefined);
         return {
           kind: 'done',
           summary: String(call.args.summary ?? '').trim() || '任务完成',
