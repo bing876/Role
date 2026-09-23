@@ -375,6 +375,25 @@ CREATE TABLE IF NOT EXISTS agent_routines (
 CREATE INDEX IF NOT EXISTS idx_agent_routines_user ON agent_routines (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_routines_agent ON agent_routines (agent_id, enabled, next_run_at);
 CREATE INDEX IF NOT EXISTS idx_agent_routines_project ON agent_routines (project_id, enabled);
+
+-- 批次 B | 项目共享白板：project scope 记忆暴露成“项目简报”，所有成员自动注入；贴白板=待确认记忆卡
+-- 白板是项目级共享记忆，所有智能体自动注入
+CREATE TABLE IF NOT EXISTS project_whiteboard (
+  id              BIGSERIAL PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id      BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  agent_id        BIGINT REFERENCES agents(id) ON DELETE SET NULL,
+  mem_key         TEXT NOT NULL,
+  content_enc     TEXT NOT NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  needs_confirm   BOOLEAN NOT NULL DEFAULT false,
+  source          TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_project_whiteboard ON project_whiteboard (project_id, mem_key) WHERE status IN ('active','pending');
+CREATE INDEX IF NOT EXISTS idx_project_whiteboard_project ON project_whiteboard (project_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_project_whiteboard_user ON project_whiteboard (user_id, project_id);
 `;
 
 

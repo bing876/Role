@@ -34,6 +34,7 @@ import { registerLoopRoutes } from './routes/loop';
 import { registerChannelRoutes } from './routes/channels';
 import { registerRoutineRoutes } from './routes/routines';
 import { registerHandoffRoutes } from './routes/handoffs';
+import { registerWhiteboardRoutes } from './routes/whiteboard';
 import { initOrchestrator } from './orchestrator/tools';
 import { startRoutineSweeper } from './orchestrator/routines';
 import { jobStats } from './orchestrator/registry';
@@ -115,6 +116,8 @@ async function main(): Promise<void> {
   registerRoutineRoutes(app, { pool, env, cipher });
   // 批次 A | 交接结构化：项目工作区 handoffs/ + board.md 单写者
   registerHandoffRoutes(app, { pool, env, cipher });
+  // 批次 B | 项目共享白板：项目简报，所有成员自动注入；贴白板=待确认记忆卡
+  registerWhiteboardRoutes(app, { pool, env, cipher });
   /**
    * 多智能体编排 · 装编排能力（web_search / spawn_workers / delegate 三个服务端工具 + 名额表）。
    *

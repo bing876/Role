@@ -61,6 +61,7 @@ import { startLoop } from '../toolLoop';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
+import { buildWhiteboardBlock } from '../orchestrator/whiteboard';
 
 export interface ChatDeps {
   pool: Pool;
@@ -414,13 +415,20 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         const convAgent = await pool.query<{ agent_id: string | null }>('SELECT agent_id FROM conversations WHERE id = $1', [convId]);
         const convAgentId = Number(convAgent.rows[0]?.agent_id);
         const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;
-        // 记忆合并第二批：任务轮三级作用域（账号级+智能体级+会话级）
+        // 记忆合并第二批：任务轮三级作用域（账号级+智能体级+会话级）+ 项目白板共享
         let taskMemoryBlock: string | undefined;
+        let taskWhiteboardBlock: string | undefined;
         try {
           taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null, convId ?? null);
         } catch (err) {
           console.warn('[chat] 任务轮记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
         }
+        try {
+          const projRow = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
+          const pid = Number(projRow.rows[0]?.project_id ?? 0);
+          if (pid) taskWhiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, pid);
+        } catch {}
+        const combinedMemoryBlock = [taskMemoryBlock, taskWhiteboardBlock].filter(Boolean).join('\n\n');
 
         const loop = startLoop(env, {
           userId: claims.sub,
@@ -433,7 +441,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
           // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。
           orchestrationBlock: await orchestrationBlockFor(pool, env, claims.sub, loopAgentId),
-          memoryBlock: taskMemoryBlock,
+          memoryBlock: combinedMemoryBlock || taskMemoryBlock,
           state: {
             current_task: state.current_task,
             browser_confirmed: state.browser_confirmed,
@@ -538,6 +546,13 @@ ${
        * （实测：「请问你现在想让我做什么：继续在 YouTube 上操作，还是去抖店看订单数据？」）。
        * task_switched 由 applyUserMessage 算好（不落库）。
        */
+      // 项目共享白板：所有成员自动注入
+      let whiteboardBlock = '';
+      try {
+        if (Number.isInteger(convProjectId) && convProjectId > 0) {
+          whiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, convProjectId);
+        }
+      } catch {}
       const systemParts = [
         systemPromptHead(agentCtx.agentName),
         agentCtx.personaBlock,
@@ -566,6 +581,7 @@ ${
         sessionStateBlock(state),
         userMemoryBlockRaw,
         agentCtx.projectMemoryBlock,
+        whiteboardBlock,
         memBlock,
         knowledgeBlock,
         browserContext,

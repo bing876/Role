@@ -1415,5 +1415,25 @@ export interface RoutineListResult {
 export interface RoutineCreateResult {
     routine: RoutineView;
 }
+/** 批次 B | 项目共享白板：项目简报，所有成员自动注入；贴白板=待确认记忆卡 */
+export interface WhiteboardView {
+    id: number;
+    projectId: number;
+    agentId: number | null;
+    content: string;
+    status: 'active' | 'pending' | 'archived';
+    needsConfirm: boolean;
+    source: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+export interface WhiteboardListResult {
+    projectId: number;
+    whiteboard: WhiteboardView[];
+}
+export interface WhiteboardPostResult {
+    ok: boolean;
+    whiteboard: WhiteboardView;
+}
 export * from './tools';
 //# sourceMappingURL=index.d.ts.map
