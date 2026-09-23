@@ -63,7 +63,7 @@ must(agentsContent.includes("from '../memoryNormalize'") || agentsContent.includ
 must(!agentsContent.includes('const SENSITIVE_MEM_RE ='), 'agents.ts 不再本地定义 SENSITIVE_MEM_RE');
 must(agentsContent.includes('FROM memories') && agentsContent.includes('agent_id IS NULL'), 'agents.ts buildUserMemoryBlock 读 memories 表（agent_id IS NULL）');
 must(agentsContent.includes('agent_id = $1') && agentsContent.includes('FROM memories'), 'agents.ts buildAgentProjectMemoryBlock 读 memories 表（agent_id = ?）');
-must(agentsContent.includes('INSERT INTO memories'), 'agents.ts writeLayer 写入 memories 表');
+must(agentsContent.includes('INSERT INTO memories') || agentsContent.includes('writeTidyLayer') || agentsContent.includes('writeMemoryRow'), 'agents.ts writeLayer 写入 memories 表（或走共享写入）');
 
 // 5. toolLoop.ts StartLoopInput.memoryBlock
 const loopPath = path.join(root, 'apps/server/src/toolLoop.ts');

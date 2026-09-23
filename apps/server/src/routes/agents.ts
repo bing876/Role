@@ -40,6 +40,7 @@ import { REFERENCE_PREFIX, sanitizeReferenceLine } from '../promptPolicy';
 import { keepaliveOfAgent } from '../sessionState';
 import { HEN_KIND, isProtectedKind, loadOwnedProject, resolveAgentCreator } from '../projectScope';
 import { isSensitive, normalizeText } from '../memoryNormalize';
+import { extractJsonLoose, TIDY_PROMPT, writeTidyLayer } from '../memoryShared';
 
 export interface AgentDeps {
   pool: Pool;
@@ -284,45 +285,12 @@ export async function buildAgentContext(
 
 // ---------------------------------------------------------------------------
 // 整理记忆：从聊天**总结**出两层，不把整段聊天当记忆存，写入单一 memories 表
+// 记忆合并第三批：统一两套整理逻辑，提示词与写入收口到 memoryShared.ts
 // ---------------------------------------------------------------------------
-const TIDY_PROMPT = [
-  '你是工作台的「记忆整理员」。把下面这段对话**总结**成两条互不混的清单，不要把整段聊天抄进去。',
-  '只输出一个 JSON：{"user":[{"content":"一句话中文"}],"project":[{"content":"一句话中文"}]}',
-  '分类规矩（拿不准就按这条走）：',
-  '- user = 用户记忆库，账号级，**所有智能体都能读到**：只放「这个人」的习惯与口味——说话希望多短、',
-  '  喜欢什么风格/设计/配色、聊天希望怎么展示。绝不能放任何具体项目的业务细节、资料、结论。',
-  '- project = 项目记忆，**只归当前这个智能体**：只放这件事的业务与资料——这个项目在做什么、',
-  '  定过哪些口径/结论/待办、涉及哪些资料。',
-  '铁律：',
-  '1. 密码、验证码、身份证、银行卡、支付、扫码、Cookie、令牌：一个字都不许出现在 content 里（整条丢掉）。',
-  '2. 一次性指令（「这次用红色就行」）、执行耗时、情绪发泄、闲聊寒暄：都不要。',
-  '3. content 是一句话中文（30 字内最佳），不要引号、不要解释、不要编号。',
-  '4. 没有值得记的就给空数组；每边最多 5 条。',
-].join('\n');
-
-function extractJsonLoose(text: string): unknown {
-  const t = String(text).trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  try {
-    return JSON.parse(t);
-  } catch {
-    const a = t.indexOf('{');
-    const b = t.lastIndexOf('}');
-    if (a >= 0 && b > a) {
-      try {
-        return JSON.parse(t.slice(a, b + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-}
-
 interface TidyBucket {
   added: number;
 }
 
-/** 把一个桶的条目写进 memories 表；重复句子跳过（靠 UNIQUE 去重） */
 async function writeLayer(
   pool: Pool,
   cipher: JsonCipher,
@@ -332,40 +300,8 @@ async function writeLayer(
   items: unknown,
   source: string,
 ): Promise<TidyBucket> {
-  const list = Array.isArray(items) ? items.slice(0, MEM_MAX_PER_LAYER) : [];
-  let added = 0;
-  for (const item of list) {
-    const o = (item ?? {}) as Record<string, unknown>;
-    const content = oneLine(o.content, MEM_CONTENT_MAX);
-    if (content.length < 2) continue;
-    if (isSensitive(content)) {
-      console.warn('[agents] 一条疑似敏感内容在写入前被丢弃（两层都不落库）');
-      continue;
-    }
-    const key = normalizeText(content);
-    if (!key) continue;
-    const enc = cipher.encryptText(content);
-    try {
-      const r =
-        layer === 'user'
-          ? await pool.query(
-              `INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
-               VALUES (NULL, NULL, NULL, $1, $2, $3, 'preference', $2, $4, 'active', false)
-               ON CONFLICT DO NOTHING`,
-              [key, enc, ownerId, source],
-            )
-          : await pool.query(
-              `INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm)
-               VALUES (NULL, $1, NULL, $2, $3, $4, 'preference', $3, $5, 'active', false)
-               ON CONFLICT DO NOTHING`,
-              [agentId, key, enc, ownerId, source],
-            );
-      added += r.rowCount ?? 0;
-    } catch (err) {
-      console.warn('[agents] 写入 memories 失败（忽略）：', (err as Error).message);
-    }
-  }
-  return { added };
+  // 统一走 memoryShared.writeTidyLayer，支持三级作用域与 pending
+  return writeTidyLayer(pool, cipher, layer, ownerId, agentId, items, source, null);
 }
 
 async function transcriptOfConversation(

@@ -39,7 +39,7 @@ const memContent = fs.readFileSync(memPath, 'utf8');
 must(memContent.includes('conversationId?: number | null'), 'memories.ts buildMemoryBlock 支持 conversationId');
 must(memContent.includes('hasConv'), 'memories.ts 有 hasConv 逻辑');
 must(memContent.includes('conversation_id = $3') || memContent.includes('conversation_id = $2'), 'memories.ts 查询包含 conversation_id');
-must(memContent.includes('conversation_id, mem_key') && memContent.includes('project_id, agent_id, conversation_id'), 'memories.ts 写入包含 conversation_id');
+must((memContent.includes('conversation_id, mem_key') && memContent.includes('project_id, agent_id, conversation_id')) || memContent.includes('writeMemoryRow'), 'memories.ts 写入包含 conversation_id（或走共享写入）');
 must(memContent.includes('extractCore') && memContent.includes('conversationId'), 'memories.ts extractCore 支持 conversationId');
 must(memContent.includes('chat_idle') && memContent.includes('convId'), 'memories.ts idle 调度传入 convId');
 
@@ -58,7 +58,7 @@ must(loopContent.includes('buildMemoryBlock(pool, cipher, claims.sub, goal, agen
 const agentsPath = path.join(root, 'apps/server/src/routes/agents.ts');
 const agentsContent = fs.readFileSync(agentsPath, 'utf8');
 must(agentsContent.includes('conversation_id IS NULL'), 'agents.ts 查询过滤 conversation_id IS NULL');
-must(agentsContent.includes('conversation_id, mem_key'), 'agents.ts 写入包含 conversation_id');
+must(agentsContent.includes('conversation_id, mem_key') || agentsContent.includes('writeTidyLayer') || agentsContent.includes('writeMemoryRow'), 'agents.ts 写入包含 conversation_id（或走共享写入）');
 
 // 6. 动态三级作用域测试（PGlite）
 console.log('\n--- 动态三级作用域测试（PGlite） ---');

@@ -35,7 +35,8 @@ import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
 import { llmFetch } from '../llm';
 import { REFERENCE_PREFIX, sanitizeReferenceLine } from '../promptPolicy';
-import { normalizeText, SENSITIVE_MEM_RE, LONG_DIGITS_RE, isSensitive } from '../memoryNormalize';
+import { normalizeText, isSensitive } from '../memoryNormalize';
+import { extractJsonLoose, EXTRACT_PROMPT, looksLikeWorkRule, writeMemoryRow } from '../memoryShared';
 
 export interface MemoryDeps {
   pool: Pool;
@@ -43,49 +44,7 @@ export interface MemoryDeps {
   cipher: JsonCipher;
 }
 
-/** 抽取提示词：只放服务端。输出契约 = 一个 JSON。 */
-const EXTRACT_PROMPT = [
-  '你是工作台的“记忆保管员”。从下面的对话/任务记录里，只抽取会改变你今后对该用户行为的记忆。',
-  '只输出一个 JSON：{"items":[{"type":"preference|fact|decision","content":"一句话中文","needs_confirm":true或false}]}，没有值得记的就输出 {"items":[]}',
-  '铁律：',
-  '1. 没有「以后 / 每次 / 默认 / 都 / 别再问我」这类长期信号的，都是一次性指令，不要输出。',
-  '2. 「这次用红色就行」这类临时要求、情绪发泄、执行耗时抱怨，一律不要输出。',
-  '3. 密码、验证码、身份证号、银行卡号、Cookie、第三方账号的口令：永远不要出现在 content 里（该条直接不输出）。',
-  '4. 「以后用当前已登录的浏览器账号」可以记成 decision，但 content 禁止写出账号、邮箱、密码的具体值。',
-  '5. type=preference 时 needs_confirm 必须 false；type=decision 时必须 true；fact 仅当会改变以后行为才输出（needs_confirm true），否则不要输出它。',
-  '6. 一次最多 5 条。content 一句话中文（30 字内最佳），不要解释、不要引号。',
-  '7. 【关键分类】preference 只留给「说话语气 / 长短」这类表达习惯（例：「以后回复尽量短」「别用客套话」）。',
-  '   凡是会改变「怎么干活」的工作规则——主题、配色、格式、模板、流程、工具、默认规则、以后每次/所有/都怎么办——',
-  '   一律 type=decision、needs_confirm=true（例：「以后所有报告都用蓝色主题」「以后都用表格出」「报告默认三段式」）。',
-  '   拿不准就按 decision 处理（宁可让用户确认，也不要静默生效）。',
-].join('\n');
-
-/**
- * 写入前的保守兜底（第 3 项验收失败后补）：模型可能把「工作方式/主题/流程」误判成 preference，
- * 只靠提示词不够 —— 这里在解析 JSON 之后、落库之前再判一次：命中即强制 decision + needs_confirm，
- * 让它走 pending 上确认卡，禁止静默 active。
- */
-const THEME_RULE_RE = /(主题|主题色|配色|样式|风格|模板|版式|布局|字体|字号)/;
-const WORK_RULE_RE = /(报告|报表|文档|幻灯片|ppt|界面|格式|流程|规范|标准|默认|字段|单位|语言|图表|表格)/i;
-/** 明确写出「用/按/走 X（格式/主题）」的要求 */
-const FORMAT_RULE_RE = /(用|按|走|采用)\s*(蓝色|红色|绿色|深色|浅色|表格|列表|三段|markdown|pdf|word)/i;
-const GLOBAL_MARK_RE = /(所有|每次|一律|统统|全部|默认|统一|凡是)/;
-const FUTURE_MARK_RE = /(以后|今后|往后|接下来|从现在起|之后|长期)/;
-
-/**
- * 只要命中就强制按 decision（pending + 必须确认）处理，禁止静默 active。
- * 判定要点：主题/格式类词 或 工作方式词，且带「全局/长期」信号；
- * 或者干脆是显式「用/按 X 格式」的要求。语气长短类（例：以后回复尽量短）不命中。
- */
-function looksLikeWorkRule(content: string): boolean {
-  const s = String(content ?? '');
-  if (!s) return false;
-  if (FORMAT_RULE_RE.test(s)) return true;
-  const globalOrFuture = GLOBAL_MARK_RE.test(s) || FUTURE_MARK_RE.test(s);
-  if (!globalOrFuture) return false;
-  return THEME_RULE_RE.test(s) || WORK_RULE_RE.test(s);
-}
-
+/// 记忆合并第三批：提示词与判定收口到 memoryShared.ts
 function wordHits(text: string, fact: string): boolean {
   const hay = normalizeText(text);
   if (!hay) return false;
@@ -130,23 +89,7 @@ function authed(req: FastifyRequest, env: ServerEnv) {
   return token ? verifyToken(token, env.jwtSecret) : null;
 }
 
-function extractJsonLoose(text: string): unknown {
-  const t = String(text).trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
-  try {
-    return JSON.parse(t);
-  } catch {
-    const a = t.indexOf('{');
-    const b = t.lastIndexOf('}');
-    if (a >= 0 && b > a) {
-      try {
-        return JSON.parse(t.slice(a, b + 1));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-}
+// extractJsonLoose 已收口到 memoryShared.ts
 
 /**
  * 注入块：active preference+decision 全带上；active fact 仅命中才带。
@@ -390,27 +333,24 @@ async function extractCore(
     seen.add(key);
     const status = needs ? 'pending' : 'active';
     const enc = cipher.encryptText(content);
-    // 三级作用域写入
-    if (hasConv && hasAgent) {
-      await pool.query(
-        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, $1, $2, $3, $4, $5, $6, $4, $7, $8, $9) ON CONFLICT DO NOTHING',
-        [aid, cid, key, enc, ownerId, type, source, status, needs],
-      );
-    } else if (hasConv) {
-      await pool.query(
-        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, NULL, $1, $2, $3, $4, $5, $3, $6, $7, $8) ON CONFLICT DO NOTHING',
-        [cid, key, enc, ownerId, type, source, status, needs],
-      );
-    } else if (hasAgent) {
-      await pool.query(
-        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, $1, NULL, $2, $3, $4, $5, $3, $6, $7, $8) ON CONFLICT DO NOTHING',
-        [aid, key, enc, ownerId, type, source, status, needs],
-      );
-    } else {
-      await pool.query(
-        'INSERT INTO memories (project_id, agent_id, conversation_id, mem_key, value_enc, owner_id, type, content_encrypted, source, status, needs_confirm) VALUES (NULL, NULL, NULL, $1, $2, $3, $4, $2, $5, $6, $7) ON CONFLICT DO NOTHING',
-        [key, enc, ownerId, type, source, status, needs],
-      );
+    // 三级作用域写入（统一走 memoryShared.writeMemoryRow）
+    const written = await writeMemoryRow({
+      pool,
+      cipher,
+      ownerId,
+      agentId: hasAgent ? aid : null,
+      conversationId: hasConv ? cid : null,
+      memKey: key,
+      contentEnc: enc,
+      type,
+      source,
+      status,
+      needsConfirm: needs,
+    });
+    // 兼容旧计数：若 ON CONFLICT DO NOTHING 返回 0，也算已处理过（幂等），但不计入 extracted
+    if (written === 0) {
+      // 已存在，跳过 pending 回查
+      continue;
     }
     inserted += 1;
     if (needs) {
