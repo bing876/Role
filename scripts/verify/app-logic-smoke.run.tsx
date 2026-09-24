@@ -1554,7 +1554,13 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
   await flush(3);
   // 前置：这一轮**确实在跑**（否则下面那些"不许露"的断言全都在测空气）
   assert.match(q('.chat')?.textContent ?? '', /AI 任务执行中/, '前置不成立：任务卡没出现');
-  assert.equal(q('.inputBar button')?.textContent, '发送补充', '前置不成立：输入框没进「发送补充」');
+  /**
+   * ★ 先取出**标量**再断言（R1 门禁：DOM 元素不许进断言库 —— 失败时 Node 去 inspect
+   *   jsdom 的环形巨图会 OOM 137，连哪条红了都看不到）。`?.textContent` 这种可选链
+   *   不在门禁的值取值白名单里，所以这里先落到局部变量，别跟门禁绕。
+   */
+  const preBtnText = q('.inputBar button')?.textContent ?? '';
+  assert.equal(preBtnText, '发送补充', '前置不成立：输入框没进「发送补充」');
 
   // 流还开着就登出
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
@@ -1585,14 +1591,11 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
     !(q('.chat')?.textContent ?? '').includes('AI 任务执行中'),
     '上一轮的「AI 任务执行中」卡片露出来了（F5 复发：登出没清循环号）',
   );
-  const btn = q('.inputBar button');
-  assert.equal(
-    btn?.textContent,
-    '发送',
-    `输入框按钮还停在上一轮（F5 复发：登出没清流式态）：${btn?.textContent}`,
-  );
+  const btnText = q('.inputBar button')?.textContent ?? '';
+  assert.equal(btnText, '发送', `输入框按钮还停在上一轮（F5 复发：登出没清流式态）：${btnText}`);
   assert.ok(!(q('.inputBar input') as HTMLInputElement | null)?.disabled, '输入框是禁用的（上一轮的「打字中」把用户锁在外面了）');
-  assert.equal(q('.searchHint'), null, '上一轮的「正在搜索：…」那行露出来了（F5 复发：登出没清搜索提示）');
+  const hintLine = q('.searchHint') === null ? '（没有）' : (q('.searchHint')?.textContent ?? '');
+  assert.equal(hintLine, '（没有）', `上一轮的「正在搜索：…」那行露出来了（F5 复发：登出没清搜索提示）：${hintLine}`);
 });
 
 await act(async () => rootSend.unmount());

@@ -38,14 +38,15 @@
     "verify:mention": "npm run -s verify:mention:parse && npm run -s verify:mention:decision && npm run -s verify:mention:desktop",
     "verify:db:pglite": "tsx scripts/verify/task-encryption-pglite.mts",
     "verify:db:mutate-nocipher": "node scripts/verify/task-encryption-nocipher.mjs",
-    "verify": "npm run -s verify:gates && npm run -s verify:redact && npm run -s verify:mention && npm run -s verify:tools && npm run -s verify:r4 && npm run -s verify:orch && npm run -s verify:websearch && npm run -s verify:memory && npm run -s verify:persona && npm run -s verify:collab && npm run -s verify:batches && npm run -s verify:db:pglite && npm run -s verify:shell && npm run -s verify:logic",
+    "verify": "npm run -s verify:gates && npm run -s verify:redact && npm run -s verify:mention && npm run -s verify:tools && npm run -s verify:r4 && npm run -s verify:orch && npm run -s verify:websearch && npm run -s verify:memory && npm run -s verify:persona && npm run -s verify:collab && npm run -s verify:handoff && npm run -s verify:batches && npm run -s verify:db:pglite && npm run -s verify:shell && npm run -s verify:logic",
     "live": "node scripts/live.mjs",
     "clean": "node scripts/clean.mjs",
     "verify:mention:parse": "tsx scripts/verify/mention-parse.mts",
     "verify:mention:decision": "tsx scripts/verify/mention-decision.mts",
     "verify:mention:desktop": "tsx scripts/verify/mention-desktop.mts",
     "verify:mention:e2e": "npm run build -w @ai-workbench/shared && npm run build -w @ai-workbench/server && node scripts/verify/mention-e2e.mjs",
-    "verify:gates": "python3 scripts/verify/gate-static-rules.py && python3 scripts/verify/gate-static-rules-revert.py && python3 scripts/verify/app-tsx-line-budget.py"
+    "verify:gates": "python3 scripts/verify/gate-static-rules.py && python3 scripts/verify/gate-static-rules-revert.py && python3 scripts/verify/app-tsx-line-budget.py",
+    "verify:handoff": "tsx scripts/verify/handoff-redact.mts && python3 scripts/verify/handoff-redact-revert-proof.py"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

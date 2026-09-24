@@ -30,6 +30,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Pool } from 'pg';
+import { redactForStorage } from './redact';
+
+/**
+ * 收尾 8（2026-09-25 用户拍板）| **交接文件与 board 落盘前一律过脱敏**。
+ *
+ * 为什么这一批要补在**这里**：`handoffs/<delegationId>.md` 与 `board.md` 是**明文文件**
+ * （不像 `tasks.goal_enc` / `messages.content_enc` 那样有密文列），而它们的内容**全部来自
+ * 模型与用户**：委派目标、上下文、产出要求、子循环的进度与结论、board 那一行摘要。
+ * 频道正文（`channels.ts`）、摘要与要点（`workers.ts`）早就有这道闸，交接文件当初漏了 ——
+ * 于是同一句话进频道被抹掉、写进 handoff 却是原文。
+ *
+ * 口径与 R2 / 收尾 6 完全一致，别在这里另立标准：
+ *   · `redactForStorage` 抹的是**值形态**（银行卡 12~19 位 / 身份证 18 位 / 密码 / 验证码 /
+ *     CVV / ≥21 位连续纯数字串），只留「有几个字符」，**不是**"按敏感词涂全文"；
+ *   · 它是**兜底**，不是"清洗后照发"：要不要**拒绝**这次委派由调用方判定（`detectSensitive`），
+ *     这里保证的是"判定漏了一个形态时，至少磁盘上不是原文"。
+ *
+ * 反证见 `scripts/verify/handoff-redact-revert-proof.py`（把这里的三处脱敏拆掉 → 验收当场红）。
+ */
+const safe = (t: unknown): string => redactForStorage(String(t ?? ''));
 
 // data/handoffs/<projectId>/ - 兼容多种 cwd
 function getDataRoot(): string {
@@ -105,27 +125,32 @@ export interface HandoffData {
   deadlineAt?: string;
 }
 
+/**
+ * 交接文件的正文。★ 收尾 8：**所有自由文本字段都过 `safe()`**（见文件里那段说明）。
+ * 结构化字段（delegationId / jobId / 项目 id / 状态 / 时间）原样保留 —— 它们不是内容，
+ * 抹了只会让文件不可读，而且它们本来就是数字/枚举。
+ */
 function buildHandoffMarkdown(data: HandoffData): string {
   return `# 交接 ${data.delegationId}
 
 ## 目标
-${data.goal}
+${safe(data.goal)}
 
 ## 输入
-${data.input || '（无额外输入）'}
+${data.input ? safe(data.input) : '（无额外输入）'}
 
 ## 产出要求
-${data.outputRequire || '明确结论 + 要点提纲，stop(reason=done) 收尾'}
+${data.outputRequire ? safe(data.outputRequire) : '明确结论 + 要点提纲，stop(reason=done) 收尾'}
 
 ## 审批边界
-${data.approvalBoundary || '- 敏感信息（密码/验证码/银行卡/身份证/支付）不外发、不索要\n- 高风险（付款/下单）必须 stop(reason=need_user) 交给用户\n- 没有浏览器手，不能说“已打开网页”'}
+${data.approvalBoundary ? safe(data.approvalBoundary) : '- 敏感信息（密码/验证码/银行卡/身份证/支付）不外发、不索要\n- 高风险（付款/下单）必须 stop(reason=need_user) 交给用户\n- 没有浏览器手，不能说“已打开网页”'}
 
 ## 状态
 - delegationId: ${data.delegationId}
 - jobId: ${data.jobId || ''}
 - 项目: ${data.projectId}
-- 来自: ${data.fromAgentName} (#${data.fromAgentId})
-- 去向: ${data.toAgentName} (#${data.toAgentId})
+- 来自: ${safe(data.fromAgentName)} (#${data.fromAgentId})
+- 去向: ${safe(data.toAgentName)} (#${data.toAgentId})
 - 状态: ${data.status}
 - 创建: ${data.createdAt}
 - 截止: ${data.deadlineAt || ''}
@@ -157,7 +182,11 @@ export function updateHandoffStatus(projectId: number, delegationId: number, sta
   let content = fs.readFileSync(filePath, 'utf8');
   content = content.replace(/- 状态: .*/, `- 状态: ${status}`);
   if (extra) {
-    content += `\n\n## 更新 ${new Date().toISOString()}\n${extra}\n`;
+    /**
+     * ★ 收尾 8：`extra` 是**子循环原样报上来的**进度 / 结论（最可能夹带敏感值的一处），
+     *   落盘前过 `safe()`。时间戳是结构化字段，原样留着（抹了反而看不出什么时候更新的）。
+     */
+    content += `\n\n## 更新 ${new Date().toISOString()}\n${safe(extra)}\n`;
   }
   fs.writeFileSync(filePath, content, 'utf8');
 }
@@ -224,6 +253,11 @@ export async function appendBoardWithLock(
   entry: string,
 ): Promise<void> {
   if (!Number.isInteger(fromAgentId) || fromAgentId <= 0) throw new Error('board：fromAgentId 非法');
+  /**
+   * ★ 收尾 8：board 那一行也过 `safe()`（它带的是 `task.slice(0, 80)` —— 用户原话的摘要）。
+   *   放在**临界区之外**：脱敏是纯函数，没必要占着落库锁。
+   */
+  const safeEntry = safe(entry);
   ensureHandoffDir(projectId);
   // ★ 临界区故意写成**纯同步**（读 → 拼 → 原子替换之间没有 await）：
   //   同一进程内的并发追加因此天然不会交错；跨进程的互斥则完全由 PG 行锁负责。
@@ -235,7 +269,7 @@ export async function appendBoardWithLock(
     } catch {
       current = '';
     }
-    writeFileAtomic(boardPath, (current || boardHeader(projectId)) + entry + '\n');
+    writeFileAtomic(boardPath, (current || boardHeader(projectId)) + safeEntry + '\n');
   });
 }
 
