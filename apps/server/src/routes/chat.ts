@@ -588,6 +588,63 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         console.warn('[chat] 对话式建智能体失败，回落到普通聊天：', (e as Error).message);
       }
 
+      /**
+       * 批次 L 片 2 | 自然语言建定时任务:解析(routineParser)→ 名册解析(不猜)→ 去重(不建第二个)
+       * → createRoutine 真建 → **一句话回话**(带设成了什么,不是确认框)。
+       * 与批次 E 建智能体同一口径:落 user/assistant 两条消息(assistant 记 speaker_agent_id,
+       * 真 id + 统一 sse()),然后劫持 SSE 直接回话。解析不出(not-a-routine)→ 往下走正常 LLM 路径;
+       * 任何失败只告警回落聊天,绝不把这句吃掉。
+       */
+      try {
+        const rcMod = await import('../orchestrator/routineCreate');
+        const rcProjId = await currentProjectId(pool, claims.sub);
+        if (rcProjId !== null) {
+          const rc = await rcMod.createRoutineFromMessage(pool, {
+            userId: claims.sub,
+            projectId: rcProjId,
+            speakerAgentId: turnSpeakerId,
+            message,
+          });
+          if (rc.kind !== 'not-a-routine') {
+            const umRc = await pool.query<{ id: string }>(
+              "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
+              [convId, cipher.encryptText(message)],
+            );
+            const amRc = await pool.query<{ id: string }>(
+              "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
+              [convId, cipher.encryptText(rc.reply), turnSpeakerId],
+            );
+            reply.hijack();
+            const res = reply.raw;
+            res.writeHead(200, {
+              'content-type': 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache, no-transform',
+              connection: 'keep-alive',
+              'x-accel-buffering': 'no',
+              'access-control-allow-origin': req.headers.origin ?? '*',
+            });
+            sse(res, 'meta', {
+              conversationId: convId,
+              userMessageId: Number(umRc.rows[0].id),
+              agentId: turnSpeakerId,
+              mention: mentionMeta,
+            });
+            sse(res, null, { delta: rc.reply });
+            sse(res, 'done', {
+              conversationId: convId,
+              messageId: Number(amRc.rows[0].id),
+              contentLength: rc.reply.length,
+              searches: 0,
+              sources: [],
+            });
+            res.end();
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('[chat] 自然语言建定时任务失败，回落到普通聊天：', (e as Error).message);
+      }
+
       // 1) 先读历史（不含本句），再落用户消息
       const hist = await pool.query<{ role: string; content_enc: string }>(
         'SELECT role, content_enc FROM messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2',
