@@ -36,8 +36,11 @@
 
 ### 数据与安全
 
-- **数据库里的内容列是密文**（AES-256-GCM，格式 `gcm$iv$tag$ct`，密钥 `DATA_KEY`）：消息、记忆、交接频道、技能各字段、白板、知识库分块、`loop_checkpoints.goal_enc / messages_enc`、手机号等；`agent_delegations.task` 存的是脱敏文本。
+- **数据库里的内容列是密文**（AES-256-GCM，格式 `gcm$iv$tag$ct`，密钥 `DATA_KEY`）：消息、记忆、交接频道、技能各字段、白板、知识库分块、`loop_checkpoints.goal_enc / messages_enc`、**`tasks.goal_enc`、`task_pauses.goal_enc`**（收尾 6）、手机号等；`agent_delegations.task` 存的是脱敏文本。
   `loop_checkpoints` **fail-closed**：拿不到 cipher 就不写，绝不回退明文（`npm run verify:db` 用真库 + 变异测试验证过）。
+- **任务目标（goal）不留任何明文副本**（收尾 6）：`tasks` 只写 `goal_enc`，`payload` 里没有 `goal` 键、`title` 恒为 NULL（它当年存的是 `goal.slice(0,80)`，是同一份明文的第二个副本 —— 留着它，对不到 80 字的目标等于没加密）；`task_pauses` 同理，明文列 `goal` 恒写 NULL。
+  建任务时加密失败 → **直接 500，任务不建**（不退回明文）；暂停时加密失败 → 挂起台账照写、`goal_enc` 置空（少一个目标文本可以，写明文不行）。读取一律**解密优先、回退旧列**，所以没回填到的历史行也不会读成空白。
+  历史明文行由启动时的 `migrateTaskGoalEncryption` 幂等回填（`WHERE goal_enc IS NULL`，带重试）；拿不到 `DATA_KEY` 就跳过并打 warn，下次启动再试，绝不写明文兜底。
 - **例外：交接文件是明文落盘**。`apps/server/data/handoffs/<项目>/<委派>.md` 与 `board.md` 直接写任务原文，既不加密也不脱敏（目录已 gitignore，但在服务器磁盘上可读）。见「已知缺口」。
 - 手机号只存 `HMAC(PHONE_PEPPER, phone)` + 密文副本；`PHONE_PEPPER` 与 `DATA_KEY` 必须是两把不同的钥匙，缺任何一个服务拒绝启动。
 - 模型 key 只在 `apps/server/.env`（不入库）；桌面安装包**不含**服务端、数据库或任何 key。
@@ -107,7 +110,7 @@ npm run dev                               # 桌面端（Vite + Electron）
 
 | 命令 | 覆盖 | 依赖 |
 | --- | --- | --- |
-| `npm run verify` | 下面除 `verify:db` 外的全部 | 无（内存库 PGlite / 读源码） |
+| `npm run verify` | 下面除 `verify:db` 外的全部，**外加 `verify:db:pglite`**（goal 加密自检，不需要外部库） | 无（内存库 PGlite / 读源码） |
 | `npm run verify:tools` | 工具表、注册表契约、回滚开关 | — |
 | `npm run verify:r4` | 发车意图判定口径一致 | — |
 | `npm run verify:orch` | 编排：schema / 临时工 / park / 委派 / 端到端 / 路由 / 频道 / 一键关停 | PGlite |
@@ -116,7 +119,8 @@ npm run dev                               # 桌面端（Vite + Electron）
 | `npm run verify:persona` | 总协调人设、身份块注入 | — |
 | `npm run verify:collab` | 协同进对话流、头像即状态、总协调路由、Routines、上下文压缩 | — |
 | `npm run verify:batches` | 交接、白板、路由升级、重启恢复、前端引导、五项自查、Skills、电脑可见度、模型路由 | — |
-| `npm run verify:db` | **连真库**：checkpoint 加密（直接 SELECT + 漏传 cipher 变异）、board 落库锁（多进程 + kill -9 重启） | 真 PostgreSQL，`VERIFY_DATABASE_URL=postgres://…`（可写的测试库） |
+| `npm run verify:db` | **连真库**：checkpoint 加密（直接 SELECT + 漏传 cipher 变异）、board 落库锁（多进程 + kill -9 重启）、**收尾6 goal 加密**（真服务端 + 真登录 + 直连 SELECT `tasks`/`task_pauses` + 真重启验启动回填 + 幂等）、pglite 自检 | 真 PostgreSQL，`VERIFY_DATABASE_URL=postgres://…`（可写的测试库） |
+| `npm run verify:db:pglite` | 收尾6 goal 加密的快速自检：跑的是**生产代码本体**（`db.ts` / `routes/agent.ts` / `routes/loop.ts` + Fastify `inject()`），不是脚本里的副本 | PGlite（无需外部库） |
 
 > 很多脚本是「读源码做结构检查」，只能证明代码长什么样，证明不了行为；涉及安全和并发的结论以 `verify:db` 这类真库 / 真进程的测试为准。
 > `scripts/verify/` 里还有大量 `.py` 与探针脚本是历史上在 Windows 真机上跑的 E2E / 性能取证，依赖本机环境，不在 `npm run verify` 里。

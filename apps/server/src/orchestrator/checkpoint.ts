@@ -1,7 +1,11 @@
 /**
  * 批次 D | 重启恢复 — 借 LangGraph checkpoint 思路：循环状态落库，服务重启能续跑正在进行的 job
  * 修 1（安全）：messages 若为明文 JSONB，改为加密——整列 messages_enc TEXT 走 cipher，goal_enc 同理
- * 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，R2 当年专门给 task_pauses 加 goal_enc
+ * 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，任务目标也必须密文
+ * ★ 更正（收尾 6，2026-09-23）：这里以前写「R2 当年专门给 task_pauses 加 goal_enc」——**那是错的**。
+ *   R2 只是把「tasks.payload.goal 明文」记进 docs/待办-R2残留-goal明文-20260922.md 的**决议**，从未落地；
+ *   task_pauses.goal_enc / tasks.goal_enc 是收尾 6 才真正建列并回填的（见 db.ts migrateTaskGoalEncryption）。
+ *   本文件（loop_checkpoints）的 goal_enc 是修 1 加的，与本批无关。
  *
  * 设计：
  * - 循环状态（LoopSession）落库到 loop_checkpoints 表，每次 advance 后更新

@@ -20,8 +20,8 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import { loadEnv } from './env';
 import type { Pool } from 'pg';
-import { makePool, migrate } from './db';
-import { makeCipher } from './crypto';
+import { makePool, migrate, migrateTaskGoalEncryption } from './db';
+import { makeCipher, type JsonCipher } from './crypto';
 import { llmCallCount } from './llm';
 import { registerAuthRoutes } from './routes/auth';
 import { registerChatRoutes } from './routes/chat';
@@ -167,6 +167,19 @@ async function main(): Promise<void> {
   // 否则桌面端等的 30 秒就白等了。
   void migrateWithRetry(pool);
 
+  /**
+   * ★ 收尾 6：把历史明文 goal 回填成密文（`task_pauses.goal` → `goal_enc`；
+   *   `tasks.payload.goal` / `tasks.title` → `goal_enc`）。
+   *
+   * 同样**不 await**、放在 listen 之后：回填要逐行加解密，老库可能有几千行，
+   * 不能让桌面端等的那 30 秒耗在这里；期间读接口走「解密优先、回退旧列」，
+   * 所以回填没跑完也不影响功能（只是那几行暂时还是明文）。
+   *
+   * 与 migrateWithRetry 分开跑、各自重试：建表成功不代表回填成功（比如 DATA_KEY 缺失时
+   * migrateTaskGoalEncryption 会 fail-closed 跳过），两件事的失败原因和重试节奏都不同。
+   */
+  void migrateTaskEncryptionWithRetry(pool, cipher);
+
   await app.listen({ port: env.port, host: '0.0.0.0' });
   console.log(
     `[server] http://0.0.0.0:${env.port} —— GET /health；短信模式：${env.smsMock ? 'mock（验证码只进本日志）' : 'http 网关'}` +
@@ -205,6 +218,54 @@ async function migrateWithRetry(pool: Pool): Promise<void> {
       if (i === MAX_TRIES) {
         console.error(
           `[server] 建表重试 ${MAX_TRIES} 次（约 ${(MAX_TRIES * RETRY_INTERVAL_MS) / 1000} 秒）仍失败：`,
+          msg,
+        );
+        return;
+      }
+      await new Promise((r) => setTimeout(r, RETRY_INTERVAL_MS));
+    }
+  }
+}
+
+/**
+ * 收尾 6 | goal 密文回填带重试 —— 与上面的 `migrateWithRetry` 同一套节奏（3 秒 × 40 次 ≈ 2 分钟）。
+ *
+ * 为什么要重试而不是跑一次：
+ *   1. 建表也是后台重试的，回填可能在 `goal_enc` 列还不存在时就跑（列不存在 → 结构性错误 → 重试）；
+ *   2. PostgreSQL 崩溃恢复期同样会让这几条 UPDATE 报错；
+ *   3. 回填是**幂等**的（`WHERE goal_enc IS NULL`），重试不会重复加密、也不会覆盖已回填的行。
+ *
+ * ★ 只在「结构性失败」时重试。单行加密失败由 migrateTaskGoalEncryption 自己计数并保留原样，
+ *   不抛出来 —— 那种错误重试 40 次也一样失败，只会把日志刷爆。
+ * ★ 一行都没动（老库本来就是干净的 / 已经回填过）时不打日志，免得每次启动都多一行噪音。
+ */
+async function migrateTaskEncryptionWithRetry(pool: Pool, cipher: JsonCipher): Promise<void> {
+  const MAX_TRIES = 40;
+  const RETRY_INTERVAL_MS = 3000;
+
+  for (let i = 1; i <= MAX_TRIES; i++) {
+    try {
+      const r = await migrateTaskGoalEncryption(pool, cipher);
+      if (r.skipped) {
+        // cipher 缺失是 fail-closed 跳过（明文原样留着，不写兜底）—— 这里 cipher 是启动时
+        // makeCipher(env.dataKey) 造出来的，正常路径进不来；真进来说明有人改了启动顺序。
+        console.warn('[server] goal 密文回填被跳过（没拿到 cipher）：明文行保留，下次启动再试');
+        return;
+      }
+      if (r.pauses || r.tasks || r.failed) {
+        console.log(
+          `[server] goal 密文回填完成：task_pauses ${r.pauses} 条、tasks ${r.tasks} 条` +
+            (r.failed ? `（另有 ${r.failed} 条加密失败，明文保留待下次）` : '') +
+            (i > 1 ? `；在第 ${i} 次尝试成功` : ''),
+        );
+      }
+      return;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (i === 1) console.warn('[server] goal 密文回填暂未完成（表可能还没建好，继续重试）：', msg);
+      if (i === MAX_TRIES) {
+        console.error(
+          `[server] goal 密文回填重试 ${MAX_TRIES} 次（约 ${(MAX_TRIES * RETRY_INTERVAL_MS) / 1000} 秒）仍失败：`,
           msg,
         );
         return;

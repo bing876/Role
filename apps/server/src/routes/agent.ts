@@ -80,13 +80,55 @@ function extractJson(text: string): unknown {
   }
 }
 
-/** 任务归属校验：tasks JOIN projects，只认自己的 */
+/** 任务归属校验：tasks JOIN projects，只认自己的（收尾 6：带上密文目标列 goal_enc） */
 async function ownTask(pool: Pool, taskId: number, userId: number) {
-  const r = await pool.query<{ id: string; status: string; title: string | null; payload: unknown; unread: boolean; result_enc: string | null }>(
-    'SELECT t.id, t.status, t.title, t.payload, t.unread, t.result_enc FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1 AND p.user_id = $2',
+  const r = await pool.query<{ id: string; status: string; title: string | null; payload: unknown; unread: boolean; result_enc: string | null; goal_enc: string | null }>(
+    'SELECT t.id, t.status, t.title, t.payload, t.unread, t.result_enc, t.goal_enc FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1 AND p.user_id = $2',
     [taskId, userId],
   );
   return r.rowCount === 1 ? r.rows[0] : null;
+}
+
+/**
+ * 收尾 6 | 读任务目标：**解密优先，回退旧位置**。
+ *
+ * 库里可能同时存在三种行，都得读出目标（加密不能把功能吃掉 —— 任务文档的「## 目标」、
+ * `/agent/task/current` 给桌面还原任务卡、收尾喂给模型的提示词，全都要它）：
+ *   1. 新行 / 回填过的老行：`goal_enc` 有值                    → 解密返回；
+ *   2. 还没回填的老行：`payload.goal` 是明文                    → 原样返回；
+ *   3. 更老的行：只剩 `title`（当年存的是 goal 前 80 字）        → 原样返回。
+ *
+ * 解密失败（DATA_KEY 换过 / 密文损坏）时不抛，退回 2、3；打警告但**不带任何内容**。
+ */
+function taskGoalFromRow(
+  row: { goal_enc?: string | null; payload?: unknown; title?: string | null },
+  c: JsonCipher | null | undefined,
+): string {
+  if (c && row.goal_enc) {
+    try {
+      const g = c.decryptText(row.goal_enc);
+      if (typeof g === 'string' && g) return g;
+    } catch (err) {
+      console.warn('[agent] tasks.goal_enc 解密失败，回退 payload/title：', (err as Error)?.message ?? String(err));
+    }
+  }
+  const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as { goal?: unknown };
+  if (typeof payload.goal === 'string' && payload.goal) return payload.goal;
+  return row.title ?? '';
+}
+
+/**
+ * 收尾 6 | 写回 payload 前**摘掉明文 goal 键**。
+ *
+ * 为什么必须有它：`task/step` 与 `task/finish` 都是「读 payload → 改几个键 → 整个写回」。
+ * 老行的 payload 里还躺着明文 goal，只要原样展开写回，加密就等于白做
+ * （新写的 goal_enc 有了，明文那份还在同一行里）。所以每次写回都过这一道。
+ */
+function payloadWithoutGoal(payload: unknown): Record<string, unknown> {
+  const src = (payload && typeof payload === 'object' ? payload : {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...src };
+  delete out.goal;
+  return out;
 }
 
 /**
@@ -183,9 +225,33 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
       // 子阶段 2-A：任务挂到**当前使用中的项目**（没有就回落默认项目）
       const projectId = await currentProjectId(pool, claims.sub);
       if (projectId === null) return errJson(reply, 500, '当前账号没有项目（重新登录一次让建号流程补上）');
+      /**
+       * ★ 收尾 6（fail-closed）：目标只以**密文**进库。
+       *
+       *   · `goal_enc` = AES-256-GCM 密文（与 messages/memories 同一把 DATA_KEY）；
+       *   · `payload` 里**不再有 goal 键**（只有 steps / doc）；
+       *   · `title` 恒 NULL —— 它当年存的是 `goal.slice(0,80)`，是同一份明文的第二个副本，
+       *     留着它，「加密 goal」对不到 80 字的目标（绝大多数）就等于没加密。
+       *     title 在服务端只被当作 goal 的兜底读，没有任何界面直接展示它。
+       *
+       * 加密失败（cipher 没注入 / encryptText 抛错）→ **直接 500，任务不建**。
+       * 绝不允许「加密不行就退回明文 payload 先把任务建起来」——那正是 R2 记录的事故形状：
+       * 用户说「帮我在备注里填：我的密码是 Secret123」，密码就明文躺在 PG 的 JSONB 里、备份可见。
+       * 少建一条任务的代价是用户重试一次；写一条明文的代价是敏感数据落盘。
+       */
+      let goalEnc: string;
+      try {
+        if (!cipher) throw new Error('未注入 cipher（DATA_KEY 缺失）');
+        goalEnc = cipher.encryptText(goal);
+      } catch (err) {
+        console.error('[agent] 任务目标加密失败，拒绝建任务（不回退明文）：', (err as Error)?.message ?? String(err));
+        return errJson(reply, 500, '任务目标加密失败：这条任务没有建，请重试（服务端绝不把目标明文落库）', {
+          code: 'goal_encrypt_failed',
+        });
+      }
       const t = await pool.query<{ id: string }>(
-        "INSERT INTO tasks (project_id, status, title, payload) VALUES ($1, 'running', $2, $3::jsonb) RETURNING id",
-        [projectId, goal.slice(0, 80), JSON.stringify({ goal, steps: [] })],
+        "INSERT INTO tasks (project_id, status, title, payload, goal_enc) VALUES ($1, 'running', NULL, $2::jsonb, $3) RETURNING id",
+        [projectId, JSON.stringify({ steps: [] }), goalEnc],
       );
       return { taskId: Number(t.rows[0].id) };
     } catch (err) {
@@ -203,7 +269,8 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
     try {
       const t = await ownTask(pool, taskId, claims.sub);
       if (!t) return errJson(reply, 404, '任务不存在或不是你的');
-      const payload = (t.payload ?? {}) as { goal?: string; steps?: string[] };
+      // 收尾 6：payload 整体写回前必须过 payloadWithoutGoal —— 否则老行里的明文 goal 会被原样抄回去
+      const payload = payloadWithoutGoal(t.payload) as { steps?: string[] };
       const steps = [...(payload.steps ?? []), `${summary}${b?.ok === false ? '（失败）' : ''}`].slice(-50);
       await pool.query('UPDATE tasks SET payload = $2::jsonb, updated_at = now() WHERE id = $1', [
         taskId,
@@ -229,7 +296,12 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
       if (!t) return errJson(reply, 404, '任务不存在或不是你的');
       await pool.query('UPDATE tasks SET status = $2, updated_at = now() WHERE id = $1', [taskId, status]);
       if (status === 'done' || status === 'failed') {
-        triggerTaskExtract({ pool, env, cipher }, claims.sub, taskId, t.payload);
+        // 收尾 6：payload 里已经没有明文 goal 了，记忆提取的 transcript 要用**解密后的目标**，
+        // 否则「任务目标：」这一行会变成空 —— 那是功能退化，不是安全加固。
+        triggerTaskExtract({ pool, env, cipher }, claims.sub, taskId, {
+          ...payloadWithoutGoal(t.payload),
+          goal: taskGoalFromRow(t, cipher),
+        });
       }
       return { ok: true };
     } catch (err) {
@@ -248,8 +320,9 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
     try {
       const t = await ownTask(pool, taskId, claims.sub);
       if (!t) return errJson(reply, 404, '任务不存在或不是你的');
-      const payload = (t.payload ?? {}) as { goal?: string; steps?: string[] };
-      const goal = payload.goal ?? t.title ?? '';
+      // 收尾 6：payload 摘掉明文 goal 后再写回；目标走解密（老行自动回退明文列）
+      const payload = payloadWithoutGoal(t.payload) as { steps?: string[] };
+      const goal = taskGoalFromRow(t, cipher);
       const steps = payload.steps ?? [];
       const doneBits = {
         summary: typeof b?.summary === 'string' ? b.summary.slice(0, 400) : '',
@@ -315,6 +388,8 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
       }
       triggerTaskExtract({ pool, env, cipher }, claims.sub, taskId, {
         ...(payload as Record<string, unknown>),
+        // 收尾 6：同上 —— 记忆提取要拿到解密后的目标，不能因为 payload 里没有 goal 就丢了这一行
+        goal,
         doc: { summary: doc.summary },
       } as never);
       return { ok: true, unread: true, unreadHint: doc.hint, docTitle: doc.title };
@@ -333,7 +408,7 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
     try {
       const t = await ownTask(pool, taskId, claims.sub);
       if (!t) return errJson(reply, 404, '任务不存在或不是你的');
-      const payload = (t.payload ?? {}) as { goal?: string; steps?: string[]; doc?: { summary?: string; title?: string; outline?: string[] } };
+      const payload = payloadWithoutGoal(t.payload) as { steps?: string[]; doc?: { summary?: string; title?: string; outline?: string[] } };
       let markdown: string;
       if (t.result_enc) {
         try {
@@ -343,7 +418,8 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
         }
       } else {
         const bits = { summary: payload.doc?.summary ?? '', document_title: payload.doc?.title ?? '', document_outline: payload.doc?.outline ?? [] };
-        markdown = buildFallbackDoc(payload.goal ?? t.title ?? '', payload.steps ?? [], bits as unknown as Record<string, unknown>).markdown;
+        // 收尾 6：兜底文档的「## 目标」走 taskGoalFromRow（解密优先，老行回退明文列）
+        markdown = buildFallbackDoc(taskGoalFromRow(t, cipher), payload.steps ?? [], bits as unknown as Record<string, unknown>).markdown;
       }
       const title = (payload.doc?.title ?? '任务记录').replace(/[\\/:*?"<>|\r\n]+/g, ' ').slice(0, 60) || '任务记录';
       return { title, markdown };
@@ -372,18 +448,20 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     try {
-      const r = await pool.query<{ id: string; status: string; title: string | null; payload: unknown; unread: boolean }>(
-        'SELECT t.id, t.status, t.title, t.payload, t.unread FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.user_id = $1 ORDER BY t.id DESC LIMIT 1',
+      const r = await pool.query<{ id: string; status: string; title: string | null; payload: unknown; unread: boolean; goal_enc: string | null }>(
+        'SELECT t.id, t.status, t.title, t.payload, t.unread, t.goal_enc FROM tasks t JOIN projects p ON p.id = t.project_id WHERE p.user_id = $1 ORDER BY t.id DESC LIMIT 1',
         [claims.sub],
       );
       if (r.rowCount !== 1) return { task: null };
       const row = r.rows[0];
-      const payload = (row.payload ?? {}) as { goal?: string; steps?: string[]; doc?: { summary?: string; title?: string; hint?: string; outline?: string[] } };
+      const payload = payloadWithoutGoal(row.payload) as { steps?: string[]; doc?: { summary?: string; title?: string; hint?: string; outline?: string[] } };
       return {
         task: {
           id: Number(row.id),
           status: row.status,
-          goal: payload.goal ?? row.title ?? '',
+          // 收尾 6：桌面刷新后还原任务卡靠这个字段 —— 解密优先，老行回退明文列，
+          // 用户看到的还是原来那句话（加密不能变成「任务卡上目标空了」）
+          goal: taskGoalFromRow(row, cipher),
           steps: payload.steps ?? [],
           unread: Boolean(row.unread),
           summary: payload.doc?.summary ?? '',

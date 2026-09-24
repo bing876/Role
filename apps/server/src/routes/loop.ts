@@ -88,6 +88,32 @@ async function ownsAgent(pool: Pool, userId: number, agentId: number): Promise<b
   return r.rowCount === 1;
 }
 
+/**
+ * 收尾 6 | 读暂停记录里的任务目标：**解密优先，回退旧列**。
+ *
+ * 三种行都可能存在，必须都读得出来（这是「用户能感知」的那一半：加密不能把功能吃掉）：
+ *   1. 新行：`goal_enc` 有值、`goal` 恒 NULL           → 解密返回；
+ *   2. 老行（回填迁移跑过）：同上                        → 解密返回；
+ *   3. 老行（迁移还没跑 / 当时没拿到 cipher）：只有 `goal` → 原样返回，界面不至于空白。
+ *
+ * 解密失败（DATA_KEY 换过、密文损坏）时**不抛**：回退旧列，旧列也没有就返回 null，
+ * 并打一行不带任何内容的警告 —— 一条暂停记录读不出目标，不该让整个列表 500。
+ */
+function pauseGoalFromRow(
+  row: { goal_enc: string | null; goal: string | null },
+  c: JsonCipher | null | undefined,
+): string | null {
+  if (c && row.goal_enc) {
+    try {
+      const g = c.decryptText(row.goal_enc);
+      if (typeof g === 'string') return g;
+    } catch (err) {
+      console.warn('[loop] task_pauses.goal_enc 解密失败，回退旧明文列：', (err as Error)?.message ?? String(err));
+    }
+  }
+  return row.goal;
+}
+
 export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: LoopDeps): void {
   app.post('/agent/loop/start', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
@@ -395,14 +421,38 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
     }
 
     // 落库（best-effort：库挂了不该拦住暂停本身，内存里那份已经生效了）
+    /**
+     * ★ 收尾 6（fail-closed，照抄 loop_checkpoints 的口径）：
+     *   任务目标只以**密文**进 `task_pauses.goal_enc`，明文列 `goal` 恒写 NULL。
+     *   用户完全可能把密码/卡号写在目标里（R2 的原始事故就是这么来的），
+     *   而暂停记录会在库里躺很久（重启后还要靠它还原「哪几路暂停着」）。
+     *
+     *   拿不到 cipher / 加密抛错时怎么办 —— 这里与 checkpoint 有一处**故意的差别**：
+     *     · checkpoint：整行不写（少一次 checkpoint 只影响「重启后这一步续不上」）；
+     *     · 暂停记录：**行照写，goal_enc 置 NULL**。因为这一行是「哪几路暂停着」的台账，
+     *       不写的话用户重启后就看不到这条暂停（功能性损失），
+     *       而少一个目标文本只是「恢复时 AI 得重新问一遍要干什么」。
+     *   两者共同的底线是：**绝不写明文**。
+     */
+    let goalEnc: string | null = null;
+    try {
+      if (!cipher) throw new Error('未注入 cipher（DATA_KEY 缺失）');
+      goalEnc = session.goal ? cipher.encryptText(session.goal) : null;
+    } catch (err) {
+      console.warn(
+        `[loop] 暂停 ${loopId} 的目标加密失败：goal_enc 置空、明文列也不写（不回退明文）——`,
+        (err as Error)?.message ?? String(err),
+      );
+      goalEnc = null;
+    }
     let recordId: number | null = null;
     try {
       const r = await pool.query<{ id: string }>(
-        `INSERT INTO task_pauses (user_id, loop_id, agent_id, wc_id, goal, paused_by, paused_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now())
+        `INSERT INTO task_pauses (user_id, loop_id, agent_id, wc_id, goal, goal_enc, paused_by, paused_at)
+         VALUES ($1, $2, $3, $4, NULL, $5, $6, now())
          ON CONFLICT DO NOTHING
          RETURNING id`,
-        [claims.sub, loopId, session.agentId, session.wcId, session.goal, by],
+        [claims.sub, loopId, session.agentId, session.wcId, goalEnc, by],
       );
       recordId = r.rows[0] ? Number(r.rows[0].id) : null;
     } catch (err) {
@@ -508,12 +558,13 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
         agent_id: string | null;
         wc_id: string | null;
         goal: string | null;
+        goal_enc: string | null;
         paused_by: string;
         paused_at: string;
         resumed_at: string | null;
         delta_kind: string | null;
       }>(
-        `SELECT id, loop_id, agent_id, wc_id, goal, paused_by, paused_at, resumed_at, delta_kind
+        `SELECT id, loop_id, agent_id, wc_id, goal, goal_enc, paused_by, paused_at, resumed_at, delta_kind
            FROM task_pauses
           WHERE ${where.join(' AND ')}
           ORDER BY paused_at DESC
@@ -529,7 +580,8 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
         resumedAt: x.resumed_at ? new Date(x.resumed_at).getTime() : null,
         agentId: x.agent_id === null ? null : Number(x.agent_id),
         wcId: x.wc_id === null ? null : Number(x.wc_id),
-        goal: x.goal ?? undefined,
+        // 收尾 6：解密优先（goal_enc），解不开/没密文才回退老的明文列（尚未回填的历史行）
+        goal: pauseGoalFromRow(x, cipher) ?? undefined,
         deltaKind: x.delta_kind ?? undefined,
         /**
          * ★ 本批次新增的两个字段（回答的是**两个不同的问题**，别只看一个）。
