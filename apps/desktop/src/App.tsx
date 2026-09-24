@@ -1593,15 +1593,43 @@ export default function App() {
     const bridge = window.workbench;
     if (!bridge) return;
 
-    // 第 4 步：状态机镜像 = 初始拉取一次 + 订阅广播（主进程是权威，这里只跟随）
-    bridge
-      .getTaskState()
-      .then(setTask)
-      .catch(() => setTask((s) => ({ ...s, detail: '读取主进程状态失败（preload 桥异常）' })));
+    /**
+     * ★ F3 修复（2026-09-24，用户点名提前修）：**状态机镜像绝不许把整页搞白屏**。
+     *
+     * 原来这里是 `bridge.getTaskState().then(setTask)`，三处都不设防：
+     *   ① `setTask` 收到 `undefined`（桥给不出状态）→ 渲染期读 `task.phase` → `TypeError` → 白屏；
+     *   ② `bridge.getTaskState` **根本不是个函数**（老 preload / 渲染层与 preload 版本不一致）
+     *      → 同步 `TypeError`，比 ① 更直接；
+     *   ③ 广播那条路只挡了空负载：`JSON.parse('null')` 得到 `null` 是**合法解析**，
+     *      于是 `setTask(null)` → 同样白屏（`if (!payload)` 挡不住字符串 `"null"`）。
+     *
+     * 现在：**先校验形状，再落 state**；拿不到就保持上一次的值，并把兜底文案写在状态行上。
+     * 注意这不是"猜一个状态"——权威始终在主进程，这里只是**不因为读不到而崩**。
+     *
+     * 顺带说明（用户第 2 条问的那件事）：`getTaskState` 走的是 IPC 到主进程
+     * （`workbench:task:state` → `driver.getTaskState` → `aggregateState`，**永远有返回值**），
+     * 所以"服务端重启"这条路上它**不会**返回 undefined；真正会白屏的是上面 ①②③ 三条。
+     */
+    const isTaskState = (v: unknown): v is TaskState =>
+      !!v && typeof v === 'object' && typeof (v as TaskState).phase === 'string';
+    try {
+      const maybe = bridge.getTaskState?.();
+      void Promise.resolve(maybe)
+        .then((raw) => {
+          if (isTaskState(raw)) setTask(raw);
+          else setTask((s) => ({ ...s, detail: '拿不到主进程状态（桥返回了空值），状态行保持上一次的值' }));
+        })
+        .catch(() => setTask((s) => ({ ...s, detail: '读取主进程状态失败（preload 桥异常）' })));
+    } catch {
+      // `bridge.getTaskState` 不存在 / 不是函数：同步异常也要吃掉，绝不让 effect 抛出
+      setTask((s) => ({ ...s, detail: 'preload 桥缺少 getTaskState（版本不一致？），状态行不可用' }));
+    }
     const offState = bridge.on('state', (payload) => {
       if (!payload) return;
       try {
-        setTask(JSON.parse(payload) as TaskState);
+        const parsed: unknown = JSON.parse(payload);
+        // ★ F3-③：解析成功不代表形状对（`'null'` / `'{}'` 都能解析）—— 形状不对就忽略，等下一次广播
+        if (isTaskState(parsed)) setTask(parsed);
       } catch {
         /* 坏负载忽略，等下一次广播 */
       }

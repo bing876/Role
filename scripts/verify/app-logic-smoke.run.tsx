@@ -105,7 +105,11 @@ const bridge = new Proxy(
      *   缺了它 Proxy 兜底会返回 `undefined` → `bridge.getTaskState().then(setTask)` 把
      *   `task` 置成 undefined → `task.phase` 在渲染期炸（片 6 当场踩到，见 F3）。
      */
-    getTaskState: async () => ({ phase: 'idle', detail: '冒烟桩：等待主进程同步', step: 0, blocked: false }),
+    getTaskState: async () => {
+      if (bridgeMode.getTaskState === 'missing') return undefined;
+      if (bridgeMode.getTaskState === 'null') return null;
+      return { phase: 'idle', detail: '冒烟桩：等待主进程同步', step: 0, blocked: false };
+    },
     resourceSnapshot: async () => null,
     resourceInstances: async () => [],
     agentLanes: async () => [],
@@ -184,6 +188,8 @@ let PENDING_MEM = [
   { id: 321, type: 'decision' as const, content: '决定用 A 方案', updatedAt: '2026-09-24T00:00:00.000Z' },
   { id: 322, type: 'fact' as const, content: '项目代号是猎户座', updatedAt: '2026-09-24T00:00:00.000Z' },
 ];
+/** F3 那节要用的开关：桥给的 task state 是空值 / 桥根本没这个方法 / 后端全挂 */
+const bridgeMode = { getTaskState: 'ok' as 'ok' | 'missing' | 'null', backendDown: false };
 /** 会话那一节要用的两个开关：让 /auth/me 失败、密码是否已经设过 */
 let authMeFails = false;
 let hasPassword = false;
@@ -196,6 +202,8 @@ const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+  // ★ 模拟"后端重启那一瞬间"：所有 HTTP 直接失败（连接被拒）
+  if (bridgeMode.backendDown) throw new TypeError('fetch failed: ECONNREFUSED 127.0.0.1:8787');
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
   const url = raw.replace(/^https?:\/\/[^/]+/, '');
   const path = url.split('?')[0];
@@ -836,10 +844,91 @@ await check('下载文档：走主进程 downloadDoc，并把「已保存：路�
   await act(async () => root.unmount());
 });
 
+await check('F3-A：主进程状态机返回 undefined / null → 不白屏，且坏值不许覆盖好值', async () => {
+  for (const mode of ['missing', 'null'] as const) {
+    bridgeMode.getTaskState = mode;
+    let root: ReturnType<typeof createRoot> | null = null;
+    try {
+      root = await mountApp(true);
+      await flush(4);
+      // ★ 用户可见的"不白屏" = 工作台三列还在
+      assert.ok(q('aside.sidebar'), `桥返回 ${mode} 时整页白屏了`);
+      assert.ok(q('main.middle'), `桥返回 ${mode} 时中栏没了`);
+    } finally {
+      if (root) await act(async () => root!.unmount());
+      bridgeMode.getTaskState = 'ok';
+    }
+  }
+});
+
+await check('F3-A2：坏负载不许覆盖上一次的好状态（暂停横幅是用户可见的证据）', async () => {
+  bridgeMode.getTaskState = 'ok';
+  const root = await mountApp(true);
+  await ensure('App 起来（侧栏在）', () => !!q('aside.sidebar'));
+  assert.ok(!doc.body.textContent!.includes('你主动接管'), '前提不成立：一开始就有接管横幅');
+  // 好负载 → 横幅出现
+  emitBridge('state', JSON.stringify({ phase: 'paused', detail: '页面归你', step: 1, blocked: false, pausedBy: 'user' }));
+  await flush(3);
+  assert.match(doc.body.textContent ?? '', /你主动接管/, '正常广播没生效（防白屏把正常路径也挡了）');
+  // 坏负载（合法 JSON 但是 null / 缺字段）→ 横幅必须还在（状态没被清掉、也没崩）
+  emitBridge('state', 'null');
+  emitBridge('state', JSON.stringify({ detail: '没有 phase' }));
+  await flush(3);
+  assert.match(doc.body.textContent ?? '', /你主动接管/, '坏负载把好状态覆盖掉了（应当忽略坏值，保持上一次的值）');
+  assert.ok(q('aside.sidebar'), '坏负载把整页搞崩了');
+  await act(async () => root.unmount());
+});
+
+await check('F3-C1（用户点名场景·冷启动撞上后端重启）：不白屏 —— 要么工作台、要么登录页', async () => {
+  bridgeMode.backendDown = true;
+  try {
+    const root = await mountApp(true);
+    await flush(8);
+    const hasWorkbench = !!q('aside.sidebar');
+    const hasLogin = onLoginScreen();
+    assert.ok(hasWorkbench || hasLogin, `后端全挂时既没有工作台也没有登录页 —— 就是白屏`);
+    assert.ok((doc.body.textContent ?? '').trim().length > 0, '页面上一个字都没有（白屏）');
+    await act(async () => root.unmount());
+  } finally {
+    bridgeMode.backendDown = false;
+  }
+});
+
+await check('F3-C2（用户点名场景·正用着后端重启）：工作台不白屏，主进程事件照旧落进聊天', async () => {
+  bridgeMode.backendDown = false;
+  const root = await mountApp(true);
+  await ensure('App 起来（侧栏在）', () => !!q('aside.sidebar'));
+  bridgeMode.backendDown = true; // ← 后端在这一刻重启
+  // 主进程报「任务完成」：它不经过后端，聊天里那句话必须照旧出现
+  emitAgent({ kind: 'done', wcId: 7001, summary: '整理完了' });
+  await flush(4);
+  assert.ok(q('aside.sidebar'), '后端重启时工作台白屏了 —— 批次 D 的续跑再好，用户也看不见界面');
+  assert.match(doc.body.textContent ?? '', /任务完成：整理完了/, '主进程事件没能落进聊天（被后端拖累了）');
+  /**
+   * 红点：任务完成事件本来就该点亮它（与后端无关）。
+   * ★ 这里验的是"主进程事件不被后端拖累"，而不是"不许亮" —— 写反了会假红（本网踩过）。
+   */
+  assert.ok(q('.red-dot'), '任务完成事件该点亮红点，却没亮（主进程事件被后端拖累了）');
+  bridgeMode.backendDown = false;
+  await act(async () => root.unmount());
+});
+
 await check('登出：退出登录 → 回登录页 + 清 token + 清主进程凭证 + 清分区白名单', async () => {
   bridgeCalls.length = 0;
   const root = await mountApp(true);
-  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  try {
+    await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  } catch (e) {
+    /** 失败时把关键现场打出来（"等不到条件"本身没有诊断价值） */
+    console.log('  （诊断）', JSON.stringify({
+      authWrap: q('.authWrap')?.textContent?.slice(0, 80),
+      sidebar: !!q('aside.sidebar'),
+      token: dom.window.localStorage.getItem('workbench.token'),
+      backendDown: bridgeMode.backendDown,
+      authMeCalls: requestsTo('/auth/me').length,
+    }));
+    throw e;
+  }
   await waitFor('「我的号」面板出现', () => q('.account') !== null);
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await waitFor('回到登录页', onLoginScreen);

@@ -30,6 +30,7 @@ GLUE = FEATURES.parent / 'app' / 'browserGlue.ts'
 PROJECTS = FEATURES / 'projects' / 'useProjects.ts'
 AUTH = FEATURES / 'auth' / 'useAuth.ts'
 TASKS = FEATURES / 'tasks' / 'useTasks.ts'
+APP_TSX = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
 
 MUTATIONS = [
     {
@@ -235,6 +236,25 @@ MUTATIONS = [
         'replace': "    if (r.saved) setDocNote('已取消保存');\n    else if (r.canceled) setDocNote(`已保存：${r.path}`);",
         'visible': True,
         'expect': '没有把保存路径写出来',
+    },
+    # ---- F3（提前修的那条白屏防护）----
+    {
+        'file': APP_TSX,
+        'id': 'F3-1',
+        'name': '拆掉 getTaskState 的返回值校验（桥给空值 → 白屏）',
+        'anchor': "          if (isTaskState(raw)) setTask(raw);\n          else setTask((s) => ({ ...s, detail: '拿不到主进程状态（桥返回了空值），状态行保持上一次的值' }));",
+        'replace': "          setTask(raw as TaskState);",
+        'visible': True,
+        'expect': "Cannot read properties of undefined (reading 'phase')",  # 就是白屏时用户看到的崩
+    },
+    {
+        'file': APP_TSX,
+        'id': 'F3-2',
+        'name': '拆掉 state 广播的形状校验（合法 JSON 的 null → 覆盖好状态）',
+        'anchor': "        if (isTaskState(parsed)) setTask(parsed);",
+        'replace': "        setTask(parsed as TaskState);",
+        'visible': True,
+        'expect': '坏负载把好状态覆盖掉了',
     },
 ]
 

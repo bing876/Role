@@ -45,7 +45,7 @@
     "verify:mention:decision": "tsx scripts/verify/mention-decision.mts",
     "verify:mention:desktop": "tsx scripts/verify/mention-desktop.mts",
     "verify:mention:e2e": "npm run build -w @ai-workbench/shared && npm run build -w @ai-workbench/server && node scripts/verify/mention-e2e.mjs",
-    "verify:gates": "python3 scripts/verify/gate-static-rules.py && python3 scripts/verify/gate-static-rules-revert.py"
+    "verify:gates": "python3 scripts/verify/gate-static-rules.py && python3 scripts/verify/gate-static-rules-revert.py && python3 scripts/verify/app-tsx-line-budget.py"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
