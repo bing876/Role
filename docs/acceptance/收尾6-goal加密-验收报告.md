@@ -586,3 +586,294 @@ npm run verify:db
 > 所有断言按本次登录出来的 `user_id` 收口，不会误判库里既有数据，但也不会替你清理。
 > ⚠️ 三次启动共用一把 `JWT_SECRET`（脚本内固定），否则重启后旧 token 直接 401，
 > 验的就成了鉴权而不是加密 —— 第一版就栽在这里。
+
+---
+
+## 9. 条件验收（2026-09-24）：用户「有条件通过」后的三条必做 + 拍板 + 两件小事
+
+上一版（第 1–8 节）交付后，用户给的是**有条件通过**：条件 1/2/3 必做，另有三项拍板与两件小事。
+本节是这些条件的落地与实际输出。对应提交：`d5abe05`（代码 + 脚本 + README），本节文档随后提交。
+
+### 9.0 一句话结论
+
+三条必做全部落地并被验收盯住；两项反证（M9b / M9c）证明新的闸真的会红；
+真库 `87 PASS / 0 FAIL`、pglite `54 PASS / 0 FAIL`、M9 真服务端 `21 PASS / 0 FAIL`，
+`npm run verify`、`npm run verify:db`、`npm run typecheck` 三个 EXIT 全 0。
+
+### 9.1 条件 1 —— `tasks.title` 停用之后，界面到底显示什么
+
+**要求**：查清任务列表类接口用哪个字段显示、给出真实返回样本与桌面渲染那一行读的字段；
+如果列表标题会空白，就把 title 改存脱敏摘要（走 `scrubStepSummary`）而不是 NULL；并补验收断言
+「列表显示字段非空 且 不含敏感词」。
+
+**查清的事实**（取证命令与实际输出）：
+
+```
+$ grep -rn "'/agent/tasks\|/agent/task/list\|task/list" apps/server/src apps/desktop/src
+（无输出）                      ← 服务端**没有**任何任务列表接口
+
+$ grep -rn "task/current" apps/server/src/routes/agent.ts
+ *   GET  /agent/task/current → 我最近一条任务（桌面刷新后还原任务卡用）
+
+$ grep -n "目标：" apps/desktop/src/App.tsx
+3284:                {curTask.goal ? ` · 目标：${curTask.goal}` : ''}
+```
+
+- 唯一会被界面读到的显示路径是 `GET /agent/task/current` → 桌面 `App.tsx:3284` 渲染 `curTask.goal`
+  （`CurrentTask` 类型在 `App.tsx:237-247`）。
+- `tasks.title` 这一列**从来没有被返回给任何客户端**：接口里出现的 `title` 全是
+  「任务文档标题」（`/agent/task/doc` 的 `{ title, markdown }`、收尾时的 `docTitle`），
+  由收尾提示词生成，与 `tasks.title` 列无关。
+
+**因此**：停用 `tasks.title` **不会**让任何列表标题空白 → 用户给的条件（「如果列表标题会空白才改存脱敏摘要」）
+**不触发**，title 保持 NULL。这一条按用户的原话执行，没有自作主张改存摘要。
+
+**但仍然补了两件事**，因为「显示字段非空 + 不含敏感词」这个要求本身是对的：
+
+1. `/agent/task/current` 多回一个 `displayTitle`：同一句 goal 过 `scrubTaskText` 脱敏、截 80 字。
+   给「要落日志 / 截图 / 将来做列表」的场景用 —— 那种场景不该出现原文，而 `goal` 字段必须是原文。
+2. 验收断言（真库 9 项 + pglite 5 项）：非空、≤80 字、不含三个敏感词、留了脱敏占位、
+   是那句目标的脱敏版（不是随便填的占位文字）、`title` 没有偷偷存一份摘要、`goal` 仍是原文。
+
+**真实返回样本**（真库，`GET /agent/task/current`）：
+
+```json
+{"id":35,
+ "displayTitle":"帮我查一下 银行卡[已脱敏·card·79字] 的余额，登录用 密码[已脱敏·password·10字]，实名 身份证[已脱敏·card·79字]",
+ "goal":"帮我查一下 银行卡6222021234567890 的余额，登录用 密码Zx9!secret，实名 身份证110101199003071234"}
+```
+
+（`title` 键不在返回里 —— 那一列是 NULL，接口也不回它。）
+
+**验收输出（真库那段）**：
+
+```
+PASS  ★ 条件1：显示字段 displayTitle 非空（实际 "帮我查一下 银行卡[已脱敏·card·79字] …"）
+PASS  ★ 条件1：显示字段不超 80 字（实际 73 字，跟当年 title 一个量级，不撑破界面）
+PASS  ★ 条件1：显示字段里读不到「银行卡6222021234567890」
+PASS  ★ 条件1：显示字段里读不到「密码Zx9!secret」
+PASS  ★ 条件1：显示字段里读不到「身份证110101199003071234」
+PASS  ★ 条件1：显示字段留了脱敏占位（看得出被改过，不是悄悄截断）
+PASS  ★ 条件1：显示字段确实是那句目标的脱敏版（不是随便填的占位文字）
+PASS  ★ 条件1：title 没有偷偷存一份脱敏摘要（实际 undefined）
+PASS  ★ 条件1：功能字段 goal 仍是还原后的原文（脱敏只作用于显示副本，没把功能吃掉）
+```
+
+### 9.2 条件 2 —— 热路径 fail-closed，加变异 M9
+
+**要求**：让 `POST /agent/task/start` 与 `POST /agent/loop/pause` 在**路由层拿不到 cipher**，
+断言 ① 回 500 ② 两张表**零新增行**，对齐收尾 1「库里一行都不落」。
+
+**代码改动**：`task/start` 上一版已经是 fail-closed；本轮改的是 **`loop/pause`** ——
+把加密挪到 `ingestToolResult` / `pauseLoop` **之前**，拿不到 cipher 或加密抛错就
+500 `goal_encrypt_failed`，不认领回执、不把循环标成 paused、不写 `task_pauses`。
+上一版的行为是「台账照写、`goal_enc` 置空」，那会留下**内存里挂着、库里没台账**的半成品
+（用户重启后看不见这一路暂停，服务端却以为它挂着）—— 用户拍板改成现在这样。
+
+**M9 真服务端反证**（`npm run verify:db:mutate-nocipher`，真 Postgres + 真装配）：
+脚本临时把 `apps/server/src/index.ts` 里两处路由注册的 `cipher` 注入改成 `null`，跑完按 md5 逐字节还原。
+
+```
+[起飞前] index.ts 干净，md5=81ab24d72d6598f84e9e15d1a62a7109
+[变异] git diff --stat： apps/server/src/index.ts | 4 ++--  (2 insertions, 2 deletions)
+PASS  变异后的服务端照样能起来（故障是「路由层没拿到 cipher」，不是「服务起不来」）
+
+--- ① POST /agent/task/start（路由层 cipher=null）---
+      → 500 {"error":"任务目标加密失败：这条任务没有建，请重试（服务端绝不把目标明文落库）","code":"goal_encrypt_failed"}
+PASS  ★ M9-①：task/start 回 **500**（实际 500）
+PASS  ★ M9-①：错误码是 goal_encrypt_failed
+PASS  ★ M9-①：错误话术说清了「这条任务没有建」（用户不会以为建成功了）
+
+--- ② POST /agent/loop/start + pause（路由层 cipher=null）---
+      loop/start → 200 {"loopId":"loop_mueum86d_1",…}
+      loop/pause → 500 {"error":"暂停失败：任务目标加密不了，这一路没有被挂起（服务端绝不把目标明文落库）","code":"goal_encrypt_failed"}
+PASS  ★ M9-②：loop/pause 回 **500**（实际 500）
+PASS  ★ M9-②：错误码是 goal_encrypt_failed
+PASS  ★ M9-②：话术说清了「这一路没有被挂起」
+
+--- 打之前：tasks=43 task_pauses=44 ---
+--- 打之后：tasks=43 task_pauses=44 ---
+PASS  ★ M9-③：tasks 一行都没多
+PASS  ★ M9-③：task_pauses 一行都没多
+      本次用户名下扫目标串/敏感词 → tasks=0 task_pauses=0
+PASS  ★ M9-④：tasks 里搜不到这次的目标明文（0 行）
+PASS  ★ M9-④：task_pauses 里搜不到这次的目标明文（0 行）
+      loop/info：打之前 status=running → 打之后 status=running
+PASS  ★ M9-⑤：循环内存状态没被改 —— 不留「内存挂着、库里没台账」的半成品
+PASS  ★ M9-⑤：没落库却把循环标成 paused 的话就是账实不一致，这里必须不是 paused
+      服务端 warn 原文：[loop] 暂停 loop_mueum86d_1 被拒绝：目标加密失败，内存与库都不动（不回退明文、不留半成品状态）—— 未注入 cipher（DATA_KEY 缺失）
+PASS  ★ M9-⑤：服务端把这次拒绝 warn 出来了（不是静默失败）
+PASS  ★ M9-⑤：那条 warn 里不含目标明文（日志不是第二个明文出口）
+
+[还原] apps/server/src/index.ts md5 81ab24d72d6598f84e9e15d1a62a7109 == 变异前，逐字节还原
+--- ⑥ 对照组：还原后重启，同一个 pause → 200 {"ok":true,"paused":true,"recordId":43}
+PASS  对照组：有钥匙时 loop/pause 回 200（证明上面的 500 是「没钥匙」造成的，不是路由本来就坏）
+[收尾] git status --porcelain apps/server/src/index.ts → ""（必须是空串）
+=== 条件2 反证 M9（真服务端）：全部 PASS ===        （21 PASS / 0 FAIL，EXIT 0）
+```
+
+**pglite 常驻闸**（`task-encryption-pglite.mts` 第 ⑧ 段，每次 `npm run verify` 都跑）：
+再起一个 `cipher: null` 的 app，打的是同一份生产路由代码。M9-1…M9-5 与对照组同样全绿：
+
+```
+      打之前：tasks=6 task_pauses=4
+      task/start → 500 {"error":"任务目标加密失败：这条任务没有建…","code":"goal_encrypt_failed"}
+  PASS ★ M9-1 task/start：拿不到 cipher → **500**（不是 200 悄悄写明文）
+      loop/pause → 500 {"error":"暂停失败：任务目标加密不了，这一路没有被挂起…","code":"goal_encrypt_failed"}
+  PASS ★ M9-2 loop/pause：拿不到 cipher → **500**（不许「行照写、goal_enc 置空」）
+      打之后：tasks=6 task_pauses=4
+  PASS ★ M9-3 两张表**一行都没多**（对齐收尾1「库里一行都不落」）
+  PASS ★ M9-4 内存会话状态也没被改
+      全库扫 → tasks=0 task_pauses=0
+  PASS ★ M9-5 那个目标串在整个库里搜不到
+  PASS 对照组：有钥匙的 app 打同一个 pause → 200 并落密文
+```
+
+**反证的反证（M9 这个闸自己是不是摆设）**：把生产代码的 fail-closed 闸拆掉，M9 必须变红。
+
+| 变异 | 改法 | M9 真服务端结果 | 还原 |
+| --- | --- | --- | --- |
+| **M9b** | `loop.ts`：拆掉 pause 的闸，退回旧 fail-open（`catch { goalEnc = null }`，台账照写） | **EXIT 1，7 项 FAIL**：M9-② 3 项（实际回 200）、M9-③ `task_pauses 39 → 40`、M9-⑤ 3 项（`running → paused`、没有拒绝 warn） | md5 `e32b1526…` → `e32b1526…` 一致 |
+| **M9c** | `agent.ts`：拆掉 task/start 的闸，没钥匙就把**明文当密文**写进 `goal_enc`（R2 记录的事故形状） | **EXIT 1，5 项 FAIL**：M9-① 3 项（实际回 200、`taskId:39`）、M9-③ `tasks 38 → 39`、M9-④ `tasks 里搜到 1 行明文` | md5 `4ab7d150…` → `4ab7d150…` 一致 |
+
+M9c 那一行特别值得记：它正是「加密不行就退回明文先把任务建起来」的事故形状，
+而 M9-④ 的扫描**真的把明文从库里搜出来了**（`tasks=1`），说明这条断言不是摆设。
+
+> 变异跑会在复用的验证库里留下真含明文的残行（M9c 留下的 `tasks#39` 已删）。
+> 因此 M9-④ 的扫描**收口到本次登录用户**（与 `task-encryption-db.mjs` 同口径），
+> 否则上一次的变异账会让下一次跑无故变红 —— 那是在验旧账，不是在验这次的闸。
+
+### 9.3 条件 3 —— 密文与明文不一致时，两份都留、交人判断
+
+**要求**：不一致时**不要**清明文；两份都留 + 启动日志 warn 列出受影响行 id；
+只有「明文在、密文缺失或解不开」才自动加密。反证：造一条不一致行，重启后断言明文仍在且 warn 有记录。
+
+**`migrateTaskGoalEncryption` 现在是逐行三分支**（两张表同一口径）：
+
+| 行的形状 | 处置 | 计数 |
+| --- | --- | --- |
+| 明文有值 + 密文缺失或解不开 | **自动加密**（唯一允许自动写密文的情况）；`tasks` 取明文时 `payload.goal` 优先于 `title`（title 是 80 字截断值） | `encrypted` |
+| 密文可解 + 与明文一致 | 明文是冗余副本 → 清掉；`tasks.title` 的「一致」按**前缀**判（`have.startsWith(title)`），title 不是前缀（人工设过的标题）就不动 | `pauses` / `tasks` |
+| 密文可解 + 与明文**不一致** | **整行不动，两份都留** → warn 出行 id 交人判断；每次启动都会重报，不被「已处理」吃掉 | `mismatched` + `mismatchedIds` |
+
+为什么不自动清：明文那份可能是唯一还能读的内容（密文可能是旧 `DATA_KEY` 封的、内容已过时），
+密文那份可能是更完整的原文（明文可能是截断/脱敏过的）。**选错任何一边都是不可逆的数据丢失**，
+机器没有资格替人做这个取舍 —— 宁可留着 + 吵一句。
+
+**真库取证**（造两条不一致行 → 真重启 → 直接 SELECT）：
+
+```
+--- SELECT goal, goal_enc FROM task_pauses WHERE id = 38（不一致行）---
+{"goal":"不一致的明文暂停目标，里面还有 密码Zx9!secret","goal_enc":"gcm$2tA0vhp5W0wGfSk4$5TnlrpYFydu…"}
+
+--- SELECT title, payload, goal_enc FROM tasks WHERE id = 38（不一致行）---
+{"title":null,"payload":{"goal":"不一致的明文任务目标，里面还有 银行卡6222021234567890","steps":["不一致行的步骤"]},"goal_enc":"gcm$rjhUyQoOTnzVZKu4$udLOTggOq8w…"}
+
+--- 重启后的服务端日志（不一致行 warn 原文）---
+[db] 收尾6 ★ 密文与明文**不一致** 2 行：两份都留着、一行没动，请人工判断 —— task_pauses#38、tasks#38
+[server] goal 回填有 2 行「密文与明文不一致」，已保留两份、未自动清理；请按上面 [db] 那条 warn 里的行 id 人工核对（收尾6 条件3：机器不替人做不可逆的取舍）
+
+PASS  ★ 条件3：不一致的 task_pauses 行**明文还在**（没被自动清掉）
+PASS  ★ 条件3：不一致的 task_pauses 行**密文逐字节没变**（没被明文覆盖）
+PASS  ★ 条件3：那份密文仍能解出它自己的内容（两份都可读，人才有的判）
+PASS  ★ 条件3：不一致的 tasks 行 payload.goal **还在**
+PASS  ★ 条件3：不一致行的 payload 其余内容也没被动过（整行原样，不是只留一半）
+PASS  ★ 条件3：启动日志**打了 warn**（不是只在返回值里记个数）
+PASS  ★ 条件3：warn 里列出了受影响行 id task_pauses#38 / tasks#38
+PASS  ★ 条件3：warn 里**不含目标内容**（只报 id，日志不该变成第二个明文出口）
+PASS  ★ 条件3：第三次启动**仍然**报这两行不一致（人不来看它就一直吵）
+PASS  ★ 条件3：第三次启动后明文依旧原样（多次重启也不会被清）
+```
+
+pglite 那份还额外断言了返回值里的 `mismatchedIds`（调用方不用去抠日志），
+以及「能被自动清理的残行 A/B/C 密文逐字节没变、解回来仍是完整目标」。
+
+**代价如实说**：不一致行的明文（可能含敏感词）会一直躺在库里，直到人工处理。
+这是条件 3 明确选择的取舍，补偿控制是那条 warn。验收里**不假装它干净**：
+pglite 专门造了一条明文含敏感词的不一致行（D2），断言它照留不误并打印说明；
+真库的兜底扫（第 ⑤ 段）按 id 排除这两行，**同时断言排除数正好是 2** —— 免得「排除名单」将来悄悄变长。
+
+### 9.4 三项拍板
+
+1. **不加密 `payload` 整列，改为加强摘要脱敏。**
+   `redact.ts` 新增 `scrubTaskText(text)`：原来 `scrubStepSummary` 只认两种「」形状
+   （R2 评审当时就指出「挡不住其它形状的敏感数据」），现在叠加 `redactForStorage` 的
+   `VALUE_PATTERNS`（密码 / 验证码 / 卡号 / 身份证 / CVV）按**值形状**脱敏；
+   `scrubStepSummary` 委托给它，`taskDisplayTitle` 也用它。pglite ⑤-B 六条反例：
+
+   ```
+   存进去的 steps（6 条）：["写入完成 密码是 [已脱敏·password·13字]",
+     "发送验证码 [已脱敏·otp·6字] 给用户","绑定银行卡 [已脱敏·card·25字]",
+     "身份证 [已脱敏·card·26字] 已登记","CVV [已脱敏·card·3字] 校验通过",
+     "老形状也要挡住：「银行卡[已脱敏·card·29字]」"]
+   PASS 六条含敏感值的摘要，落进 payload.steps 后**一个敏感值都不剩**
+   PASS 脱敏后仍然**可读**（留了占位，不是整条摘要被抹成空串）
+   ```
+
+   取舍：payload 里还有 `steps` / `doc` 等结构，整列加密会让每次读都要解密；
+   而摘要本来就该是给人看的短文本，脱敏到位就够 —— 这是用户拍的板，不是回避。
+   **`payload.steps` 仍是明文列**这一点没有变，只是现在挡得住敏感值了（见 9.8 第 1 条）。
+2. **老明文列暂不 DROP**（`tasks.title`、`task_pauses.goal` 恒 NULL）：留着回滚能力，
+   等批次 K 落地跑稳后再议。已记进 `docs/待办-R2残留-goal明文-20260922.md`。
+3. **启动全表扫描的优化推迟**：水位线（`schema_meta` 记「已回填到的最大 id / 时间」）方案
+   已写进同一份待办文档，不在本批做。
+
+### 9.5 两件小事
+
+1. **`r4-acceptance-HEAD.json` 是测试产物**：已加进 `.gitignore`（连同 `server-HEAD.log`）
+   并 `git rm --cached` 移出版本控制（文件留在磁盘上；`r4-acceptance-main-old.json` 作为一次性基线仍跟踪）。
+   证据：本轮跑完整 `npm run verify`（其中 `verify:r4` 会重新写出这个文件）之后，
+   `git status --porcelain` 里**没有**它 —— 以前是每次跑完树都脏。
+2. **README 写清威胁模型**：`README.md`「数据与安全」新增一条
+   「★ goal 加密防的是什么、不防什么」—— 只防**数据库文件/备份被偷走**（`pgdata`、`pg_dump`、云盘备份、容器卷）；
+   **不**防「目标明文发给模型」（拼提示词必然带原文，对模型服务商是明文）、
+   **不**防「目标明文回桌面显示」（`task/current`、`task/doc`、`loop/pauses` 都解密后回原文，这是功能要求）、
+   **不**防「持有 `DATA_KEY` 的人」（钥匙与库同机时，偷库和偷机器是同一件事）。
+   一句话写在 README 里：**goal 加密 = 静态数据（at-rest）保护，不是端到端加密。**
+   同时把 README 里暂停那段的**旧口径**（「台账照写、`goal_enc` 置空」）改成了条件 2 的 fail-closed，
+   并补上「扫描条件是明文还在不在」「不一致行不自动清理」「title 停用后界面显示什么」三条。
+
+### 9.6 脚本与 EXIT 码（本轮实际跑的）
+
+| 命令 | 结果 | EXIT |
+| --- | --- | --- |
+| `npm run typecheck`（shared + desktop + server） | 三个包全过 | **0** |
+| `npm run verify` | 工具表 / R4 / 编排 / websearch / 记忆 / 人设 / 协作 / 批次 + pglite 全绿；pglite `54 PASS / 0 FAIL` | **0** |
+| `npm run verify:db` | 收尾1 全部 PASS、收尾2 全部 PASS、收尾6 真库 **87 PASS / 0 FAIL**、pglite **54 / 0** | **0** |
+| `npm run verify:db:mutate-nocipher`（**本轮新增**） | 条件2 反证 M9：**21 PASS / 0 FAIL** | **0** |
+| M9b（手工变异 `loop.ts`） | **7 FAIL** → 闸是真的 | 1（预期） |
+| M9c（手工变异 `agent.ts`） | **5 FAIL** → 闸是真的 | 1（预期） |
+
+新增 / 改动的验收脚本：
+
+- **新增** `scripts/verify/task-encryption-nocipher.mjs` → `npm run verify:db:mutate-nocipher`
+  （真服务端 + 真库的 M9；脏树拒跑、md5 逐字节还原、带对照组）。
+  **没有**挂进 `verify:db` 主链：它会临时改生产文件，主链里跑一旦被 SIGKILL 就会留下变异体；
+  常驻闸由 pglite 第 ⑧ 段承担（那条不碰生产文件）。
+- `scripts/verify/task-encryption-pglite.mts`：37 → **54** 项（新增 ②-B 条件1、⑤-B 拍板脱敏、⑧ M9、⑥ 条件3 重写）。
+- `scripts/verify/task-encryption-db.mjs`：61 → **87** 项（新增条件1 显示字段 9 项、条件3 跨三次重启 16 项、兜底扫排除口径）。
+
+### 9.7 本轮改动的文件
+
+| 文件 | 改了什么 |
+| --- | --- |
+| `apps/server/src/orchestrator/redact.ts` | 新增 `scrubTaskText` / `taskDisplayTitle` |
+| `apps/server/src/routes/agent.ts` | `scrubStepSummary` 委托 `scrubTaskText`；`task/current` 回 `displayTitle` |
+| `apps/server/src/routes/loop.ts` | `pause` 改成**先加密再动状态**，fail-closed 500 `goal_encrypt_failed` |
+| `apps/server/src/db.ts` | `migrateTaskGoalEncryption` 逐行三分支；新增 `mismatchedIds` / `MISMATCH_IDS_MAX` |
+| `apps/server/src/index.ts` | 启动日志如实报不一致行数（只报数与 id，不报内容） |
+| `README.md` | 威胁模型 + 条件1/2/3 口径（含改掉暂停那段的旧描述） |
+| `.gitignore` | r4-dispatch 的 HEAD 产物 |
+| `package.json` | `verify:db:mutate-nocipher` |
+| 两个验收脚本 + 新增一个 | 见 9.6 |
+
+### 9.8 本轮查到但没修（增量，接第 7 节）
+
+1. `tasks.payload.steps` / `payload.doc.*` 仍是**明文列**：本轮把脱敏做到了值形状级（9.4-1），
+   但「明文存储」这件事没变 —— 不在 goal 口径内，属 R2 起的既有设计。
+2. **不一致行的明文会一直留到人工处理**（条件 3 的取舍）：warn 是唯一补偿控制，
+   没有做「不一致行自动开一张人工介入卡片」之类的后续动作 —— 那属于批次 K 的活。
+3. `displayTitle` 目前只有 `/agent/task/current` 一个出口在用，桌面还没改成读它
+   （桌面那行渲染读的是 `goal`，功能上没问题）；等前端定稿时一起接。
+4. `MISMATCH_IDS_MAX = 50`：不一致行超过 50 条时日志只列前 50 + 总数。
+   真出现那种规模说明有系统性问题（例如换过 `DATA_KEY`），届时要做的不是调大这个数，而是查根因。

@@ -277,11 +277,27 @@ try {
 
   // ---- ④ 明文没从侧门落库 ----
   const pats = [`%${NOKEY_GOAL}%`, ...SENSITIVE.map((x) => `%${x}%`)];
-  const leakT = (await q(`SELECT count(*)::int AS n FROM tasks t WHERE row_to_json(t)::text LIKE ANY($1)`, [pats])).rows[0].n;
-  const leakP = (await q(`SELECT count(*)::int AS n FROM task_pauses t WHERE row_to_json(t)::text LIKE ANY($1)`, [pats])).rows[0].n;
-  console.log(`      全库扫这次的目标串/敏感词 → tasks=${leakT} task_pauses=${leakP}`);
-  check(leakT === 0, `★ M9-④：tasks 全表里搜不到这次的目标明文（${leakT} 行）`);
-  check(leakP === 0, `★ M9-④：task_pauses 全表里搜不到这次的目标明文（${leakP} 行）`);
+  /**
+   * 扫描**收口到本次登录用户**（跟 task-encryption-db.mjs 一个口径）。
+   * 为什么不能扫全表：这个验证库是复用的，历史上跑过的变异（M9c 把 task/start 退回明文落库）
+   * 会在库里留下真含明文的行，扫全表就会让**下一次**跑无故变红 —— 那是在验旧账，不是在验这次的闸。
+   */
+  const leakT = (
+    await q(
+      `SELECT count(*)::int AS n FROM tasks t JOIN projects p ON p.id = t.project_id
+        WHERE p.user_id = $1 AND row_to_json(t)::text LIKE ANY($2)`,
+      [userId, pats],
+    )
+  ).rows[0].n;
+  const leakP = (
+    await q(
+      `SELECT count(*)::int AS n FROM task_pauses t WHERE t.user_id = $1 AND row_to_json(t)::text LIKE ANY($2)`,
+      [userId, pats],
+    )
+  ).rows[0].n;
+  console.log(`      本次用户名下扫目标串/敏感词 → tasks=${leakT} task_pauses=${leakP}`);
+  check(leakT === 0, `★ M9-④：tasks 里搜不到这次的目标明文（${leakT} 行）`);
+  check(leakP === 0, `★ M9-④：task_pauses 里搜不到这次的目标明文（${leakP} 行）`);
 
   // ---- ⑤ 内存状态也没被改（账实一致） ----
   const infoAfter = await raw('GET', `/agent/loop/info?loopId=${loopId}`, null, token);
