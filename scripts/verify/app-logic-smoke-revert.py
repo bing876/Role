@@ -174,6 +174,15 @@ MUTATIONS = [
         'replace': "        body: JSON.stringify({}),",
         'expect': '建项目的 body 不对',
     },
+    {
+        'file': PROJECTS,
+        'id': 'P4',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 确认文案没了
+        'name': '把 F1 打回去：刷新列表时又顺手清掉提示（用户看不见"建好了"）',
+        'anchor': "      curProjectRef.current = r.currentProjectId;\n      onCurrentProject(r.currentProjectId);\n",
+        'replace': "      curProjectRef.current = r.currentProjectId;\n      onCurrentProject(r.currentProjectId);\n      setProjectNote('');\n",
+        'expect': '没有确认文案',
+    },
     # ---- 片 5：features/auth（这一片**全部**是 user-visible 注入：
     #      只让内部调用计数变红不算反证 —— 用户 2026-09-24 拍板）----
     {

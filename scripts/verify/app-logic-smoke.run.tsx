@@ -781,7 +781,7 @@ await check('★ 切项目绝不碰浏览器：那一层与那一个 <webview> �
   sameNode(wv, heldWebview, '<webview> 不是原来那个节点（被重建了）');
 });
 
-await check('新建项目 → POST /projects（body 带名字）→ 进入新项目（顺带钉住 F1：提示会被刷新清掉）', async () => {
+await check('新建项目 → POST /projects（body 带名字）→ 进入新项目（★ F1 已修：确认文案要留得住）', async () => {
   const input = q('.projectBox__name');
   assert.ok(input, '新项目名字输入框不见了');
   const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
@@ -798,12 +798,17 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
   assert.equal(body.name, '我的新项目', `建项目的 body 不对：${JSON.stringify(body)}`);
   assert.match(q('aside.sidebar .agentList')?.textContent ?? '', /小鸡/, '没有进到新项目（名单还是旧的）');
   /**
-   * ★ 发现 F1（**既有**行为，不是本片抽坏的）：`createProject` 里那句
-   *   「项目「X」建好了…」紧接着被 `loadProjects()` 末尾的 `setProjectNote('')` 清掉 ——
-   *   界面上等于没有确认。抽 hook 时**逐字保留**了这个顺序（重构片不许顺手改产品行为），
-   *   这条断言就是把这个事实钉住：note 现在是空的。要不要改由用户拍。
+   * ★ F1（2026-09-25 修；用户 2026-09-24 拍板「片 7 之后单独小提交」）：
+   *   原来 `createProject` 里那句「项目「X」建好了…」紧接着被 `loadProjects()` 末尾的
+   *   `setProjectNote('')` 清掉 —— 界面上等于没有确认。
+   *   修法是让**刷新列表不动提示文案**（清空只发生在每个动作开始时与登出时）。
+   *
+   *   这条断言原来钉的是"note 现在是空的"（把既有行为钉住，等用户拍）；
+   *   现在**反过来**：成功文案必须留在屏幕上。反证 P4 把清空那句加回去 → 这条立刻红。
    */
-  assert.ok(!q('.projectBox__note'), `新建项目的提示被随后的刷新清掉了（既有行为，见 F1）：${q('.projectBox__note')?.textContent}`);
+  const note = q('.projectBox__note');
+  assert.ok(note, '新建项目成功后没有确认文案（提示又被刷新清掉了 —— F1 复发）');
+  assert.match(note?.textContent ?? '', /建好了/, `确认文案不对：${note?.textContent}`);
 });
 
 await act(async () => rootGlue.unmount());

@@ -78,7 +78,14 @@ export function useProjects({
       void window.workbench?.syncProjects?.(r.projects.map((p) => p.id));
       curProjectRef.current = r.currentProjectId;
       onCurrentProject(r.currentProjectId);
-      setProjectNote('');
+      /**
+       * ★ F1 修复（2026-09-25，用户 2026-09-24 拍板「片 7 之后单独小提交」）：
+       *   这里**原来有一句 `setProjectNote('')`** —— 于是 `createProject` 里刚写的
+       *   「项目「X」建好了…」会被随后的这次刷新立刻擦掉，界面上等于**没有确认**。
+       *   「刷新列表」不该管提示文案：清空只发生在**每个动作开始时**（切换/新建的入口都写了）
+       *   与登出（`resetProjects`）—— 这样成功文案才留得住。
+       *   顺带说明：`switchProject` 成功时不写字（那是 F2，需要设计决定，见缺陷清单）。
+       */
       return r.currentProjectId;
     } catch (e) {
       setProjectNote(`读不到项目列表：${(e as Error).message}`);
