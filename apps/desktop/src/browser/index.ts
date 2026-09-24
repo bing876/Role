@@ -53,5 +53,5 @@ export {
   toHttpUrl,
 } from './url';
 
-export { ComputerVisibility } from './ComputerVisibility';
+export { ComputerVisibility, VISIBILITY_LEVELS, loadVisibility, saveVisibility, visibilityUrl, formatToolForVisibility } from './ComputerVisibility';
 export type { ComputerVisibility as ComputerVisibilityLevel } from './ComputerVisibility';

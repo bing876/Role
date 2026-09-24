@@ -42,6 +42,16 @@ import {
   CONTINUE_WEAK_RE,
   HOME_URL,
   HelpCard,
+  /**
+   * 收尾 7 | 批次 H 的电脑三级可见度**第一次真的挂进界面**。
+   * 它以前只在 `browser/index.ts` 里 export 着、没人渲染（H 空转），
+   * 而且自己 fetch 的路径是 `/api/agents/:id/visibility`（服务端没有 `/api` 前缀）、
+   * token 摸的是 `localStorage.getItem('token')`（真实 key 是 `workbench.token`）—— 两处都错，从没存上。
+   * 现在读写都走这两个导出的纯函数，地址与 JWT 由这边给（`API_BASE()` + `session.token`）。
+   */
+  ComputerVisibility,
+  loadVisibility,
+  saveVisibility,
   detectBrowseIntent,
   detectOpenUrl,
   detectStopIntent,
@@ -49,7 +59,7 @@ import {
   isPureOpenCommand,
   useBrowserWorkspace,
 } from './browser';
-import type { EmbedRect } from './browser';
+import type { ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
 
 /**
@@ -712,6 +722,14 @@ export default function App() {
   curAgentRef.current = curAgentId;
   /** 已经拉过历史的智能体，来回切换不反复请求 */
   const historyLoadedRef = useRef<Set<number>>(new Set());
+
+  /**
+   * 收尾 7 | 电脑三级可见度（批次 H 的 `agents.computer_visibility`）：status / preview / takeover。
+   * 默认 `status`（收起，不抢焦点）—— 这是批次 H 的设计前提，也是服务端那列的默认值。
+   * 状态放在这里（不在组件里）有两个理由：① 切智能体要把那个智能体自己存的档位读回来；
+   * ② 「接管」档要顺带把浏览器前置，那是 `browser.showFullscreen()`，只有这边够得着。
+   */
+  const [computerVisibility, setComputerVisibility] = useState<ComputerVisibilityLevel>('status');
 
   /** 只改**某一个**智能体的那份聊天。异步回包（尤其是流式）必须用它，别用下面的 setMessages */
   const patchChat = (agentId: number, patch: (c: AgentChat) => AgentChat) => {
@@ -1809,6 +1827,57 @@ export default function App() {
      */
     getProjectOfAgent: (agentId: number) => agentProjectRef.current.get(agentId) ?? null,
   });
+
+  /**
+   * 收尾 7 | 读回这个智能体自己存的可见度档位（切换智能体 / 登录态变化时各读一次）。
+   *
+   * ★ 读不到（未登录、网络、老后端没这条路由）就**保持当前档位不动**，绝不回落成 `status` 再写回去 ——
+   *   那会把「读不到」变成「用户选了收起」，把人家存的偏好抹掉（与 R2 那条「不猜、不冒充」同一个道理）。
+   * ★ `off` 标志防卸载/切人之后 setState（这条规矩在本文件里已经是既有做法）。
+   */
+  useEffect(() => {
+    let off = false;
+    const agentId = curAgentId;
+    if (!agentId || !session?.token) return () => { off = true; };
+    void loadVisibility({ apiBase: API_BASE(), token: session.token, agentId }).then((v) => {
+      if (off || !v) return;
+      // 读回来的档位如果是「接管」，也要把浏览器前置 —— 否则重开应用后档位说是接管、页却在后台
+      setComputerVisibility(v);
+      if (v === 'takeover') browser.showFullscreen();
+    });
+    return () => { off = true; };
+    // browser.showFullscreen 是 hook 里的稳定回调；这里只按「换人 / 换登录态」重读
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curAgentId, session?.token]);
+
+  /**
+   * 切档：本地立刻生效 + 存回服务端（fire-and-forget，失败只 warn 不弹错 —— 这是偏好，不是数据）。
+   *
+   * ★ 这里**只**碰视图：`showFullscreen()` 是既有的视图开关（「跟任务执行毫无耦合」是它自己的注释）。
+   *   不调 loop 的 start/stop/pause、不调 throttle —— 「收起面板」绝不等于「停下任务」，
+   *   这条由 `scripts/verify/panel-visibility-coupling-probe.py` 与 H 的验收一起钉着。
+   */
+  const onChangeComputerVisibility = (v: ComputerVisibilityLevel): void => {
+    setComputerVisibility(v);
+    if (v !== 'status') browser.showFullscreen();
+    const agentId = curAgentId;
+    const token = session?.token ?? null;
+    if (!agentId || !token) return;
+    void saveVisibility({ apiBase: API_BASE(), token, agentId }, v).then((ok) => {
+      if (!ok) console.warn('[visibility] 档位没能存回服务端（本地已生效，重开应用会回到上次的档位）');
+    });
+  };
+
+  /**
+   * 喂给可见度条的真实状态（不是写死的假数据）：
+   * · `status` / `statusDetail` / `statusStep` 来自左栏那一行智能体（头像即状态那套，服务端广播来的）；
+   * · 当前这一步干什么，用主进程报上来的**最后一条步摘要**（`agentSteps` 的尾巴）；
+   * · 页面摘要用当前那张页的标题（没有标题就用地址）。
+   * 拿不到就是 null —— 组件那边会显示「空闲 / 暂无页面摘要」，不猜、不编。
+   */
+  const visAgent = agents.find((a) => a.id === curAgentId) ?? null;
+  const visLastStep = agentSteps.length > 0 ? agentSteps[agentSteps.length - 1] : null;
+  const visPage = browser.active ? browser.active.title || browser.active.url || null : null;
 
   /**
    * Phase 4：资源守护者（持续资源监控）。
@@ -3264,6 +3333,27 @@ export default function App() {
                   </button>
                 </div>
               )}
+            {/*
+              收尾 7 | 批次 H 的三级可见度**第一次真的渲染出来**（以前只 export 没人用）。
+
+              ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
+                children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
+                驾驶的点击坐标也全废（`styles.css` 里 `.browserLayer--bg` 的注释写的就是这个坑）。
+                组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
+              ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
+            */}
+            <ComputerVisibility
+              agentId={curAgentId}
+              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
+              statusDetail={visAgent?.statusDetail ?? null}
+              step={visAgent?.statusStep ?? null}
+              currentTool={visLastStep}
+              pageSummary={visPage}
+              visibility={computerVisibility}
+              onChange={onChangeComputerVisibility}
+              apiBase={API_BASE()}
+              token={session?.token ?? null}
+            />
             <BrowserPanel
               ws={browser}
               agentLabel={agents.find((a) => a.id === curAgentId)?.name}

@@ -31,7 +31,7 @@
 | 定时 / 事件触发 | `orchestrator/routines.ts` | Routines：`interval`（≥5 分钟）/ 每日定点 / 事件 |
 | 重启恢复 | `orchestrator/checkpoint.ts` | 循环状态落 `loop_checkpoints`，服务重启后续跑；工具调用按 `tool_call_id` 去重 |
 | 上下文压缩 | `orchestrator/contextCompress.ts` | 长任务的工具历史只增不减会爆，按预算压缩 |
-| 模型路由 | `modelRouter.ts` | 用户不选模型，服务端按任务类型（chat / tool / extract / search / worker / delegate）选；可用 `DEEPSEEK_MODEL_<类型>` 分别配置 |
+| 模型路由 | `modelRouter.ts` | 用户不选模型，服务端按任务类型（chat / tool / extract / search / worker / delegate）选；可用 `DEEPSEEK_MODEL_<类型>` 分别配置。`chat` 这一类还按**任务复杂度**再分一路：简单闲聊走 `DEEPSEEK_MODEL_CHAT`，复杂闲聊（含「分析 / 诊断 / 对比 / 报告 / 调研…」且 ≥10 字）走 `DEEPSEEK_MODEL_CHAT_COMPLEX`；没配复杂模型就回落 CHAT 并**如实说明回落**；`MODEL_ROUTING_ENABLED=0` 一键全部退回 `DEEPSEEK_MODEL` |
 | 知识库 | `routes/knowledge.ts` | 上传资料（PDF 等），加密分块存储，聊天时字面检索注入 |
 | 桌面端浏览器 | `apps/desktop/src/browser/` | 多标签、按项目隔离登录态（`persist:` 分区按项目），单实例舞台 |
 
@@ -128,6 +128,9 @@ npm run dev                               # 桌面端（Vite + Electron）
 | `npm run verify:redact` | 脱敏占位符（字数与值形状）+ `longdigits`（≥21 位连续纯数字串：判定与掩码**共用同一个边界常量**，⑤-1 用 12~30 位逐长度对照表钉住两边同口径），断言一律整串精确相等 | — |
 | `npm run verify:mention` | `@点名` 三层：解析器（两端同一份实现，含全仓「只许有一处定义」防漂移闸）、服务端决定层（R-A/R-B/R-C）、渲染层闸门 + 接线 | — |
 | `npm run verify:mention:e2e` | `@点名` **真机端到端**：真后端 + 真 PostgreSQL + 桩模型（桩把每次上游请求原样截下来，用来证明「模型收到的正文里没有 `@名字`」与「该不调模型的轮真的没调」），跑完把测试账号整体删掉 | 真 PostgreSQL + `apps/server/dist`（脚本会先 build） |
+| `npm run verify:visibility` | **电脑三级可见度**（收尾 7 重写）：**真调**桌面本体导出的 `visibilityUrl` / `loadVisibility` / `saveVisibility`（假 fetch 截住，验地址、方法、鉴权头、请求体、返回口径），外加接线断言（组件真的被 `App.tsx` 渲染、是 `BrowserPanel` 的**兄弟**节点、切档只碰视图不碰任务）与 CSS 安全不变量（webview 宿主不许 `display:none` / 尺寸归零） | — |
+| `npm run verify:visibility:e2e` | 可见度**真机端到端**：自己起真后端 + 真 PostgreSQL，**用桌面自己的函数去打真路由**，再回真库查 `agents.computer_visibility` 那一列；含三档往返、非法值 400、未登录 401、**别的账号改/读一律 404**，跑完把测试账号整体删掉 | 真 PostgreSQL + `apps/server/dist`（脚本会先 build） |
+| `npm run verify:routing` | **模型真路由**（收尾 7）：证明简单闲聊与复杂闲聊选出的 `model` 字段**真的不同**；未配 `DEEPSEEK_MODEL_CHAT_COMPLEX` 时回落 CHAT 且 reason **如实说回落**；`MODEL_ROUTING_ENABLED=0` 全部退回默认模型；`tag → taskKind` 映射逐条对 | — |
 | `npm run verify:tools` | 工具表、注册表契约、回滚开关 | — |
 | `npm run verify:r4` | 发车意图判定口径一致 | — |
 | `npm run verify:orch` | 编排：schema / 临时工 / park / 委派 / 端到端 / 路由 / 频道 / 一键关停 | PGlite |
@@ -154,9 +157,9 @@ npm run dev                               # 桌面端（Vite + Electron）
   「@某人 + 页面任务」这种轮**会发车**，但按用户拍板（决策2 = allow_with_owner）循环归**会话主人**，
   所以这一轮开口的是跑循环那位、被点名者一句话不说；`meta.mention` 里点名事实还在（界面**能**提示「这活由谁在跑」），
   但那句提示是文案 —— 要不要加、加哪句，等用户拍（详见验收报告 §9.7）。
-- **电脑三级可见度（Status / Preview / Takeover）只做了后端和组件**：`agents.computer_visibility` 字段和 `GET/POST /agents/:id/visibility` 接口已可用；`ComputerVisibility.tsx` 组件**还没挂进界面**，而且它请求的是相对路径 `/api/...`，与桌面端其余请求使用的 `API_BASE` 不一致 —— 前端重做时一起接。
+- **电脑三级可见度（Status / Preview / Takeover）已接通，但界面像素未定稿**（2026-09-24 收尾 7 修完空转）：`agents.computer_visibility` 字段、`GET/POST /agents/:id/visibility` 接口、`ComputerVisibility.tsx` 组件与 `App.tsx` 的接线**四者现在是一条通路**（组件渲染在 `BrowserPanel` 的**兄弟**位置，切档时 webview 不换父节点、不被卸载；请求走 `API_BASE`，token 由调用方传入）。剩下的是**观感**：横幅位置、收起态的高度节奏要等用户给 HTML/CSS 再做 1:1，现在只保证「机制通、宿主尺寸不归零、不影响任务执行」。
 - **记忆 / 路由是模糊字面匹配，不是语义检索**：分词 + 加权 + Jaccard，零字面重叠的同义句（「爱喝拿铁」vs「喜欢喝咖啡」）照样检索不到。真语义要另接 embedding 模型（DeepSeek 没有 embedding API），调用点只有 `memories.ts` 的 `wordHits` 与 `chiefOfStaff.ts` 的 `routeByFuzzy`。
-- **模型路由目前只按任务类型选**：闲聊里「简单 / 复杂」的判断只写进日志，两者选的是同一个模型配置；不配 `DEEPSEEK_MODEL_*` 时所有任务都走 `DEEPSEEK_MODEL`。
+- **模型路由的「简单 / 复杂」是启发式，不是语义判断**（2026-09-24 收尾 7 已改成**真换模型**）：闲聊里两条路现在确实选出**不同的 `model`**（`DEEPSEEK_MODEL_CHAT` vs `DEEPSEEK_MODEL_CHAT_COMPLEX`），未配复杂模型时回落 CHAT 且日志**如实写「回落（没有换模型）」**，不再假装路由过。但判定本身仍是「关键词 + 长度」：`isSimple` 先看 `长度 < 10`，所以 8 个字的「帮我分析这份数据」判**简单**（关键词压根没轮到）—— 这条优先级被 `verify:routing` ⑦-4 钉住，改它会先红。不配任何 `DEEPSEEK_MODEL_*` 时所有任务都走 `DEEPSEEK_MODEL`。
 - **交接文件明文落盘**：`handoffs/*.md` 和 `board.md` 写的是任务原文，与数据库「内容全密文」的口径不一致（库里同一份任务 `agent_delegations.task` 是脱敏存的）。修法二选一：写盘前走 `redactForStorage`，或整体改为存库密文、文件只做导出视图。
 - **脱敏认的形状**：`密码/口令/pwd: X`、`验证码/otp: X`、13~20 位数字串（`card`，允许空格/横线分组）、
   正好 18 位身份证（`idcard`）、CVV，以及 2026-09-24 补上的 **`longdigits`：≥21 位连续纯数字串整段脱敏**

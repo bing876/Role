@@ -133,3 +133,8 @@ docs/acceptance/r4-dispatch/server-HEAD.log
 docs/acceptance/mention/*.json
 docs/acceptance/mention/*.jsonl
 docs/acceptance/mention/*.log
+
+# 收尾 7 · H 可见度端到端（verify:visibility:e2e）的可再生产物：日志与汇总 JSON 每次跑都会重写。
+# 要长期留着的证据抄进 docs/acceptance/收尾7-H电脑可见度接线-I模型真路由-验收报告.md（那份跟踪）。
+docs/acceptance/visibility/*.log
+docs/acceptance/visibility/*.json
