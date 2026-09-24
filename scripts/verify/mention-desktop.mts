@@ -2,17 +2,22 @@
  * 批次 J · J4 | 渲染进程这一侧：@点名 与「兜底发车」闸门的验收
  * ===========================================================
  *
- * 验的是生产代码本体：`apps/desktop/src/mentionGate.ts`（App.tsx 真正调用的那两个函数），
- * 外加**接线断言** —— 证明 App.tsx 确实调了它、且没有另抄一份解析。
+ * 验的是生产代码本体：`apps/desktop/src/mentionGate.ts`（App.tsx 真正调用的那道闸），
+ * 外加**接线断言** —— 证明 App.tsx 确实调了它，并把两项拍板（决策1 per_round / 决策2 allow_with_owner）
+ * 在服务端与桌面的落点一起钉住（口径被人改回去时这里会红）。
  *
  *   npm run verify:mention:desktop      （已挂进 npm run verify 主链）
  *
  * ★ 为什么要有这一层（服务端才是裁决方）：
  *   第 21 步那道「没拿到 loopId 也要发车」的兜底，只看流里有没有 loop 事件。
- *   而服务端对 @点名换人轮**一律不发车**（见 chat.ts 的 mentionSwitchRound）。
- *   一旦这轮 502 / 连接被掐、连 meta 都没回来，兜底就会替用户把驾驶员发出去 ——
- *   用户明明只是在叫另一个人说话。所以渲染层必须能**自己**认出「这是点名轮」。
- *   解析用的仍是 packages/shared 的同一份实现（相对路径引源码，Vite 内联进产物）。
+ *   而 R-A（被点名者正忙）与「整条只写了 @名字」这两种轮，服务端**只回一句告知、不派任何活**。
+ *   这两种轮要是被兜底发出去，等于把用户的一句「@某人」变成了一次浏览器操作 ——
+ *   所以渲染层要认得出「服务端这轮已经用告知答过了」。判据只有服务端的 meta.mention.kind。
+ *
+ * ★ 用户 2026-09-24 拍板（决策2 = allow_with_owner）之后，桌面**不再自己解析 @**：
+ *   点名轮允许发车（循环归会话主人），「文本里有 @」不再是前端能改结果的判据，
+ *   那次本地解析就成了死代码 —— 撤掉（连 `vite.config.ts` 的 `fs.allow` 一起回退）。
+ *   §②③④ 反过来钉住这件事：不许长回来，也不许把决策1/决策2 的口径悄悄改回去。
  *
  * ★ 接线断言不是「测源码文本」凑数：它防的是**静默失效** ——
  *   闸门函数写得再对，只要 App.tsx 那行 `launch()` 没走它，用户在界面上照样会被误发车，
@@ -22,11 +27,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  mentionRosterOf,
-  parseLocalMention,
-  shouldFallbackLaunch,
-} from '../../apps/desktop/src/mentionGate';
+import { shouldFallbackLaunch } from '../../apps/desktop/src/mentionGate';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8');
@@ -46,170 +47,146 @@ function check(label: string, fn: () => void): void {
   }
 }
 
-/** 桌面联系人列表那一份名单（当前项目；切项目就换一份） */
-const AGENTS = [
-  { id: 301, name: '小助' },
-  { id: 302, name: '研究员' },
-  { id: 303, name: '文案' },
-];
-const XIAOZHU = 301;
-const YANJIUYUAN = 302;
-
 log('=== 批次 J · J4：渲染进程的点名闸门 ===');
 
-// ------------------------------------------------------------------ ① 名单整形
+// ------------------------------------------------------------------ ① 闸门真值表（决策2 口径）
 log('');
-log('--- ① 名单整形：脏数据不许变成「点得到的人」---');
+log('--- ① 兜底发车闸门：决策2 = allow_with_owner（点名轮**允许**发车，循环归会话主人）---');
 {
-  const roster = mentionRosterOf([
-    ...AGENTS,
-    { id: 0, name: '零号' },
-    { id: NaN, name: '不是数' },
-    { id: 304, name: '   ' },
-    { id: 305, name: '' },
-  ] as never);
-  log(`      ${JSON.stringify(roster)}`);
-  check('id 非法 / 名字空白的都丢掉（否则 @ 上去会解析出一个点不到的「人」）', () => {
-    assert.deepEqual(roster, AGENTS);
+  const L = (kind: string | null | undefined, over: object = {}): boolean =>
+    shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: kind, ...over });
+
+  log(`      none=${L('none')} switch=${L('switch')} self=${L('self')} busy=${L('busy')} empty=${L('empty')} null=${L(null)}`);
+
+  check('基线：有 pending、没拿到 loopId、这轮没点名 → 发车（第 21 步那道兜底本身不能被改坏）', () => {
+    assert.equal(L('none'), true);
+  });
+  check('老规矩 1：没有 pending（本来就没准备驾驶员）→ 不发车', () => {
+    assert.equal(L('none', { pendingDrive: false }), false);
+  });
+  check('老规矩 2：这轮已经拿到 loopId → 不再发第二次', () => {
+    assert.equal(L('none', { sawLoop: true }), false);
+  });
+
+  // ★ 决策2 的核心：点名轮不再被前端一刀切吞掉
+  check('★决策2：服务端说这轮点名换了人（kind=switch）→ **照样发车**，循环归会话主人', () => {
+    assert.equal(L('switch'), true, '前端还在按「switch 就不发车」的旧口径拦着 —— 用户已拍板 allow_with_owner');
+  });
+  check('★决策2 的另一半：R-A（kind=busy）服务端只回了一句告知、没派活 → **不许**替用户发车', () => {
+    assert.equal(L('busy'), false, 'busy 轮被发出去了：用户只是在叫一个正忙的人，结果浏览器动了');
+  });
+  check('★决策2 的另一半：整条只写了 @名字（kind=empty）→ 服务端反问了一句、没派活 → **不许**发车', () => {
+    assert.equal(L('empty'), false);
+  });
+  check('R-B：@ 的就是当前发言人（kind=self）→ 跟没写 @ 一样，照旧发车', () => {
+    assert.equal(L('self'), true);
+  });
+  check('老后端 / 流被掐（meta 一个都没回来，kind=null）→ 按第 21 步的老规矩发车（不因点名功能变严）', () => {
+    /**
+     * 这里刻意**不**再本地解析 @ 来「保守拦截」：决策2 之后 switch 轮本来就该发车，
+     * 唯一需要拦的 busy/empty 两轮服务端都会正常把 meta 发回来（它们的回法就是 close 前那一帧）。
+     * 真连 meta 都没回来时，按老规矩处理，而不是替用户猜服务端判了什么 ——
+     * 猜错的方向（该发的没发）会让任务轮凭空消失，这比多发一次更难查。
+     */
+    assert.equal(L(null), true);
+    assert.equal(L(undefined), true);
+  });
+  check('未知 kind（将来服务端加了新种类）→ 默认放行，只认 busy/empty 两种「告知轮」', () => {
+    assert.equal(L('someday'), true, '闸门把没见过的 kind 当成告知轮拦掉了 —— 新功能会被这道闸静默吞掉');
   });
 }
 
-// ------------------------------------------------------------------ ② 本地解析
+// ------------------------------------------------------------------ ② 闸门接线（防「功能存在但没接上」）
 log('');
-log('--- ② 本地解析：认得出「点了别人」，也认得出「点的是自己」---');
-{
-  const a = parseLocalMention('@研究员 帮我看看这组数据', AGENTS, XIAOZHU);
-  log(`      ${JSON.stringify(a)}`);
-  check('点了别人 → round=true、speakerId 是研究员', () => {
-    assert.equal(a.round, true);
-    assert.equal(a.speakerId, YANJIUYUAN);
-  });
-  check('R-B：@ 的就是当前发言人 → round=false（这一轮不算点名轮，兜底照旧）', () => {
-    const b = parseLocalMention('@小助 你觉得呢', AGENTS, XIAOZHU);
-    assert.equal(b.round, false);
-    assert.equal(b.speakerId, null);
-  });
-  check('拍板1：@ 与名字之间有空格 → round=false（不算点名）', () => {
-    assert.equal(parseLocalMention('@ 研究员 你好', AGENTS, XIAOZHU).round, false);
-  });
-  check('名单外的名字 → round=false，但要记在 unknown 里（前端可提示「没这个人」）', () => {
-    const c = parseLocalMention('@会计 帮我看账', AGENTS, XIAOZHU);
-    assert.equal(c.round, false);
-    assert.equal(c.speakerId, null);
-  });
-  check('textLength 只报字数、不带正文（日志里不许出现用户内容）', () => {
-    const d = parseLocalMention('@研究员 密码是 hunter2', AGENTS, XIAOZHU);
-    assert.equal(typeof d.textLength, 'number');
-    assert.ok(!JSON.stringify(d).includes('hunter2'));
-  });
-}
-
-// ------------------------------------------------------------------ ③ 兜底发车闸门
-log('');
-log('--- ③ 兜底发车闸门：点名轮绝不替用户把驾驶员发出去 ---');
-{
-  const mentionRound = parseLocalMention('@研究员 帮我看看这组数据', AGENTS, XIAOZHU);
-  const plainRound = parseLocalMention('帮我看看这组数据', AGENTS, XIAOZHU);
-  const selfRound = parseLocalMention('@小助 你觉得呢', AGENTS, XIAOZHU);
-  const spacedRound = parseLocalMention('@ 研究员 打开百度', AGENTS, XIAOZHU);
-
-  check('基线：有 pending、没拿到 loopId、这轮没点名 → 发车（第 21 步的兜底本身不能被改坏）', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'none', local: plainRound }),
-      true,
-    );
-  });
-  check('没有 pending → 不发车（本来就没准备驾驶员）', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: false, sawLoop: false, serverMentionKind: 'none', local: plainRound }),
-      false,
-    );
-  });
-  check('已经拿到 loopId → 不再发第二次', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: true, serverMentionKind: 'none', local: plainRound }),
-      false,
-    );
-  });
-  check('服务端说这轮是点名换人（kind=switch）→ 不发车', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'switch', local: plainRound }),
-      false,
-    );
-  });
-  check('★关键：**流被掐、meta 一个都没回来**（serverMentionKind=null），本地认出点了别人 → 仍不发车', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: null, local: mentionRound }),
-      false,
-    );
-  });
-  check('反例：本地认出的点名 + 服务端也说 switch → 两道闸一致（不是各判各的）', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'switch', local: mentionRound }),
-      false,
-    );
-  });
-  check('反例：R-B（@ 自己）不是点名轮 → 兜底照旧发车（不能因为写了个 @ 就把任务吞了）', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'self', local: selfRound }),
-      true,
-    );
-  });
-  check('反例：拍板1（@ 与名字之间有空格）不是点名轮 → 兜底照旧发车', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'none', local: spacedRound }),
-      true,
-    );
-  });
-  check('服务端说 busy（R-A：它在忙，只回了一句告知）→ 也不发车：这轮根本没派活', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'busy', local: plainRound }),
-      false,
-    );
-  });
-  check('服务端说 empty（只写了 @名字，回了一句反问）→ 也不发车', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'empty', local: plainRound }),
-      false,
-    );
-  });
-  check('反例：服务端说 self（R-B：@ 的就是当前发言人）→ 兜底照旧发车（这种轮跟没写 @ 一样）', () => {
-    assert.equal(
-      shouldFallbackLaunch({ pendingDrive: true, sawLoop: false, serverMentionKind: 'self', local: plainRound }),
-      true,
-    );
-  });
-}
-
-// ------------------------------------------------------------------ ④ 接线断言
-log('');
-log('--- ④ 接线：闸门真的接在 App.tsx 那条 launch() 上（防「功能存在但没接上」）---');
+log('--- ② 接线：闸门真的接在 App.tsx 那条 launch() 上，且桌面不再自己解析 @ ---');
 {
   const app = read('apps/desktop/src/App.tsx');
   const gate = read('apps/desktop/src/mentionGate.ts');
 
-  check('App.tsx 从 ./mentionGate 引了 parseLocalMention 与 shouldFallbackLaunch', () => {
+  check('App.tsx 从 ./mentionGate 引了 shouldFallbackLaunch', () => {
     assert.ok(/from '\.\/mentionGate'/.test(app), '没有从 ./mentionGate 引入');
-    assert.ok(/parseLocalMention/.test(app) && /shouldFallbackLaunch/.test(app));
+    assert.ok(/shouldFallbackLaunch/.test(app));
   });
   check('App.tsx 里那条兜底 launch() 确实包在 shouldFallbackLaunch(...) 的条件里', () => {
     const m = /shouldFallbackLaunch\(\{[\s\S]{0,400}?\}\)\s*\)\s*\n?\s*launch\(\);/.exec(app);
     assert.ok(m, '兜底 launch() 没有走 shouldFallbackLaunch —— 闸门写了但没接上');
   });
-  check('App.tsx 把本地解析结果传进了闸门（local: localMention）', () => {
-    assert.ok(/local:\s*localMention/.test(app));
-  });
   check('App.tsx 把服务端 meta.mention.kind 传进了闸门（serverMentionKind）', () => {
     assert.ok(/serverMentionKind:\s*sawMention\?\.kind/.test(app));
   });
-  check('App.tsx 自己**没有**再引/再调 parseMention（解析只在 mentionGate 里发生一次）', () => {
+  check('★决策2 的死代码不许长回来：桌面**任何**源码里都不许再调 parseMention / 传 local', () => {
     // 只查「真的引入 / 真的调用」，不查注释里提到它的名字（注释里写一句 parseMention 不算抄一份实现）
-    assert.ok(!/import\s*\{[^}]*\bparseMention\b[^}]*\}\s*from/.test(app), 'App.tsx 自己 import 了 parseMention');
-    assert.ok(!/\bparseMention\s*\(/.test(app), 'App.tsx 里直接调了 parseMention —— 规则散进 3500 行组件里就没人能验了');
+    for (const [name, src] of [['App.tsx', app], ['mentionGate.ts', gate]] as const) {
+      assert.ok(!/import\s*\{[^}]*\bparseMention\b[^}]*\}\s*from/.test(src), name + ' 自己 import 了 parseMention');
+      assert.ok(!/\bparseMention\s*\(/.test(src), name + ' 里调了 parseMention —— 决策2 之后本地解析已无用途');
+      assert.ok(!/parseLocalMention|mentionRosterOf/.test(src), name + ' 里还留着本地解析那两个函数');
+    }
+    assert.ok(!/local:\s*localMention/.test(app), 'App.tsx 还在往闸门传 local');
   });
-  check('mentionGate 引的是 shared 的**源码相对路径**（不按包名，避免依赖 dist 是否 build 过）', () => {
-    assert.ok(/from '\.\.\/\.\.\/\.\.\/packages\/shared\/src\/mention'/.test(gate));
-    assert.ok(!/from '@ai-workbench\/shared'/.test(gate), '按包名引值会要求先 build shared/dist');
+  check('桌面运行时不再跨 root 引 shared 源码（只从包里取**类型**），vite 的 fs.allow 也就不该留着', () => {
+    assert.ok(!/from ['"][^'"]*shared\/src\//.test(app) && !/from ['"][^'"]*shared\/src\//.test(gate), '还有指向 shared/src 的 import');
+    assert.ok(!/fs:\s*\{\s*allow/.test(read('apps/desktop/vite.config.ts')), 'vite.config.ts 里还有 fs.allow（多余的放权）');
+    assert.ok(/import type[^;]*ChatSpeaker|ChatSpeaker/.test(app), '气泡要用的 ChatSpeaker 类型应来自 shared');
+  });
+  check('闸门的判据写在 mentionGate 里（NOTICE_ROUND = busy/empty），不散在 App.tsx', () => {
+    assert.ok(/NOTICE_ROUND/.test(gate) && /'busy'/.test(gate) && /'empty'/.test(gate));
+    assert.ok(!/NOTICE_ROUND/.test(app), '规则漏进组件里了');
+  });
+}
+
+// ------------------------------------------------------------------ ③ 决策1：@ 只换这一轮的发言人
+log('');
+log('--- ③ 决策1（per_round）：@ 不许改会话归属，下一轮自动回到原来那位 ---');
+{
+  const chat = read('apps/server/src/routes/chat.ts');
+
+  check('chat.ts 里没有任何一处 UPDATE conversations 的 agent_id（换人只活在这一轮）', () => {
+    const m = /UPDATE\s+conversations[\s\S]{0,200}?agent_id\s*=/.exec(chat);
+    assert.ok(!m, '出现了改会话归属的 SQL：' + m?.[0].slice(0, 120));
+  });
+  check('换人轮的会话上下文按「一次性」建（conversationId 传 null，否则拿到的是会话原主人的人设）', () => {
+    assert.ok(/const switchedSpeakerId = mention\.kind === 'switch' \? mention\.agentId : null;/.test(chat));
+    assert.ok(/switchedSpeakerId !== null \? null : convId/.test(chat), 'buildAgentContext 的 convId 没有按 switch 置 null');
+  });
+  check('换人只覆盖这一轮真正要用的那个变量（routedAgentId），不碰会话本身', () => {
+    assert.ok(/if \(mentionSpeakerId !== null\) routedAgentId = mentionSpeakerId;/.test(chat));
+    assert.ok(!/routedAgentId\s*=\s*null/.test(chat));
+    assert.ok(/const mentionSwitchRound = mention\.kind === 'switch'/.test(chat), 'mentionSwitchRound 判定不见了');
+  });
+}
+
+// ------------------------------------------------------------------ ④ 决策2：服务端换人轮也能发车，且循环归会话主人
+log('');
+log('--- ④ 决策2（allow_with_owner）：换人轮可进工具循环，但循环主人是会话自己那位 ---');
+{
+  const chat = read('apps/server/src/routes/chat.ts');
+
+  check('★isTaskMode 不再被 mentionSwitchRound 短路（旧的「换人轮一律走聊天」已按拍板撤掉）', () => {
+    assert.ok(/const isTaskMode = isExplicitTask \|\| shouldEnterTaskMode\(mentionText, hasActivePage\);/.test(chat),
+      'isTaskMode 还挂着 mentionSwitchRound 的否定条件');
+    assert.ok(!/!mentionSwitchRound && \(isExplicitTask/.test(chat), '旧口径残留');
+  });
+  check('发车判定用的正文是剥掉 @名字 之后的 mentionText（@ 只是点名，不是任务内容）', () => {
+    assert.ok(/shouldEnterTaskMode\(mentionText,/.test(chat));
+  });
+  check('★发车轮的 meta.speaker 改成 loop.agentId（否则 meta 说 A 在答、库里记的是 B）', () => {
+    const m = /if \(mentionSwitchRound\) \{\s*mentionMeta\.speakerAgentId = loop\.agentId[\s\S]{0,120}?mentionMeta\.speakerName = null;\s*\}/.exec(chat);
+    assert.ok(m, '发车分支没有把发言人改成跑循环那位');
+  });
+  check('★循环主人取的是**会话自己的 agent_id**，不是被点名者（决策2 的「归会话主人」就落在这里）', () => {
+    // 会话主人是从库里读出来的（SELECT agent_id FROM conversations），不是从本轮路由变量推的
+    assert.ok(/SELECT agent_id FROM conversations WHERE id = \$1/.test(chat), '循环分支没有回读会话的 agent_id');
+    assert.ok(/const loopAgentId = Number\.isInteger\(convAgentId\) && convAgentId > 0 \? convAgentId : agentId;/.test(chat),
+      'loopAgentId 的算法被改了 —— 被点名者一旦顶进这里，就会去接管别人的页');
+    // 反向钉：循环分支里不许拿 mention / routedAgentId 当循环主人
+    const loopBranch = chat.slice(chat.indexOf('if (isTaskMode) {'), chat.indexOf('// 第 10 步'));
+    assert.ok(!/loopAgentId\s*=\s*(routedAgentId|mention\.|mentionSpeakerId|switchedSpeakerId)/.test(loopBranch),
+      '循环主人被换成了本轮点名的那位');
+    assert.ok(loopBranch.includes('registerLoopSse(loop.id, res, convId)'), '任务轮的 SSE 长连接口被改动了（顺手确认没碰坏）');
+  });
+  check('meta.mention 的 kind/hits/unknown 照样带出去（点名这件事不能因为发车就被抹掉）', () => {
+    assert.ok(/mention: mentionMeta/.test(chat));
+    assert.ok(!/delete mentionMeta\.(kind|hits|unknown)/.test(chat));
   });
 }
 

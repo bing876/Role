@@ -327,14 +327,20 @@ log('--- ⑨ 摘 @ 之后**不许抹掉用户的换行**（tidy 只收拾空格�
 }
 
 log('');
-log('--- ⑧ 防漂移：全仓只许有一份 parseMention 实现（两端共用，不许各抄一份）---');
+log('--- ⑧ 防漂移：全仓只许有一份 parseMention 实现，且**只许运行时用它的人**用 ---');
 {
   /**
    * 为什么要有这条：`packages/shared/src/tools.ts` 的文件头写着「桌面侧故意不在运行时 import 本文件」，
    * 因为 Electron 主进程是 tsc 直出、打包产物里没有 node_modules —— 那边只能本地抄一份 + 用验收脚本证明等价。
-   * 点名解析不需要进主进程（气泡前缀与兜底发车都在**渲染层**，Vite 会把它内联进产物），
-   * 所以这里能做到真正的一份实现：渲染层直接 import shared 的**源文件**（相对路径，不依赖 dist 是否 build 过）。
-   * 这条断言就是防止将来有人「顺手」在桌面复制一份 —— 复制的那一刻，两端就会各自漂移。
+   * 点名解析**不需要**进主进程，也不需要进渲染层：
+   * 用户 2026-09-24 拍板（决策2 = allow_with_owner）之后，点名轮**允许**发车、循环仍归会话主人，
+   * 「文本里有 @」不再是前端能不能发车的判据 —— 桌面那次本地解析就没有任何能改变结果的用途了，
+   * 于是本批把它从渲染层撤掉（撤掉的同时也把 `vite.config.ts` 的 `fs.allow` 回退了）。
+   *
+   * 所以这条闸现在的职责有两半：
+   * ①（老）全仓 `parseMention` 的定义只许一处 —— 将来谁想在桌面抄一段正则「预判一下」，先过这里；
+   * ②（新）桌面的闸门里不许出现 `parseMention` 调用 —— 防止死代码悄悄长回来。
+   * 解析器唯一的运行时用户是服务端（`orchestrator/mention.ts` → `routes/chat.ts`）。
    */
   const SKIP_DIRS = new Set(['node_modules', 'dist', 'dist-electron', 'build', 'out', 'coverage', 'data']);
   const hits: string[] = [];
@@ -354,6 +360,23 @@ log('--- ⑧ 防漂移：全仓只许有一份 parseMention 实现（两端共�
   log(`      parseMention 定义出现在：${JSON.stringify(hits)}`);
   check('全仓 parseMention 的定义只在 packages/shared/src/mention.ts 一处（本脚本自己不算：标签与正则都避开了那段字面量）', () => {
     assert.deepEqual(hits, [path.join('packages', 'shared', 'src', 'mention.ts')]);
+  });
+
+  // ②（决策2 之后新增）桌面侧不许再自己解析 @：那道闸门只看服务端 meta.mention.kind
+  const gatePath = path.join(ROOT, 'apps', 'desktop', 'src', 'mentionGate.ts');
+  const gateSrc = fs.readFileSync(gatePath, 'utf8');
+  const appSrc = fs.readFileSync(path.join(ROOT, 'apps', 'desktop', 'src', 'App.tsx'), 'utf8');
+  check('桌面 mentionGate 里不许调用 parseMention（决策2 后本地解析无用途，留着就是死代码）', () => {
+    assert.ok(!/parseMention\s*\(/.test(gateSrc), 'mentionGate.ts 里出现了 parseMention 调用：' + gateSrc.match(/parseMention\s*\([^)]*\)/)?.[0]);
+    assert.ok(!/parseMention\s*\(/.test(appSrc), 'App.tsx 里出现了 parseMention 调用');
+    assert.ok(/mention\.ts/.test(gateSrc), 'mentionGate.ts 的头注释应指回 shared 那唯一一份解析器');
+    assert.ok(/serverMentionKind/.test(gateSrc), '闸门的判据应是服务端 meta.mention.kind');
+  });
+  check('桌面运行时不再跨 root 引 shared 源码，vite 的 fs.allow 也就不该留着（多余的放权）', () => {
+    const viteSrc = fs.readFileSync(path.join(ROOT, 'apps', 'desktop', 'vite.config.ts'), 'utf8');
+    assert.ok(!/fs:\s*\{\s*allow/.test(viteSrc), 'vite.config.ts 里还有 fs.allow —— 渲染层已不引 shared 源码');
+    assert.ok(!/from ['"].*shared\/src\//.test(appSrc) && !/from ['"].*shared\/src\//.test(gateSrc), '桌面源码里还有指向 shared/src 的 import');
+    assert.ok(/import type/.test(gateSrc) || /ChatMentionMeta/.test(appSrc), '桌面只从 shared 取类型（import type，编译后不留 require）');
   });
 }
 

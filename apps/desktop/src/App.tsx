@@ -30,11 +30,11 @@ import type {
 } from '@ai-workbench/shared';
 import type { ChatMentionMeta, ChatSpeaker } from '@ai-workbench/shared';
 /**
- * 批次 J · @点名（渲染进程这一侧）：解析与「兜底要不要发车」的判定都在 `./mentionGate` 里，
- * 它引的是 packages/shared 的**同一份** parseMention（源码相对路径，理由见那个文件的头注释）。
- * App.tsx 只调它、不在组件里散写规则 —— 规则一旦散在 3500 行的组件里就没人能验。
+ * 批次 J · @点名（渲染进程这一侧）：裁决权在服务端，桌面只需要一道闸 ——
+ * 服务端已经用「一句告知」答过的那两轮（R-A 忙 / 只写了 @名字），兜底不许再替用户发车。
+ * 判定收在 `./mentionGate`（可单测），App.tsx 不在 3500 行的组件里散写规则。
  */
-import { parseLocalMention, shouldFallbackLaunch } from './mentionGate';
+import { shouldFallbackLaunch } from './mentionGate';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -2405,12 +2405,6 @@ export default function App() {
     setStreamingAgentId(myAgent);
     setStreamText('');
     let sawLoop = false;
-    /**
-     * 批次 J：本地也解析一次 @点名（**不是**替服务端做决定 —— 名单归属、谁在忙、换不换人只有
-     * 服务端说了算；这里只为「流断了也不误发车」，理由与规则见 `./mentionGate`）。
-     * 名单就是当前项目那份（`agents` 随切项目一起换，见文件顶部第 142 行的说明）。
-     */
-    const localMention = parseLocalMention(value, agentsRef.current, myAgent);
     try {
       const res = await fetch(`${API_BASE()}/chat/stream`, {
         method: 'POST',
@@ -2527,15 +2521,16 @@ export default function App() {
        * 第 21 步兜底：任务轮没拿到 loopId（老后端 / 流被掐）也要发车 ——
        * 主进程会自己调 /agent/loop/start 建一个（同一条引擎，不是第二套）。
        *
-       * 批次 J 加了一道闸：**@点名轮不兜底发车**（判定收在 `shouldFallbackLaunch` 里，可单测）。
-       * 点名解决的是「谁来说话」，不是「去这张页上干活」；替用户把驾驶员发出去才是事故。
+       * 批次 J 加了一道闸（决策2 之后的口径）：服务端**已经用一句告知答过**的那两轮
+       * （R-A 被点名者正忙 / 整条只写了 @名字）不兜底发车 —— 那两轮服务端既没派活也没调模型，
+       * 桌面再发一次就等于把用户的一句「@某人」变成一次浏览器操作。
+       * 换人轮（switch）与 @ 自己（self）**照旧可以发车**：按决策2，循环归会话主人。
        */
       if (
         shouldFallbackLaunch({
           pendingDrive: Boolean(pendingDrive()),
           sawLoop,
           serverMentionKind: sawMention?.kind ?? null,
-          local: localMention,
         })
       )
         launch();

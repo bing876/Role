@@ -12,9 +12,14 @@
 被点名者正忙时**不静默改派**，而是回一句人话告诉用户它在做什么、要不要等或换人；
 `@` 的就是当前发言人时按「没写 @」处理；交给模型的正文一律剥掉 `@名字`。
 
-四层验收全绿：**解析器 41/0、决定层 41/0、渲染层 35/0、真机端到端 67/0**（合计 184 项）；
+四项拍板全部落地：拍板1（`@` 必须紧跟名字）、拍板2（只有第一个命中是发言人）、
+**决策1 = per_round**（`@` 只换这一轮谁开口，**不改会话归属**）、
+**决策2 = allow_with_owner**（点名轮**照样能进工具循环**，但循环主人仍是会话自己那位，被点名者不接管别人的页）。
+
+四层验收全绿：**解析器 43/0、决定层 41/0、渲染层 35/0、真机端到端 81/0**（合计 200 项）；
 `npm run verify` / `npm run typecheck` / `npm run verify:db`（真库）三个 EXIT 全 0；
-6 处变异注入全部把对应断言打红，且还原后 md5 与 git status 逐字节一致。
+8 处变异注入全部把对应断言打红（含 M7/M8 两条「把决策2 改回旧口径」的倒退注入），
+且还原后 md5 与 git status 逐字节一致。
 
 ---
 
@@ -26,15 +31,15 @@
 | `packages/shared/src/index.ts` | 导出 `ChatSpeaker`（`{id,name}`）、`ChatRow.speaker?`、`ChatMentionMeta`，`meta` 事件负载加 `mention?` |
 | `apps/server/src/orchestrator/mention.ts` **（新）** | 服务端决定层：`loadMentionRoster`（当前项目名单，与「委派同事」同一份名字口径）、`resolveChatMention`（→ `none/self/switch/busy/empty` 五种决定）、`decisionNotice`、`decisionSpeaker`、`pickNoticeSpeaker`（那句告知由谁开口） |
 | `apps/server/src/db.ts` | `messages` 加 `speaker_agent_id BIGINT NULL REFERENCES agents(id) ON DELETE SET NULL` + 索引（照 `sources` 那列的幂等 `ADD COLUMN IF NOT EXISTS` 写法） |
-| `apps/server/src/routes/chat.ts` | 点名解析接进 `/chat/stream`（在路由闸之后、开会话之前，**不受**「新会话才路由」限制）；换人轮改用被点名者的人设/记忆/技能；模型只收剥过 `@` 的正文；5 处助手写入全部记 `speaker_agent_id`；4 处 SSE `meta` 全部带 `mention`；`/chat/history` 回 `speaker:{id,name}`；换人轮不进工具循环 |
-| `apps/desktop/src/mentionGate.ts` **（新）** | 渲染层唯一一处点名判定：`mentionRosterOf` / `parseLocalMention` / `shouldFallbackLaunch`（第 21 步那道兜底发车闸）。按**源码相对路径**引 shared，Vite 内联进产物 |
-| `apps/desktop/src/App.tsx` | 消息模型加 `speaker`；历史映射带上；流式结束按 `meta.mention` 挂发言人；气泡上「换人那一句」挂名字牌（`msg__speaker`，版式最小、className 留给 1:1 还原）；兜底发车改走 `shouldFallbackLaunch` |
-| `apps/desktop/vite.config.ts` | `server.fs.allow: ['../..']`（渲染层要 import 仓库根下的 shared 源码，别让 dev 起不起得来取决于 Vite 猜不猜得到 workspace 根） |
+| `apps/server/src/routes/chat.ts` | 点名解析接进 `/chat/stream`（在路由闸之后、开会话之前，**不受**「新会话才路由」限制）；换人轮改用被点名者的人设/记忆/技能；模型只收剥过 `@` 的正文；5 处助手写入全部记 `speaker_agent_id`；4 处 SSE `meta` 全部带 `mention`；`/chat/history` 回 `speaker:{id,name}`；**决策2**：换人轮不再被短路出工具循环，`loopAgentId` 仍取会话自己的 `agent_id`，发车时把 `meta.mention.speakerAgentId` 改成跑循环那位（与库里那句开场白对账） |
+| `apps/desktop/src/mentionGate.ts` **（新）** | 渲染层唯一一处点名判定：`shouldFallbackLaunch`（第 21 步那道兜底发车闸，判据只有服务端 `meta.mention.kind ∈ {busy, empty}`）。**决策2 之后不再本地解析 `@`** —— 点名轮允许发车，「文本里有 `@`」不再是前端能改结果的判据，那次解析就成了死代码，撤掉 |
+| `apps/desktop/src/App.tsx` | 消息模型加 `speaker`；历史映射带上；流式结束按 `meta.mention` 挂发言人；气泡上「换人那一句」挂名字牌（`msg__speaker`，版式最小、className 留给 1:1 还原）；兜底发车改走 `shouldFallbackLaunch`（只传 `pendingDrive / sawLoop / serverMentionKind`） |
+| `apps/desktop/vite.config.ts` | 曾为「渲染层引 shared 源码」加过 `server.fs.allow: ['../..']`；**决策2 之后渲染层不再运行时引 shared 源码，这条放权已回退**（多余的放权就是多余的攻击面），解析器第 ⑧ 段反过来钉住它不许再出现 |
 | `scripts/verify/mention-decision.mts` **（新）** | 决定层验收 41 项 → `npm run verify:mention:decision` |
-| `scripts/verify/mention-desktop.mts` **（新）** | 渲染层验收 35 项（含接线断言）→ `npm run verify:mention:desktop` |
-| `scripts/verify/mention-e2e.mjs` **（新）** | 真后端 + 真 Postgres + 桩模型端到端 67 项 → `npm run verify:mention:e2e` |
-| `scripts/verify/mention-revert-proof.py` **（新）** | 6 处变异注入 + md5/git status 还原核对 |
-| `scripts/verify/mention-parse.mts` | J1 那份，本批加了第 ⑨ 段（换行不被抹掉）与第 ⑩ 段（shared 的 dist 不许「半份跟踪」，见 §7.5）→ 41 项 |
+| `scripts/verify/mention-desktop.mts` **（新）** | 渲染层验收 35 项：闸门真值表（决策2 口径）+ 接线断言 + **§③ 决策1 / §④ 决策2 在服务端的落点**（口径被改回去时这里会红）→ `npm run verify:mention:desktop` |
+| `scripts/verify/mention-e2e.mjs` **（新）** | 真后端 + 真 Postgres + 桩模型端到端 81 项（T10 专验两项拍板：发车、车归会话主人、会话归属一个字节没动）→ `npm run verify:mention:e2e` |
+| `scripts/verify/mention-revert-proof.py` **（新）** | 8 处变异注入 + md5/git status 还原核对 |
+| `scripts/verify/mention-parse.mts` | J1 那份，本批加了第 ⑨ 段（换行不被抹掉）、第 ⑩ 段（shared 的 dist 不许「半份跟踪」，见 §7.5），并按决策2 改写第 ⑧ 段（全仓只许一份 `parseMention` 定义 + 桌面不许再调它 + `fs.allow` 不许留着）→ 43 项 |
 | `package.json` | `verify:mention` = parse + decision + desktop（在 `verify` 主链里，紧跟 `verify:redact`）；`verify:mention:e2e` 单独一条（要真库 + build） |
 | `scripts/verify/mem-merge-batch2.mjs` | 两条咬字面量的老断言升级成「抓出所有 `buildMemoryBlock` 调用、逐个看最后一个实参」（要求没变，见 §7.4；变异 M6 证明它照样咬得住） |
 
@@ -57,20 +62,34 @@
 | 记发言人 | `messages.speaker_agent_id`（5 处助手写入） | 端到端 T0.5、T1.9、T9.1–T9.3（真库 SELECT） |
 | 历史返回发言人 | `/chat/history` LEFT JOIN agents，名字口径 = `persona.name || agents.name` | 端到端 T0.6、T1.10、T8.1–T8.3 |
 | SSE meta 带 mention | 4 处 `meta` 帧全部带（含三条早退分支） | 端到端 T0.2、T1.2、T5.1；渲染层 ⑥ |
-| 本轮不启动浏览器循环 | `mentionSwitchRound` → `isTaskMode=false`；桌面兜底也闸住 | 端到端 T1.8/T3.7；渲染层 ③；决定层无 |
+| **决策1**（per_round）：`@` 只换这一轮谁开口，不改会话归属 | 换人只覆盖 `routedAgentId`；`buildAgentContext` 的 `conversationId` 传 null（拿被点名者的人设）；**全文件没有**任何 `UPDATE conversations SET agent_id` | 渲染层 ③；端到端 T10.0 / T10.12（真库 SELECT 前后对照） |
+| **决策2**（allow_with_owner）：点名轮**可发车**，但循环归会话主人 | `isTaskMode` 不再被点名短路；`loopAgentId` 取会话自己的 `agent_id`（回读 `conversations`）；发车时 `meta.mention.speakerAgentId = loop.agentId`，`kind/hits` 照旧带出去 | 渲染层 ④；端到端 T10.1–T10.13；变异 M8 |
+| 桌面兜底不许替「告知轮」发车 | `shouldFallbackLaunch` 只认服务端 `meta.mention.kind ∈ {busy, empty}`（R-A 与「只写了 `@名字`」那两轮服务端没派活、没调模型） | 渲染层 ①②；变异 M5 / M7 |
 | 界面看得出换了人 | 气泡名字牌（只在换人那一句上挂） | 渲染层 ⑤（接线断言） |
 
 ---
 
-## 3. 关键设计决定（**这几条请用户过一眼**，要改都是一行的事）
+## 3. 关键设计决定（前两条已由用户 2026-09-24 拍板；后四条仍**请用户过一眼**，要改都是一行的事）
 
-1. **`@` 是「这一轮换人说话」，不是「把会话转给别人」。**
+1. **`@` 是「这一轮换人说话」，不是「把会话转给别人」。** —— ★ 用户已拍板：**决策1 = per_round**
    `conversations.agent_id`（会话归属）**不动**：换人轮由被点名者开口并落 `speaker_agent_id`，
    下一轮不带 `@` 就回到会话原本那位。理由：改会话归属等于把用户和「小助」那条聊天悄悄变成别人的，
    那是另一种静默改派；而且任务态（`current_task` 等）挂在会话上，跟着换主人会串。
-   *（若用户要「@ 之后一直由它答」，改一行：换人轮顺手 `UPDATE conversations SET agent_id`。）*
-2. **换人轮不进工具循环（不发车）。** 工具循环认的是**会话自己的** `agent_id`、`wcId`、页面状态与循环名额，
-   让被点名者去接管别人正在跑的那张页才会出乱子。换人轮走聊天路径（自带 `web_search`），桌面侧兜底也不发车。
+   验收：端到端 T10.12 在发车前后各 SELECT 一次 `conversations.agent_id`，证明**连发车这件事也不是靠改归属实现的**。
+2. **点名轮照样能进工具循环，但循环归会话主人。** —— ★ 用户已拍板：**决策2 = allow_with_owner**
+   （这一条**推翻**了我第一版的「换人轮一律不发车」：那版把「谁答话」和「谁动手」绑成了一件事。）
+   落地口径是「答话」与「动手」分开：
+   · **动手**：`loopAgentId` 取的是**会话自己的** `agent_id`（决策1 说会话没被改过，所以就是原来那位），
+     `wcId`、页面状态、循环名额也都是它的 —— 被点名者**不接管别人的页**；
+   · **答话**：发车轮本来就不调聊天模型（只有一句固定开场白 + 循环步骤播报），所以这一轮开口的是跑循环那位，
+     `meta.mention.speakerAgentId` 跟着改成它 —— 否则 meta 说「研究员在答」、库里记的是小助，两边对不上账。
+     点名事实照旧带出去（`kind=switch`、`hits` 里还是被点名者），界面想说什么都说得了。
+   连带撤掉的：桌面那次**本地 `@` 解析**。决策2 之后「文本里有 `@`」不再是前端能改变结果的判据，
+   那次解析就成了死代码 —— 撤（连 `vite.config.ts` 的 `fs.allow` 一起回退），
+   解析器第 ⑧ 段反过来钉住「不许长回来」。桌面只从 shared 取**类型**。
+   **残留（需要用户拍一次文案/成本）**：发车轮里被点名者**一句话都不说**。
+   要让它在发车轮也说一句「这活我交给小助去跑」，得新增一句文案（或额外调一次模型）——
+   文案是用户的地盘、成本是用户的账，我没替它决定。
 3. **`blocked` 不算忙。** `resolveAgentStatus` 把「循环 paused / stopped / failed」都归到 `blocked`（那是**头像**语义：
    「这条循环需要你来看一眼」），它并不代表腾不出手。把 `blocked` 当忙的后果是
    「一个智能体只要停过一次循环，五分钟内就再也点不动它」—— 这条是端到端 T3.10 **打红之后**改的（见 §7.3）。
@@ -90,18 +109,18 @@
 
 | 层 | 脚本 | 命令 | 结果 |
 | --- | --- | --- | --- |
-| J1 解析器（两端同一份实现） | `scripts/verify/mention-parse.mts` | `npm run verify:mention:parse` | **PASS 41 / FAIL 0** |
+| J1 解析器（唯一实现 + 防漂移闸） | `scripts/verify/mention-parse.mts` | `npm run verify:mention:parse` | **PASS 43 / FAIL 0** |
 | J3 服务端决定层（R-A/R-B/R-C） | `scripts/verify/mention-decision.mts` | `npm run verify:mention:decision` | **PASS 41 / FAIL 0** |
-| J4 渲染层（闸门 + 接线） | `scripts/verify/mention-desktop.mts` | `npm run verify:mention:desktop` | **PASS 35 / FAIL 0** |
-| J5 真机端到端（真后端 + 真 PG + 桩模型） | `scripts/verify/mention-e2e.mjs` | `npm run verify:mention:e2e` | **PASS 67 / FAIL 0** |
+| J4 渲染层（闸门 + 接线 + 两项拍板的落点） | `scripts/verify/mention-desktop.mts` | `npm run verify:mention:desktop` | **PASS 35 / FAIL 0** |
+| J5 真机端到端（真后端 + 真 PG + 桩模型） | `scripts/verify/mention-e2e.mjs` | `npm run verify:mention:e2e` | **PASS 81 / FAIL 0** |
 
 ### 4.2 全量
 
 | 命令 | 结果 |
 | --- | --- |
-| `npm run verify`（主链，含 redact 57、mention 41+41+35、tools、r4、orch 全套、websearch、memory、persona、collab、batches、pglite 56） | **EXIT 0** |
+| `npm run verify`（主链，含 redact 57、mention 43+41+35、tools、r4、orch 全套、websearch、memory、persona、collab、batches、pglite 56） | **EXIT 0** |
 | `npm run typecheck`（shared + desktop + server 三个 workspace） | **EXIT 0** |
-| `VERIFY_DATABASE_URL=… npm run verify:db`（真库 checkpoint/board/task 加密 + pglite） | **EXIT 0**，PASS 行 171、FAIL 行 0 |
+| `VERIFY_DATABASE_URL=… npm run verify:db`（真库 checkpoint/board/task 加密 + pglite） | **EXIT 0**，PASS 行 175、FAIL 行 0（唯一一处 `FAIL` 字样是 `PASS 56 / FAIL 0` 那行汇总） |
 
 日志留在沙箱 `/home/user/verify-logs/`（工作区外，随沙箱回收）；关键数字与逐条输出已抄进本报告。
 
@@ -118,56 +137,83 @@ R-C 要证明的是「**模型实际收到的正文**里没有 `@名字`」。�
 
 ## 5. 端到端逐条取证（真库 `verifydb`，测试账号跑完整体删除）
 
-账号 `186****2567`（本次新建）；名单：小助 `#35`、研究员 `#36`、文案 `#37`、数据分析 `#38`；
-第二项目里另建「外协」`#40`。桩模型共收到 **9** 次请求（每一轮该调几次都对得上）。
+账号 `186****2567`（本次新建，跑完整体删除）；名单：小助 `#77`、研究员 `#78`、文案 `#79`、数据分析 `#80`；
+第二项目里另建「外协」`#82`。桩模型共收到 **9** 次请求（每一轮该调几次都对得上；T10 发车轮 0 次）。
 
 | 用例 | 发出去的话 | `meta.mention` | 桩模型**实际收到**的正文 | 库里落的发言人 |
 | --- | --- | --- | --- | --- |
-| T0 基线 | `你好，我们先随便聊聊` | `kind=none, hits=[], speakerAgentId=35` | `你好，我们先随便聊聊`（逐字相同） | `#35 小助`；user 行 speaker = 无 |
-| **T1 换人** | `@研究员 @文案 帮我看看这组数据` | `kind=switch, speakerAgentId=36, hits=[36 研究员, 37 文案]` | **`帮我看看这组数据`** | `#36 研究员`（上一句仍是 `#35 小助`）；user 行存**原文**含 `@` |
+| T0 基线 | `你好，我们先随便聊聊` | `kind=none, hits=[], speakerAgentId=77` | `你好，我们先随便聊聊`（逐字相同） | `#77 小助`；user 行 speaker = 无 |
+| **T1 换人** | `@研究员 @文案 帮我看看这组数据` | `kind=switch, speakerAgentId=78, hits=[78 研究员, 79 文案]` | **`帮我看看这组数据`** | `#78 研究员`（上一句仍是 `#77 小助`）；user 行存**原文**含 `@` |
 | T1.7 人设 | 同上 | — | 系统提示词首句 = `你是用户桌面工作台里的一个 AI 智能体（…先用「研究员」）`，**不含**「你是「小助」」 | — |
-| **T2 R-B** | `@小助 你觉得呢`（当前发言人就是小助） | `kind=self, speakerAgentId=35, hits=[35]` | `你觉得呢` | `#35 小助`（没重路由、没报错，HTTP 200） |
-| **T3 R-A** | `@研究员 再看一眼那份数据`（研究员正在跑循环） | `kind=busy, speakerAgentId=35`（**不是 36**），`notice` 与流里正文逐字一致 | **桩请求数 = 0**（没冒充模型说话） | `#35 小助` 说的这句告知 |
+| **T2 R-B** | `@小助 你觉得呢`（当前发言人就是小助） | `kind=self, speakerAgentId=77, hits=[77]` | `你觉得呢` | `#77 小助`（没重路由、没报错，HTTP 200） |
+| **T3 R-A** | `@研究员 再看一眼那份数据`（研究员正在跑循环） | `kind=busy, speakerAgentId=77`（**不是 78**），`notice` 与流里正文逐字一致 | **桩请求数 = 0**（没冒充模型说话） | `#77 小助` 说的这句告知 |
 | T3 告知原文 | — | — | — | 「你点的 研究员 此刻正在处理上一轮、还没腾出手（思考中）。我没有把这轮偷偷改派给它，也没有替你另换一个人。你可以：等它忙完再 @ 它一次；或者 @ 别的智能体；或者直接说你要什么，这轮就按现在的会话继续。」 |
-| T3.10 反例 | 循环 `stop` 之后同一句话 | `kind=switch, speakerAgentId=36`，桩 1 次 | — | `#36 研究员` |
-| **T4 R-C 边界** | `@数据分析`（光秃秃一个点名） | `kind=empty, speakerAgentId=38` | **桩请求数 = 0** | `#38 数据分析` 自己问「你要我做什么」 |
-| **T5 拍板1** | `@ 研究员 你好`（`@` 后有空格） | `kind=none, hits=[], speakerAgentId=35` | `@ 研究员 你好`（**一个字没动**） | `#35 小助` |
-| T6 邮箱 | `把结论发到 foo@研究员.com 谢谢` | `kind=none, hits=[]` | 原文 | `#35 小助` |
-| **T7 跨项目** | 当前项目切到项目2 后 `@小助 你在吗` | `kind=none, unknown=["小助"]` | `@小助 你在吗` | `#35 小助`（会话本来的主人，没换人） |
-| T7.5 | 切回项目1 后 `@外协 来一下` | `kind=none, unknown=["外协"]` | — | `#35 小助` |
-| T7.7 反例 | 切回项目1 后 `@文案 换你来看` | `kind=switch, speakerAgentId=37` | — | `#37 文案` |
+| T3.10 反例 | 循环 `stop` 之后同一句话 | `kind=switch, speakerAgentId=78`，桩 1 次 | — | `#78 研究员` |
+| **T4 R-C 边界** | `@数据分析`（光秃秃一个点名） | `kind=empty, speakerAgentId=80` | **桩请求数 = 0** | `#80 数据分析` 自己问「你要我做什么」 |
+| **T5 拍板1** | `@ 研究员 你好`（`@` 后有空格） | `kind=none, hits=[], speakerAgentId=77` | `@ 研究员 你好`（**一个字没动**） | `#77 小助` |
+| T6 邮箱 | `把结论发到 foo@研究员.com 谢谢` | `kind=none, hits=[]` | 原文 | `#77 小助` |
+| **T7 跨项目** | 当前项目切到项目2 后 `@小助 你在吗` | `kind=none, unknown=["小助"]` | `@小助 你在吗` | `#77 小助`（会话本来的主人，没换人） |
+| T7.5 | 切回项目1 后 `@外协 来一下` | `kind=none, unknown=["外协"]` | — | `#77 小助` |
+| T7.7 反例 | 切回项目1 后 `@文案 换你来看` | `kind=switch, speakerAgentId=79` | — | `#79 文案` |
 | **T8 老数据** | 把一条助手行的 `speaker_agent_id` UPDATE 成 NULL | — | — | 历史里这一行 `speaker === undefined`（不是 null、不是 0、不是当前智能体），正文一个字没变 |
+| **T10 决策2** | `@研究员 打开百度搜一下今天的新闻`（`taskMode:true` + `wcId` + `pageUrl`） | `kind=switch, hits=[78 研究员]`，但 **`speakerAgentId=77`**（改成跑循环那位） | **桩请求数 = 0**（发车轮不调聊天模型） | `#77 小助`（那句开场白）；user 行存原文含 `@研究员` |
 
 ### 5.1 库里这条会话的完整台账（T9，真库 SELECT）
 
 ```
-id  role       speaker_agent_id  名字
-67  user       NULL              —
-68  assistant  35                小助        ← T0 基线
-69  user       NULL              —
-70  assistant  36                研究员      ← T1 @点名换人
-71  user       NULL              —
-72  assistant  35                小助        ← T2 R-B（@ 自己 = 没换人）
-73  user       NULL              —
-74  assistant  35                小助        ← T3 R-A 告知（**不是**正忙的研究员开口）
-75  user       NULL              —
-76  assistant  36                研究员      ← T3.10 循环停掉后换人成功
-77  user       NULL              —
-78  assistant  38                数据分析    ← T4 R-C 边界反问（被点名者自己问）
-79  user       NULL              —
-80  assistant  35                小助        ← T5 拍板1（@ 后有空格，没点名）
-81  user       NULL              —
-82  assistant  35                小助        ← T6 邮箱里的 @
-84  user       NULL              —
-85  assistant  35                小助        ← T7.1 跨项目点不到
-86  user       NULL              —
-87  assistant  35                小助        ← T7.5 跨项目点不到
-88  user       NULL              —
-89  assistant  NULL              —           ← T7.7 那句（T8 把它改成「老数据」了）
+id   role       speaker_agent_id  名字
+139  user       NULL              —
+140  assistant  77                小助        ← T0 基线
+141  user       NULL              —
+142  assistant  78                研究员      ← T1 @点名换人
+143  user       NULL              —
+144  assistant  77                小助        ← T2 R-B（@ 自己 = 没换人）
+145  user       NULL              —
+146  assistant  77                小助        ← T3 R-A 告知（**不是**正忙的研究员开口）
+147  user       NULL              —
+148  assistant  78                研究员      ← T3.10 循环停掉后换人成功
+149  user       NULL              —
+150  assistant  80                数据分析    ← T4 R-C 边界反问（被点名者自己问）
+151  user       NULL              —
+152  assistant  77                小助        ← T5 拍板1（@ 后有空格，没点名）
+153  user       NULL              —
+154  assistant  77                小助        ← T6 邮箱里的 @
+156  user       NULL              —
+157  assistant  77                小助        ← T7.1 跨项目点不到
+158  user       NULL              —
+159  assistant  77                小助        ← T7.5 跨项目点不到
+160  user       NULL              —
+161  assistant  NULL              —           ← T7.7 那句（T8 把它改成「老数据」了）
 ```
 
 三条收账断言全过：**所有 user 行 `speaker_agent_id` 都是 NULL**；**至少出现过两个不同发言人**
 （换人这件事在库里看得见，不是只在界面上画一下）；**没有任何一行指向名单外的智能体**。
+
+### 5.2 T10：两项拍板在真链路上的对账（`docs/acceptance/mention/mention-e2e.json` 原文）
+
+```json
+{
+  "message": "@研究员 打开百度搜一下今天的新闻",
+  "mention": { "speakerAgentId": 77, "speakerName": null, "kind": "switch",
+               "hits": [{ "agentId": 78, "name": "研究员" }] },
+  "loopEvent": { "loopId": "loop_muf1qibw_2", "agentId": 77, "pageUrl": "https://www.baidu.com",
+                 "wcId": 987650101 },
+  "loopInfo":  { "loopId": "loop_muf1qibw_2", "agentId": 77, "wcId": 987650101, "status": "running" },
+  "metaAgentId": 77,
+  "conversationOwner": { "before": 77, "after": 77 },
+  "openingSpeaker": { "id": 77, "name": "小助" },
+  "storedUserText": "@研究员 打开百度搜一下今天的新闻",
+  "stubCalls": 0,
+  "stopped": { "ok": true, "stopped": 1 }
+}
+```
+
+逐条读法：**点了研究员（`kind=switch`、`hits` 里是它），车却由会话主人小助开**（`loopEvent.agentId=77`，
+并且不靠 SSE 那一帧自证 —— 另打 `/agent/loop/info` 复核同样是 77 + 那张页 `wcId=987650101`）；
+`meta.mention.speakerAgentId` 与库里那句开场白的 `speaker_agent_id` **同为 77**（对得上账，没有「meta 说 A、库里记 B」）；
+`conversationOwner.before = after = 77`（**决策1**：连发车都不是靠改会话归属实现的）；
+user 行存原文（含 `@研究员`），发车轮桩请求 0 次（没被点名功能改坏「发车轮不调聊天模型」这条老规矩）；
+跑完 `POST /agent/loop/stop` 把这条循环停掉（`stopped=1`，不留活循环）。
 
 ---
 
@@ -177,24 +223,35 @@ id  role       speaker_agent_id  名字
 纪律：注入期间**只改产品代码，绝不动断言**；每处跑完立刻还原，用 md5 逐文件核对，
 最后再比「注入前后 `git status --porcelain` 是否逐字节一致」（本批改动静在，所以「树干净」不是正确的不变量）。
 
+下表是**决策2 落地之后**重跑的一轮（8 处注入，`python3 scripts/verify/mention-revert-proof.py`，全套 35s）：
+
 | 注入 | 改坏了什么 | 跑哪条验收 | 结果 |
 | --- | --- | --- | --- |
-| **M1** | `parseMention` 里把命中列表清空 → 永远「谁都点不到」 | `verify:mention:parse` | **RED**：J1 从 41/0 变成 **PASS 23 / FAIL 18** |
+| **M1** | `parseMention` 里把命中列表清空 → 永远「谁都点不到」 | `verify:mention:parse` | **RED**：J1 从 43/0 变成 **PASS 25 / FAIL 18** |
 | **M2** | 助手落库不再写 `speaker_agent_id` | `mention-e2e --only=T1,T9` | **RED**：`PASS 12 / FAIL 4`（T1.9/T1.10/T1.12 与 T9.2「至少两个不同发言人」全红，T9.2 实测 `[null]`） |
 | **M3** | `BUSY_STATUSES` 清空 → R-A 形同废除（正忙的也被硬派活） | `verify:mention:decision` | **RED**：J3 从 41/0 变成 **PASS 32 / FAIL 9** |
 | **M4** | `mentionText = message` → R-C 不剥 `@名字`，原文直接喂模型 | `mention-e2e --only=T1,T2` | **RED**：`PASS 16 / FAIL 2`（T1.6/T2.4：桩截到的正文里带着 `@研究员 @文案`） |
-| **M5** | 桌面兜底发车摘掉本地那道闸（只信服务端 meta） | `verify:mention:desktop` | **RED**：J4 从 35/0 变成 **PASS 34 / FAIL 1**（正是「流被掐、meta 一个都没回来」那条） |
+| **M5** | 桌面闸门摘掉「告知轮不发车」那半条（退回第 21 步老兜底） | `verify:mention:desktop` | **RED**：J4 从 35/0 变成 **PASS 33 / FAIL 2**（正是 `kind=busy` 与 `kind=empty` 那两条 —— 用户只写了句「@某人」，浏览器却动了） |
 | **M6** | 闲聊轮记忆检索不传 `convId` | `mem-merge-batch2.mjs` | **RED**：证明 §7.4 里被我升级过的那条老断言**没有变松** |
+| **M7** ★新 | **决策2 倒退**：桌面把 `switch`/`self` 也塞进 `NOTICE_ROUND`（旧口径「点名轮不发车」） | `verify:mention:desktop` | **RED**：**PASS 33 / FAIL 2**（§① 里「switch 照样发车」与「self 照旧发车」两条） |
+| **M8** ★新 | **决策2 倒退**：服务端把 `loopAgentId` 换成被点名者（让它去接管会话主人那张页） | `mention-e2e --only=T10` | **RED**：**PASS 10 / FAIL 5**（T10.3/T10.4/T10.5/T10.8/T10.9 —— `loop.agentId`、`meta.agentId`、`meta.mention.speaker`、`/agent/loop/info`、库里开场白的发言人**五处同时**指向研究员） |
+
+M8 是本批最有价值的一条反证：它证明「循环归会话主人」不是一句注释，而是**五个不同来源**
+（SSE 帧、meta、独立只读接口、真库 SELECT、以及它们之间的一致性）同时钉住的。
 
 还原核对（注入前 → 注入后）：
 
 ```
 parser    87931594f5f6bdc5a51fd81de0b13ac5  一致
-chat      91733ee1ff1b87a93c5bdc6bcbf2588d  一致
+chat      2baec893d65a8b3e0486cfc597143770  一致
 decision  39873dbc09a0ffd342887b9af39c0117  一致
-gate      d0a9c9a02b2f3071e62d3af0cd9f832a  一致
+gate      fcdd60ae77a1bedb8dbc209ec5843d18  一致
 git status（这四个文件）与注入前：逐字节一致
 ```
+
+★ 取证 JSON 的纪律：变异脚本会跑端到端、从而**覆盖** `docs/acceptance/mention/mention-e2e.json`。
+所以本轮的顺序是「全套反证 → 备份/还原干净取证（md5 复核一致）→ 再写报告」，
+§5/§5.2 里引的那份 JSON 是**没被注入污染**的那一次（`b6c70b3ad760fcfc164a0b066648c5c4`）。
 
 ---
 
@@ -271,13 +328,13 @@ node /home/user/pgverify/start-pg.mjs          # PG 17.10 @ 127.0.0.1:55432，�
 #    DATABASE_URL / JWT_SECRET(≥16) / DATA_KEY(64hex) / PHONE_PEPPER(64hex，≠DATA_KEY) / SMS_MOCK=1
 
 # 2) 三层快验收（不需要库，已挂进主链）
-npm run verify:mention            # parse 41 + decision 41 + desktop 35
+npm run verify:mention            # parse 43 + decision 41 + desktop 35
 
 # 3) 真机端到端（会自己 build shared+server、起桩模型 8898、起后端 8794、建号跑完删号）
-npm run verify:mention:e2e
+npm run verify:mention:e2e        # 81 项，含 T10（决策1/决策2 的真链路对账）
 #    或指定库：DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/verifydb node scripts/verify/mention-e2e.mjs
 
-# 4) 变异反证（6 处，跑完自动还原 + md5 核对）
+# 4) 变异反证（8 处，跑完自动还原 + md5 核对；M7/M8 是「把决策2 改回旧口径」的倒退注入）
 python3 scripts/verify/mention-revert-proof.py
 
 # 5) 全量
@@ -302,11 +359,18 @@ VERIFY_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/verifydb npm ru
 3. **`@` 点名与「对话式建智能体」的优先级**：点名解析在前，
    所以 `@研究员 建一个销售助手` 会先按点名把这一轮交给研究员（若研究员正忙则先回 R-A 告知），
    建智能体的意图检测照旧在其后运行 —— 用户原始需求里那条「`@研究员 建一个销售助手` 要交给研究员」满足。
-4. **主进程不解析点名**（Electron 主进程运行时不得 import shared：tsc 直出、打包后没有 `node_modules`，
-   启动即崩）。主进程要知道「这轮点了谁」只能读服务端 SSE 的 `meta.mention`。
-   J1 的第 ⑧ 段防漂移闸（全仓 `parseMention` 只许有一处定义）继续守着这条。
+4. **主进程不解析点名，渲染层也不解析了**（Electron 主进程运行时不得 import shared：tsc 直出、打包后没有 `node_modules`，
+   启动即崩；渲染层则是因为**决策2** 之后本地解析已无用途 —— 点名轮允许发车，「文本里有 `@`」不再是前端能改结果的判据）。
+   两端要知道「这轮点了谁」都只读服务端 SSE 的 `meta.mention`；桌面只从 shared 取**类型**。
+   J1 的第 ⑧ 段防漂移闸现在守两件事：全仓 `parseMention` 只许有一处定义；桌面不许再调它（也不许再留 `fs.allow`）。
 5. **`packages/shared/dist` 仍是「半份跟踪」**（§7.5）：本批用第 ⑩ 段闸挡住了「新增文件漏进库」，
    但没把 dist 从版本控制里摘出去（那要动打包流程与既有 index.js/tools.js，属另一批的活）。
    长期正解：`git rm --cached packages/shared/dist -r` + 让所有入口都先 build shared。
 6. **老数据不回填 `speaker_agent_id`**（决定 5）。若将来要回填，唯一诚实的依据是 `conversations.agent_id`，
    而它只代表「会话归属」，不代表每一句是谁说的 —— 回填等于造证据，所以不做。
+7. ★ **决策2 的残留：发车轮里被点名者一句话都不说。** 按拍板，「@某人 + 页面任务」这一轮**会发车**，
+   但车归会话主人，开口的是跑循环那位（一句固定开场白 + 之后的步骤播报），被点名者**不参与这一轮**。
+   `meta.mention` 里点名事实还在（`kind=switch`、`hits` 是被点名者），所以界面**能**提示
+   「这轮的活由小助在跑（你点的研究员没接手页面）」—— 但那句话是**文案**，我不替你写死在产品里。
+   要让它变成产品行为，两条路等你拍：① 加一句固定文案（零成本，措辞归你）；
+   ② 让被点名者真说一句（要额外调一次模型，成本与延迟都算你的账）。**当前实现选的是「都不做，只把事实交回界面」。**

@@ -22,7 +22,7 @@
 | 流式聊天 | `routes/chat.ts`、`llm.ts` | SSE 流式；模型调用统一出口 `llm.ts`（计数进 `/health`，证明空闲时不调模型） |
 | 浏览器工具循环 | `toolLoop.ts`、`routes/loop.ts`、`electron/driver.ts` | 脑在服务端，手在桌面：`open_url / read_page / click / type / scroll / stop`，由 Electron 主进程通过 CDP 驾驶内嵌 `<webview>`。敏感字段（密码 / 验证码 / 支付 / 证件）不代填 |
 | 联网搜索 | `search/` | Tavily；`web_search` 定义只有一个来源（`search/toolDef.ts`），聊天与编排共用 |
-| `@点名` 中途拉人 | `packages/shared/src/mention.ts`（唯一解析实现）、`orchestrator/mention.ts`、`routes/chat.ts` | 会话打到一半 `@研究员 帮我看这组数据`，这一轮就由研究员开口（用它的人设 / 项目记忆 / 技能，前文照旧全给）；每句助手话都记着**是谁说的**（`messages.speaker_agent_id`），历史与 SSE `meta` 都带得回界面。`@` 必须紧跟名字（`@ 研究员` 不算）、邮箱里的 `@` 不算、别项目的人点不到、点了多个人只有第一个是发言人；被点名者**正忙**时不静默改派，而是回一句「它在做什么 + 要不要等 / 换人」；`@` 的就是当前发言人时按没写 `@` 处理；交给模型的正文剥掉 `@名字`（库里存原文）。点名轮不进浏览器工具循环 |
+| `@点名` 中途拉人 | `packages/shared/src/mention.ts`（唯一解析实现）、`orchestrator/mention.ts`、`routes/chat.ts` | 会话打到一半 `@研究员 帮我看这组数据`，这一轮就由研究员开口（用它的人设 / 项目记忆 / 技能，前文照旧全给）；每句助手话都记着**是谁说的**（`messages.speaker_agent_id`），历史与 SSE `meta` 都带得回界面。`@` 必须紧跟名字（`@ 研究员` 不算）、邮箱里的 `@` 不算、别项目的人点不到、点了多个人只有第一个是发言人；被点名者**正忙**时不静默改派，而是回一句「它在做什么 + 要不要等 / 换人」；`@` 的就是当前发言人时按没写 `@` 处理；交给模型的正文剥掉 `@名字`（库里存原文）。`@` 只换**这一轮**谁开口，会话归属不动（下一轮不带 `@` 就回到原来那位）；点名轮照样能进浏览器工具循环，但**循环归会话主人**（`wcId` / 页面状态 / 循环名额都不换人，被点名者不接管别人的页），发车轮由跑循环那位开口，`meta.mention` 仍带着「你点的是谁」 |
 | 多智能体编排 | `orchestrator/` | `spawn_workers`（临时工并行）、`delegate`（委派同事，默认 10 分钟熔断）、总协调路由（Chief-of-Staff）；协同过程以折叠摘要写进对话流 |
 | 结构化交接 | `orchestrator/handoff.ts` | 每次委派一个 `handoffs/<id>.md`（目标 / 输入 / 产出要求 / 审批边界），频道消息只传 `handoff://` 路径；`board.md` 由**落库锁** `board_locks` 串行化 |
 | 记忆 | `routes/memories.ts`、`memory*.ts` | 单一 `memories` 表，账号 / 智能体 / 会话三级作用域；确认后才注入；敏感内容整条丢弃。检索是**模糊字面匹配**（见「已知缺口」） |
@@ -151,6 +151,9 @@ npm run dev                               # 桌面端（Vite + Electron）
   气泡上的「发言人名字牌」只给了最小可读样式（`msg__speaker`），像素级版式等设计稿。
   批次 J 之前入库的老消息 `speaker_agent_id` 是 NULL，历史里就回 `undefined`、界面不挂名字牌 —— **不回填、不猜**
   （唯一能拿来回填的 `conversations.agent_id` 只代表会话归属，不代表每一句是谁说的，拿它填等于造证据）。
+  「@某人 + 页面任务」这种轮**会发车**，但按用户拍板（决策2 = allow_with_owner）循环归**会话主人**，
+  所以这一轮开口的是跑循环那位、被点名者一句话不说；`meta.mention` 里点名事实还在（界面**能**提示「这活由谁在跑」），
+  但那句提示是文案 —— 要不要加、加哪句，等用户拍（详见验收报告 §9.7）。
 - **电脑三级可见度（Status / Preview / Takeover）只做了后端和组件**：`agents.computer_visibility` 字段和 `GET/POST /agents/:id/visibility` 接口已可用；`ComputerVisibility.tsx` 组件**还没挂进界面**，而且它请求的是相对路径 `/api/...`，与桌面端其余请求使用的 `API_BASE` 不一致 —— 前端重做时一起接。
 - **记忆 / 路由是模糊字面匹配，不是语义检索**：分词 + 加权 + Jaccard，零字面重叠的同义句（「爱喝拿铁」vs「喜欢喝咖啡」）照样检索不到。真语义要另接 embedding 模型（DeepSeek 没有 embedding API），调用点只有 `memories.ts` 的 `wordHits` 与 `chiefOfStaff.ts` 的 `routeByFuzzy`。
 - **模型路由目前只按任务类型选**：闲聊里「简单 / 复杂」的判断只写进日志，两者选的是同一个模型配置；不配 `DEEPSEEK_MODEL_*` 时所有任务都走 `DEEPSEEK_MODEL`。

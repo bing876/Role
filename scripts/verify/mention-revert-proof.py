@@ -16,7 +16,9 @@
   M2 助手消息不再写 speaker_agent_id     → 「这句话是谁说的」丢了，端到端 T1/T9 必须红
   M3 R-A 的忙碌集合清空（静默改派）      → 正忙的智能体被硬派活，J3/J5 必须红
   M4 R-C 不剥 @名字（原文直接给模型）    → 模型看到 @名字，端到端 T1.6 必须红
-  M5 桌面兜底发车不看本地解析            → 流被掐时误发车，J4 必须红
+  M5 桌面闸门不再认「告知轮」            → busy/empty 轮被替用户发车，J4 必须红
+  M7 桌面闸门把 switch 也拦掉（决策2 倒退）→ 点名轮又不发车了，J4 必须红
+  M8 服务端把循环主人换成被点名者（决策2 倒退）→ 被点名者接管别人的页，端到端 T10 必须红
   M6 闲聊轮记忆检索不传 convId           → 证明「被我升级过的老断言」没改松（mem-merge-batch2 必须红）
 
 ★ 纪律：注入期间**只改产品代码，绝不动断言**（改断言让绿的就不是反证，是自欺）。
@@ -128,13 +130,38 @@ const BUSY_STATUSES: ReadonlySet<AvatarStatus> = new Set([]);""",
     },
     {
         "id": "M5",
-        "why": "桌面兜底发车不再看本地解析——流被掐（拿不到 meta）时又会替用户误发车",
+        "why": "桌面闸门不再认「告知轮」（R-A 忙 / 整条只写了 @名字）——这两种轮服务端只回一句告知、没派活，被兜底发出去就是替用户操作浏览器",
         "file": FILES["gate"],
-        "old": """  return Boolean(input.pendingDrive) && !input.sawLoop && !serverRound && !input.local.round;""",
-        "new": """  // 【反证注入 M5】把本地那道闸摘掉，只信服务端 meta
-  return Boolean(input.pendingDrive) && !input.sawLoop && !serverRound;""",
+        "old": """  return (
+    Boolean(input.pendingDrive) && !input.sawLoop && !NOTICE_ROUND.has(String(input.serverMentionKind ?? ''))
+  );""",
+        "new": """  // 【反证注入 M5】「告知轮不发车」这半条摘掉，退回第 21 步的老兜底
+  return Boolean(input.pendingDrive) && !input.sawLoop;""",
         "run": "npm run -s verify:mention:desktop",
         "needs_build": False,
+    },
+    {
+        # ★ 用户 2026-09-24 拍板（决策2 = allow_with_owner）：点名轮**允许**发车，循环归会话主人。
+        #   这条注入就是把那个拍板改回旧口径（switch 也拦掉）—— 必须红，否则 §① 那条断言是摆设。
+        "id": "M7",
+        "why": "决策2 倒退：桌面又把 switch/self 当告知轮拦掉——用户「@某人 + 页面任务」那一轮会凭空不发车",
+        "file": FILES["gate"],
+        "old": """const NOTICE_ROUND = new Set(['busy', 'empty']);""",
+        "new": """const NOTICE_ROUND = new Set(['busy', 'empty', 'switch', 'self']); // 【反证注入 M7】""",
+        "run": "npm run -s verify:mention:desktop",
+        "needs_build": False,
+    },
+    {
+        # ★ 决策2 的另一半：被点名者**不接管别人的页**。把循环主人换成被点名者，
+        #   就等于让它去开别人的 wcId、占别人的循环名额 —— 端到端 T10 必须红。
+        "id": "M8",
+        "why": "决策2 倒退：服务端把循环主人换成被点名者（去接管会话主人那张页）",
+        "file": FILES["chat"],
+        "old": """        const loopAgentId = Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId;""",
+        "new": """        // 【反证注入 M8】让被点名者接管这条循环
+        const loopAgentId = mention.kind === 'switch' ? mention.agentId : (Number.isInteger(convAgentId) && convAgentId > 0 ? convAgentId : agentId);""",
+        "run": "node scripts/verify/mention-e2e.mjs --only=T10",
+        "needs_build": True,
     },
 ]
 

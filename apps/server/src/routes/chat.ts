@@ -676,18 +676,21 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       const hasActivePage = Boolean(taskWcId || openedUrl || (typeof body?.pageUrl === 'string' && body.pageUrl.trim()));
       const isExplicitTask = body?.taskMode === true;
       /**
-       * 批次 J：**@点名换人的那一轮不发车**（不进工具循环）。
+       * 批次 J（**用户 2026-09-24 拍板：决策2 = allow_with_owner**）：
+       * 点名换人的那一轮**照样可以发车**，但循环**仍归会话主人**。
        *
-       * 理由不是「怕」，是两条路认的人不一样：工具循环的 agentId 取的是**会话自己的 agent_id**
-       * （下面 loopAgentId 就是这么算的），而点名换人换的是**这一轮谁开口**。真让被点名者去接管
-       * 别人正在跑的那张页（wcId、页面状态、循环名额都是原主人的），才会出乱子。
-       * 所以换人轮一律走聊天（自带 web_search，能力足够答话），桌面侧也不再做兜底发车（见 App.tsx）。
+       * 口径是「谁答话」与「谁动手」分开：
+       * · 动手：下面 loopAgentId 取的是**会话自己的 agent_id**（决策1 拍板 @ 不改会话归属，
+       *   所以它就是原来那位），wcId / 页面状态 / 循环名额也都是它的 —— 被点名者**不接管别人的页**。
+       * · 答话：发车轮本来就不调聊天模型（只有一句固定开场白 + 循环步骤播报），
+       *   所以这一轮开口的是跑循环那位，`meta.mention.speakerAgentId` 也跟着改成它
+       *   （否则 meta 说「研究员在答」、库里记的却是小助，两边对不上账）。
+       *   点名这件事本身照样进 meta（kind/hits 都在），界面想说什么都说得了。
        *
-       * R-B（@ 的就是当前发言人）不算换人轮 —— 按「视作没写 @」处理，发车判定照旧。
-       * 判定用的正文是剥掉 @名字 之后的 mentionText（@名字 不是任务内容，R-C）。
+       * 判定用的正文是剥掉 @名字 之后的 mentionText（@名字 只是点名，不是任务内容，R-C）。
        */
       const mentionSwitchRound = mention.kind === 'switch';
-      const isTaskMode = !mentionSwitchRound && (isExplicitTask || shouldEnterTaskMode(mentionText, hasActivePage));
+      const isTaskMode = isExplicitTask || shouldEnterTaskMode(mentionText, hasActivePage);
 
       /**
        * 第 21 步 · 任务轮：**这一轮不进聊天模型，交给工具循环**。
@@ -769,6 +772,16 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           'x-accel-buffering': 'no',
           'access-control-allow-origin': req.headers.origin ?? '*',
         });
+        /**
+         * 决策2 的对账：发车轮的发言人 = 跑循环那位（loop.agentId 来自会话自己的 agent_id）。
+         * 换人轮走到这里时，被点名者**不动手也不开口**（它没接管别人的页），
+         * 所以 meta 里不能再挂它的号 —— 挂了就与库里那条开场白的 speaker_agent_id 对不上。
+         * 点名事实照旧带出去（kind/hits/unknown），界面要提示「这轮的活由谁在跑」随时能提示。
+         */
+        if (mentionSwitchRound) {
+          mentionMeta.speakerAgentId = loop.agentId ?? null;
+          mentionMeta.speakerName = null;
+        }
         sse(res, 'meta', { conversationId: convId, userMessageId, agentId: loop.agentId, mention: mentionMeta });
         sse(res, 'loop', { loopId: loop.id, maxSteps: loop.maxSteps, agentId: loop.agentId, pageUrl: pageUrl || openedUrl, wcId });
         sse(res, null, { delta: opening });
