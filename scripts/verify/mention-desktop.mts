@@ -2,7 +2,7 @@
  * 批次 J · J4 | 渲染进程这一侧：@点名 与「兜底发车」闸门的验收
  * ===========================================================
  *
- * 验的是生产代码本体：`apps/desktop/src/mentionGate.ts`（App.tsx 真正调用的那道闸），
+ * 验的是生产代码本体：`apps/desktop/src/mentionGate.ts`（桌面真正调用的那道闸），
  * 外加**接线断言** —— 证明 App.tsx 确实调了它，并把两项拍板（决策1 per_round / 决策2 allow_with_owner）
  * 在服务端与桌面的落点一起钉住（口径被人改回去时这里会红）。
  *
@@ -98,39 +98,47 @@ log('--- ① 兜底发车闸门：决策2 = allow_with_owner（点名轮**允许
 
 // ------------------------------------------------------------------ ② 闸门接线（防「功能存在但没接上」）
 log('');
-log('--- ② 接线：闸门真的接在 App.tsx 那条 launch() 上，且桌面不再自己解析 @ ---');
+log('--- ② 接线：闸门真的接在那条兜底 launch() 上（现住 features/chat），且桌面不再自己解析 @ ---');
 {
   const app = read('apps/desktop/src/App.tsx');
   const gate = read('apps/desktop/src/mentionGate.ts');
+  /**
+   * ★ 2026-09-25（片 7b）：这些接线**跟着代码走**。
+   *   逻辑抽离把「兜底发车 / 发言人裁决」那一侧搬进了 `features/chat/useChat.ts`，
+   *   所以探针改为在「App.tsx（组合层）+ features/chat（发送那一侧）」里找 ——
+   *   断言的含义一字未改（这条接线在桌面上确实存在、且规则不许散写）。
+   */
+  const chatSrc = read('apps/desktop/src/features/chat/useChat.ts');
+  const desktop = app + '\n' + chatSrc;
 
   check('App.tsx 从 ./mentionGate 引了 shouldFallbackLaunch', () => {
     assert.ok(/from '\.\/mentionGate'/.test(app), '没有从 ./mentionGate 引入');
     assert.ok(/shouldFallbackLaunch/.test(app));
   });
   check('App.tsx 里那条兜底 launch() 确实包在 shouldFallbackLaunch(...) 的条件里', () => {
-    const m = /shouldFallbackLaunch\(\{[\s\S]{0,400}?\}\)\s*\)\s*\n?\s*launch\(\);/.exec(app);
+    const m = /shouldFallbackLaunch\(\{[\s\S]{0,400}?\}\)\s*\)\s*\n?\s*launch\(\);/.exec(desktop);
     assert.ok(m, '兜底 launch() 没有走 shouldFallbackLaunch —— 闸门写了但没接上');
   });
   check('App.tsx 把服务端 meta.mention.kind 传进了闸门（serverMentionKind）', () => {
-    assert.ok(/serverMentionKind:\s*sawMention\?\.kind/.test(app));
+    assert.ok(/serverMentionKind:\s*sawMention\?\.kind/.test(desktop));
   });
   check('★决策2 的死代码不许长回来：桌面**任何**源码里都不许再调 parseMention / 传 local', () => {
     // 只查「真的引入 / 真的调用」，不查注释里提到它的名字（注释里写一句 parseMention 不算抄一份实现）
-    for (const [name, src] of [['App.tsx', app], ['mentionGate.ts', gate]] as const) {
+    for (const [name, src] of [['App.tsx', app], ['mentionGate.ts', gate], ['features/chat/useChat.ts', chatSrc]] as const) {
       assert.ok(!/import\s*\{[^}]*\bparseMention\b[^}]*\}\s*from/.test(src), name + ' 自己 import 了 parseMention');
       assert.ok(!/\bparseMention\s*\(/.test(src), name + ' 里调了 parseMention —— 决策2 之后本地解析已无用途');
       assert.ok(!/parseLocalMention|mentionRosterOf/.test(src), name + ' 里还留着本地解析那两个函数');
     }
-    assert.ok(!/local:\s*localMention/.test(app), 'App.tsx 还在往闸门传 local');
+    assert.ok(!/local:\s*localMention/.test(desktop), '桌面还在往闸门传 local');
   });
   check('桌面运行时不再跨 root 引 shared 源码（只从包里取**类型**），vite 的 fs.allow 也就不该留着', () => {
     assert.ok(!/from ['"][^'"]*shared\/src\//.test(app) && !/from ['"][^'"]*shared\/src\//.test(gate), '还有指向 shared/src 的 import');
     assert.ok(!/fs:\s*\{\s*allow/.test(read('apps/desktop/vite.config.ts')), 'vite.config.ts 里还有 fs.allow（多余的放权）');
-    assert.ok(/import type[^;]*ChatSpeaker|ChatSpeaker/.test(app), '气泡要用的 ChatSpeaker 类型应来自 shared');
+    assert.ok(/import type[^;]*ChatSpeaker|ChatSpeaker/.test(desktop), '气泡要用的 ChatSpeaker 类型应来自 shared');
   });
   check('闸门的判据写在 mentionGate 里（NOTICE_ROUND = busy/empty），不散在 App.tsx', () => {
     assert.ok(/NOTICE_ROUND/.test(gate) && /'busy'/.test(gate) && /'empty'/.test(gate));
-    assert.ok(!/NOTICE_ROUND/.test(app), '规则漏进组件里了');
+    assert.ok(!/NOTICE_ROUND/.test(desktop), '规则漏进组件里了');
   });
 }
 
@@ -195,16 +203,19 @@ log('');
 log('--- ⑤ 接线：气泡上的「这句话是谁说的」---');
 {
   const app = read('apps/desktop/src/App.tsx');
+  /** ★ 同 ②：发言人这一侧的「类型 / 历史映射 / 裁决」已随 `sendChat` 搬进 features/chat */
+  const chatSrc = read('apps/desktop/src/features/chat/useChat.ts');
+  const data = app + '\n' + chatSrc;
 
   check('Message 类型带 speaker?: ChatSpeaker（前端消息模型里有发言人这一格）', () => {
-    assert.ok(/speaker\?:\s*ChatSpeaker;/.test(app));
+    assert.ok(/speaker\?:\s*ChatSpeaker;/.test(data));
   });
   check('历史映射把服务端的 speaker 带进来（speaker: m.speaker）', () => {
-    assert.ok(/speaker:\s*m\.speaker/.test(app), '/chat/history 的 speaker 没有落到前端消息上');
+    assert.ok(/speaker:\s*m\.speaker/.test(data), '/chat/history 的 speaker 没有落到前端消息上');
   });
   check('流式结束时按 meta.mention 的裁决给这条气泡挂发言人', () => {
-    assert.ok(/sawMention\.speakerAgentId/.test(app));
-    assert.ok(/speaker:\s*spokenBy/.test(app));
+    assert.ok(/sawMention\.speakerAgentId/.test(data));
+    assert.ok(/speaker:\s*spokenBy/.test(data));
   });
   check('名字牌只在 speaker 有名字时渲染（缺失就不显示，**不拿当前智能体冒充**）', () => {
     const m = /const sp = m\.role === 'assistant' \? m\.speaker : undefined;\s*\n\s*if \(!sp \|\| !sp\.name\) return null;/.exec(app);

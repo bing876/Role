@@ -55,6 +55,18 @@ for (const k of ['HTMLElement', 'Element', 'Node', 'Event', 'MouseEvent', 'Custo
 if (!(dom.window.Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView) {
   (dom.window.Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {};
 }
+/**
+ * ★ 片 7b：jsdom 里没有真的 `<webview>`（它是 Electron 的组件），
+ *   于是 `webviewRefs.current[tabId].getWebContentsId()` 永远拿不到 guest id
+ *   → `awaitWebContentsId` 轮询 25 次（3 秒）后返回 undefined → **发车这条路整条走不通**
+ *   （"这张页还没准备好"，任务卡永远不会出现）。
+ *   这里按 jsdom 缺什么补什么的老做法给它一个桩：任何元素都能报出 guest id。
+ *   生产代码一个字没改 —— 它照样走 `webContentsIdOf` → `awaitWebContentsId` 那条真路。
+ */
+if (!(dom.window.Element.prototype as unknown as { getWebContentsId?: unknown }).getWebContentsId) {
+  (dom.window.Element.prototype as unknown as { getWebContentsId: () => number }).getWebContentsId = () => 7777;
+}
+
 if (!g.ResizeObserver) {
   g.ResizeObserver = class { observe(): void {} unobserve(): void {} disconnect(): void {} };
 }
@@ -136,6 +148,20 @@ const bridge = new Proxy(
       bridgeCalls.push(`downloadDoc(${taskId})`);
       return { saved: true, path: '/home/user/任务-55.md' };
     },
+    /**
+     * 片 7b：**发车**（把目标交给主进程的 AI 循环）。
+     * 真实签名见 preload：`agentStart(goal, apiBase, token, wcId, { agentId, loopId })`。
+     * 这里记下参数 —— "任务卡出现"那条链的后半段（真的把活派出去了）靠它证明。
+     */
+    agentStart: async (
+      goal: string,
+      _apiBase: string,
+      _token: string,
+      wcId: number,
+      opts?: { agentId?: number; loopId?: string },
+    ) => {
+      bridgeCalls.push(`agentStart(${goal}, wc=${wcId}, agent=${opts?.agentId ?? '-'}, loop=${opts?.loopId ?? '-'})`);
+    },
     /** 分区白名单：登出必须清空，否则下一位登录者继承上一位的项目 */
     syncProjects: async (ids: number[]) => {
       bridgeCalls.push(`syncProjects([${ids.join(',')}])`);
@@ -201,6 +227,21 @@ let TASK: { id: number; status: string; goal: string; steps: string[]; unread: b
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
+/** 片 7b：当前这一轮 `/chat/stream` 的流控手柄（测试逐帧推） */
+let sseCtl: ReadableStreamDefaultController<Uint8Array> | null = null;
+const sseEnc = new TextEncoder();
+/** 推一帧（与服务端同一格式） */
+const ssePush = (event: string | null, data: unknown): void => {
+  if (!sseCtl) throw new Error('没有正在开的 /chat/stream（上一轮没收尾？）');
+  sseCtl.enqueue(sseEnc.encode(`${event ? `event: ${event}\n` : ''}data: ${JSON.stringify(data)}\n\n`));
+};
+const sseEnd = (): void => {
+  sseCtl?.close();
+  sseCtl = null;
+};
+/** 每一轮 /chat/stream 的请求体（断言"原话逐字带上去""会话号接力"） */
+const streamBodies: Array<Record<string, unknown>> = [];
+
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   // ★ 模拟"后端重启那一瞬间"：所有 HTTP 直接失败（连接被拒）
   if (bridgeMode.backendDown) throw new TypeError('fetch failed: ECONNREFUSED 127.0.0.1:8787');
@@ -242,6 +283,24 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ agents: AGENTS });
   }
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
+  /**
+   * ★ 片 7b：`/chat/stream` 的**可控 SSE 流**。
+   *
+   * 为什么要可控：要验"流式回复是一段一段长出来的"，就必须能**停在中间**看界面
+   *   （一次推完再断言 = 分不出打字机与"最后一次性蹦出来"）。
+   * 帧格式与服务端一字不差（`event: X\ndata: {...}\n\n`；无 event 名的纯 delta 帧）。
+   */
+  if (path === '/chat/stream') {
+    streamBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          sseCtl = c;
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  }
   if (path === '/chat/history') {
     const qs2 = new URLSearchParams(url.split('?')[1] ?? '');
     const aid = Number(qs2.get('agentId') ?? '');
@@ -289,6 +348,46 @@ const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge
 const { useMemory } = await import('../../apps/desktop/src/features/memory');
 const { useBrowserGlue } = await import('../../apps/desktop/src/app/browserGlue');
 const { useChat } = await import('../../apps/desktop/src/features/chat');
+
+/**
+ * 片 7b：`useChat` 现在还要注入「浏览器 / 任务 / App 状态 / 纯判定」那些端口。
+ * Host 级测试只关心聊天侧，所以除 `sessionRef`/`curAgentId`/`curAgentRef`/`session` 外一律给最小桩
+ * （这些桩**只在本节**用；App 级别的断言走的是 App 的真实接线）。
+ */
+const chatHostOptions = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+  sessionRef: { current: { token: 'tok-A' } },
+  curAgentId: 97,
+  curAgentRef: { current: 97 },
+  session: { token: 'tok-A' },
+  input: '',
+  setInput: () => {},
+  browserRef: { current: null },
+  setHasUnread: () => {},
+  agentsRef: { current: [] },
+  lastUserWasOpenRef: { current: {} },
+  lastUserGoalBeforeConfirm: () => '',
+  loadAgentStateRef: { current: async () => undefined },
+  resume: {
+    awaitResume: false, awaitResumeAgent: null, awaitResumeWc: null,
+    setAwaitResume: () => {}, setAwaitResumeAgent: () => {}, setAwaitResumeWc: () => {},
+  },
+  askInfo: {
+    agentAwaitInfo: false, agentAwaitAgent: null, agentAwaitWcId: null,
+    setAgentAwaitInfo: () => {}, setAgentAwaitAgent: () => {}, setAgentAwaitWcId: () => {},
+  },
+  shouldFallbackLaunch: () => false,
+  intent: {
+    detectStopIntent: () => false,
+    detectOpenUrl: () => null,
+    detectUnknownOpenTarget: () => null,
+    isPureOpenCommand: () => false,
+    CONTINUE_STRONG_RE: /^继续$/,
+    CONTINUE_WEAK_RE: /^可以$/,
+    CONFIRM_ASK_RE: /$^/,
+    HOME_URL: 'about:blank',
+  },
+  ...over,
+});
 
 async function flush(rounds = 10): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
@@ -945,7 +1044,7 @@ await check('useChat：resetChat 之后聊天桶必须空（登出/换号不残�
   const sessionRef = { current: { token: 'tok-A' } } as { current: { token: string } | null };
   let api: { loadAgentHistory: (a: { id: number; conversationId: number | null }) => Promise<void>; resetChat: () => void } | null = null;
   function Host() {
-    const chat = useChat({ sessionRef: sessionRef as never, curAgentId: 97, curAgentRef: { current: 97 } as never });
+    const chat = useChat(chatHostOptions({ sessionRef }) as never);
     api = chat as never;
     return React.createElement('span', { id: 'bucketView' }, `桶:${Object.keys(chat.chats).length}`);
   }
@@ -1116,11 +1215,7 @@ await check('useChat：切号之后，A 号晚到的历史不许写进聊天桶'
   }) as typeof fetch;
 
   function Host() {
-    api = useChat({
-      sessionRef: sessionRef as never,
-      curAgentId: 97,
-      curAgentRef: curAgentRef as never,
-    });
+    api = useChat(chatHostOptions({ sessionRef, curAgentRef }) as never);
     return null;
   }
   const host = doc.createElement('div');
@@ -1143,6 +1238,234 @@ await check('useChat：切号之后，A 号晚到的历史不许写进聊天桶'
   await act(async () => hostRoot.unmount());
   host.remove();
 });
+
+// ---------------------------------------------------------------------------
+// ⑦ features/chat 的「发送」那一侧（片 7b）
+//    四件**用户看得见**的事各一条（上屏 / 打字机 / 步骤 / 任务卡）+ 三条守卫
+//    （@点名 / chatsRef 最新值镜像 / 建智能体的原话透传）
+// ---------------------------------------------------------------------------
+log('');
+log('--- ⑦ 发送：上屏 / 打字机 / 步骤 / 任务卡（片 7b）---');
+
+/** 往输入框打字（React 受控组件：必须走原生 setter + input 事件，否则 state 不动） */
+async function typeIntoInput(text: string): Promise<void> {
+  const el = q('.inputBar input');
+  assert.ok(el, '输入框不见了（.inputBar input）');
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(el, text);
+    el!.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  await flush(2);
+}
+
+/** 点「发送」（文案有 发送 / 发送补充 / 打字中… 三种） */
+const clickSend = (): void =>
+  click(qa('.inputBar button').find((b) => /发送/.test(b.textContent ?? '')) ?? null, '发送');
+
+/**
+ * 聊天区里那条**正在打字**的助手气泡（`.caret` 是它的标志）。
+ * ★ 只取文本，不把 DOM 元素交给断言库（R1 门禁：元素进断言库会 OOM）。
+ */
+const typingText = (): string => q('.caret')?.parentElement?.textContent ?? '';
+/**
+ * 这一轮收尾 = 打字气泡消失。
+ * ★ 注意：**@点名换人那一轮不能用它当收尾信号** —— 服务端一回「换人」，
+ *   打字气泡就按设计跟着换到被点名者名下（在发起人这栏里看不见了），
+ *   于是这个条件在轮次真正结束**之前**就成立了（本条断言踩过这个坑）。
+ *   那一轮要用 `waitForChatText`（等那句话真的落成气泡）。
+ */
+const waitRoundEnd = (): Promise<void> => waitFor('这一轮收尾（打字气泡消失）', () => q('.caret') === null);
+/** 等某段文字真的出现在聊天区（轮次结束的"用户看得见"信号） */
+const waitForChatText = (t: string): Promise<void> =>
+  waitFor(`聊天区出现「${t}」`, () => (q('.chat')?.textContent ?? '').includes(t));
+
+/** 可见度条上那行「正在干什么」（步骤摘要画在这里） */
+const stepBarText = (): string => q('.computerVisibility__bar')?.textContent ?? '';
+
+currentProjectId = 7;
+dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+const rootSend = await mountApp(true);
+await ensure('App 起来（侧栏在）', () => !!q('aside.sidebar'));
+await ensure('当前智能体的历史拉回来了', () => (doc.body.textContent ?? '').includes('九七号的历史'));
+/**
+ * 先开一张页：`browser.active` 非空才会走「在当前这张页上干活」那条**真路**
+ * （prepareDrive → 拿 guest id → 发车），也才有可见度条可看步骤。
+ */
+await act(async () => {
+  assert.equal(emitBridge('open', 'https://example.com/'), 1, 'bridge.on("open") 没注册处理函数');
+});
+await waitFor('浏览器层出现（有活页）', () => q('.browserLayer') !== null);
+await ensure('可见度条出现（步骤要画在它上面）', () => q('.computerVisibility__bar') !== null);
+
+await check('片 7b·① 我发的消息立刻出现在屏幕上（并把原话逐字带给服务端）', async () => {
+  await typeIntoInput('这个页面的价格是多少');
+  clickSend();
+  await waitFor('发出 /chat/stream', () => streamBodies.length > 0);
+  await flush(3);
+  // ★ 顺序有意如此：先看用户能看见的东西，再看请求体（片 5 的教训）
+  assert.match(q('.chat')?.textContent ?? '', /这个页面的价格是多少/, '我发的话没出现在屏幕上');
+  const body = streamBodies[streamBodies.length - 1];
+  assert.equal(body.message, '这个页面的价格是多少', `原话没逐字带上去：${JSON.stringify(body.message)}`);
+  assert.equal(body.agentId, 97, `这一轮没钉在发起时的智能体上：${String(body.agentId)}`);
+});
+
+await check('片 7b·② 流式回复是一段一段长出来的（停在中途能看见半截）', async () => {
+  // 第一帧：屏幕上必须立刻出现**这半截**
+  ssePush('meta', { conversationId: 4242, agentId: 97 });
+  ssePush(null, { delta: '先说第一段：' });
+  await flush(4);
+  assert.match(typingText(), /先说第一段：/, '推了第一帧，屏幕上却没有这半截（流式没逐帧显示）');
+  assert.ok(!typingText().includes('然后第二段'), '还没推第二帧，第二段就出现了（那是假流式）');
+  // 第二帧：必须**接在后面**长出来
+  ssePush(null, { delta: '然后第二段。' });
+  await flush(4);
+  assert.match(typingText(), /先说第一段：然后第二段。/, '第二帧没接在第一帧后面（不是逐段追加）');
+  // 收尾：整句落成一枚真正的助手气泡
+  ssePush('done', { conversationId: 4242, messageId: 9001, contentLength: 15, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+  assert.match(q('.chat')?.textContent ?? '', /先说第一段：然后第二段。/, '这一轮的回复没有落成气泡');
+});
+
+await check('片 7b·③ 智能体的步骤逐条显示（新一轮先清空上一轮，再接着长）', async () => {
+  emitAgent({ kind: 'step', wcId: 7777, summary: '打开百度', ok: true });
+  await flush(3);
+  assert.match(stepBarText(), /打开百度/, '主进程报的第一条步摘要没显示出来');
+  emitAgent({ kind: 'step', wcId: 7777, summary: '在搜索框输入天气', ok: true });
+  await flush(3);
+  assert.match(stepBarText(), /在搜索框输入天气/, '第二条步摘要没接上（不是逐条显示）');
+
+  // 新一轮：用户再发一句话 → 上一轮的账必须先清掉（不许把旧步骤糊在新任务上）
+  await typeIntoInput('把刚才那份表再整理一遍');
+  clickSend();
+  await waitFor('第二轮 /chat/stream 发出', () => streamBodies.length >= 2);
+  await flush(4);
+  assert.ok(
+    !stepBarText().includes('在搜索框输入天气'),
+    `新一轮开始了，上一轮的步骤还挂在可见度条上：${stepBarText()}`,
+  );
+});
+
+await check('片 7b·④ 任务卡出现（服务端给了循环号 → 「AI 任务执行中」+ 真的发车）', async () => {
+  bridgeCalls.length = 0;
+  ssePush('meta', { conversationId: 4243, agentId: 97 });
+  ssePush('loop', { loopId: 'loop-77', wcId: 7777 });
+  await flush(4);
+  const card = qa('.taskState').find((n) => (n.textContent ?? '').includes('AI 任务执行中'));
+  assert.ok(card, '服务端给了循环号，界面上却没有「AI 任务执行中」那张任务卡');
+  assert.ok(
+    bridgeCalls.some((c) => c.startsWith('agentStart(') && c.includes('loop-77') && c.includes('wc=7777')),
+    `没真的把活派给主进程：${JSON.stringify(bridgeCalls)}`,
+  );
+  ssePush('done', { conversationId: 4243, messageId: 9002, contentLength: 2, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+  assert.ok(
+    !qa('.taskState').some((n) => (n.textContent ?? '').includes('AI 任务执行中')),
+    '这一轮已经收尾，任务卡还挂着（用户会以为任务还在跑）',
+  );
+});
+
+await check('片 7b·守卫① @点名：原话照旧带上去，服务端裁决回来照常换人（名字牌=卡布）', async () => {
+  const shared = await import('@ai-workbench/shared');
+  const said = '@卡布 这段你怎么看';
+  /**
+   * ★ 解析器只有一份（`packages/shared/src/mention.ts`）。桌面这一侧**不解析**、
+   *   只把原话原样送出去 —— 所以这里两边都验：
+   *   ① 单一实现真的认得出这句话里的点名；② 桌面送出去的正文与用户写的一字不差。
+   */
+  const parsed = shared.parseMention(said, [
+    { id: 97, name: '小助' },
+    { id: 98, name: '卡布' },
+  ], 97);
+  assert.equal(
+    parsed.speaker?.name,
+    '卡布',
+    `packages/shared 的 parseMention 认不出 @卡布：${JSON.stringify(parsed.speaker)}`,
+  );
+
+  await typeIntoInput(said);
+  clickSend();
+  await waitFor('第三轮 /chat/stream 发出', () => streamBodies.length >= 3);
+  await flush(3);
+  assert.equal(
+    streamBodies[streamBodies.length - 1].message,
+    said,
+    '@ 那句被桌面改了或吃掉了（服务端就点不出名了）',
+  );
+
+  // 服务端的裁决：这一轮换成 98 号（卡布）开口
+  ssePush('meta', { conversationId: 4244, agentId: 97, mention: { kind: 'switch', speakerAgentId: 98, speakerName: '卡布' } });
+  ssePush(null, { delta: '好，我来看看这段。' });
+  await flush(4);
+  ssePush('done', { conversationId: 4244, messageId: 9003, contentLength: 11, searches: 0, sources: [] });
+  sseEnd();
+  await waitForChatText('好，我来看看这段。');
+  /**
+   * ★ 用户看得见的证据：那句话上挂着「卡布」的名字牌。
+   *   注意取**最后一个**：这一节前面几轮的助手回复也带名字牌（发起人 = 小助），
+   *   取第一个会拿到别人的牌子 —— 那就是假红/假绿的老坑。
+   */
+  const plates = qa('.msg__speaker');
+  const plate = plates[plates.length - 1];
+  assert.ok(plate, '换人了却没有名字牌（@点名换人那条路断了）');
+  assert.equal(plate!.getAttribute('data-agent-id'), '98', `名字牌挂到了错的智能体上：${plate!.getAttribute('data-agent-id')}`);
+  assert.match(plate!.textContent ?? '', /卡布/, `名字牌不是被点名的那个人：${plate!.textContent}`);
+});
+
+await check('片 7b·守卫② chatsRef 最新值镜像：上一轮写回的会话号，下一轮必须读到', async () => {
+  // 第四轮：服务端在 meta 里给一个**新**会话号（它是在这一轮中途写进聊天桶的）
+  await typeIntoInput('这轮聊点别的');
+  clickSend();
+  await waitFor('第四轮 /chat/stream 发出', () => streamBodies.length >= 4);
+  await flush(3);
+  ssePush('meta', { conversationId: 4245, agentId: 97 });
+  ssePush(null, { delta: '好。' });
+  await flush(3);
+  ssePush('done', { conversationId: 4245, messageId: 9004, contentLength: 2, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+
+  // 第五轮：请求体里必须带上刚写回的那个会话号
+  await typeIntoInput('刚才那句再展开说说');
+  clickSend();
+  await waitFor('第五轮 /chat/stream 发出', () => streamBodies.length >= 5);
+  await flush(3);
+  assert.equal(
+    streamBodies[4].conversationId,
+    4245,
+    `上一轮写回的会话号没接力到下一轮（chatsRef 镜像被删或变成一次性了）：${JSON.stringify(streamBodies[4])}`,
+  );
+  ssePush('done', { conversationId: 4245, messageId: 9005, contentLength: 1, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+});
+
+await check('片 7b·守卫③ 建智能体：桌面不拦、原话原样送给服务端（批次 L 的钩子点）', async () => {
+  const said = '建一个销售助手';
+  await typeIntoInput(said);
+  clickSend();
+  await waitFor('第六轮 /chat/stream 发出', () => streamBodies.length >= 6);
+  await flush(3);
+  const body = streamBodies[5];
+  assert.equal(body.message, said, '桌面把「建智能体」那句话改了（服务端那侧的意图检测就废了）');
+  assert.ok(!('taskMode' in body), `桌面不该替服务端决定这轮是不是任务：${JSON.stringify(body)}`);
+  // 服务端的确认话术就是普通 delta → 必须照常显示成一枚助手气泡
+  ssePush('meta', { conversationId: 4246, agentId: 97 });
+  ssePush(null, { delta: '要建一个「销售助手」，职责：跑销售线索，确认就建？（回复确认即可）' });
+  await flush(3);
+  ssePush('done', { conversationId: 4246, messageId: 9006, contentLength: 40, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+  assert.match(
+    q('.chat')?.textContent ?? '',
+    /要建一个「销售助手」/,
+    '服务端那句确认话术没显示出来（批次 L 的确认环节在桌面上看不见）',
+  );
+});
+
+await act(async () => rootSend.unmount());
 
 log('');
 log('=== 结论 ===');

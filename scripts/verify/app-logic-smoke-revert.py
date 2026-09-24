@@ -4,6 +4,8 @@
 往**抽出去的 feature 源码**里注入「把代码搬出 App.tsx 时最可能犯的错」，
 行为验收网 `verify:logic` 必须每次都变红、且命中对应断言：
 
+  （名单已长到 K/M/G/P/A/T/F3/C/B 九组；下面只写前四条的来历）
+
   K1 丢守卫：`load` 里删掉「切号后晚到的响应不许覆盖列表」
   K2 放宽校验：扩展名白名单里塞进 .exe
   K3 图省事：`remove` 不再本地过滤，改成「等服务端重拉」
@@ -275,6 +277,90 @@ MUTATIONS = [
         'replace': "    // 注入：不清聊天桶",
         'visible': True,
         'expect': 'resetChat 之后桶没清空',
+    },
+    # ---- 片 7b：features/chat 的「发送」那一侧 ----
+    #      用户 2026-09-25 拍板：**用户看得见的四件事**（我发的消息上屏 / 流式一段段长 /
+    #      步骤逐条显示 / 任务卡出现）各要一条独立反证 —— 只让内部计数变红不算。
+    {
+        'file': CHAT,
+        'id': 'B1',
+        'visible': True,
+        'name': 'sendChat 不再把用户那句话落桶（我发的话不上屏）',
+        'anchor': "    // 用户这句话先落桶（按发起时的智能体）\n    patchChat(myAgent, (c) => ({ ...c, messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }) }));\n",
+        'replace': "    // 注入：不落桶\n",
+        'expect': '我发的话没出现在屏幕上',
+    },
+    {
+        'file': CHAT,
+        'id': 'B2',
+        'visible': True,
+        'name': '流式不再逐帧显示（整段最后一次性蹦出来）',
+        'anchor': "            acc += j.delta;\n            setStreamText(acc); // 打字机：逐段追加到助手气泡\n",
+        'replace': "            acc += j.delta; // 注入：不推中间态\n",
+        'expect': '流式没逐帧显示',
+    },
+    {
+        'file': CHAT,
+        'id': 'B3',
+        'visible': True,
+        'name': '新一轮开始不清空上一轮的步骤（旧步骤糊在新任务上）',
+        'anchor': "      drive = { wcId, goal, note, pageUrl };\n      setAgentSteps([]);\n      setAgentDoc(null);",
+        'replace': "      drive = { wcId, goal, note, pageUrl };\n      setAgentDoc(null);",
+        'expect': '上一轮的步骤还挂在可见度条上',
+    },
+    {
+        'file': CHAT,
+        'id': 'B4',
+        'visible': True,
+        'name': '服务端给了 loopId 却不记循环号（「AI 任务执行中」那张任务卡不出现）',
+        'anchor': "            setRunningLoopId(j.loopId);\n            setRunningLoopWcId(effectiveWc ?? null);",
+        'replace': "            setRunningLoopWcId(effectiveWc ?? null); // 注入：不记循环号",
+        'expect': 'AI 任务执行中',
+    },
+    {
+        'file': CHAT,
+        'id': 'B5',
+        'visible': True,
+        'name': '回复不再按服务端裁决挂发言人（@点名换人后名字牌还写小助）',
+        'anchor': (
+            "        const spokenBy: ChatSpeaker | undefined = sawMention\n"
+            "          ? sawMention.speakerAgentId === null\n"
+            "            ? undefined\n"
+            "            : { id: sawMention.speakerAgentId, name: sawMention.speakerName || nameOfAgent(sawMention.speakerAgentId) }\n"
+            "          : myAgent === null\n"
+            "            ? undefined\n"
+            "            : { id: myAgent, name: nameOfAgent(myAgent) };"
+        ),
+        'replace': (
+            "        const spokenBy: ChatSpeaker | undefined =\n"
+            "          myAgent === null ? undefined : { id: myAgent, name: nameOfAgent(myAgent) }; // 注入：不看裁决"
+        ),
+        'expect': '名字牌挂到了错的智能体上',
+    },
+    {
+        'file': CHAT,
+        'id': 'B6',
+        'visible': False,   # 红了的是请求体（用户看不见）；后果是把一条会话劈成两半
+        'name': 'chatsRef 最新值镜像不再维护（下一轮读不到刚写回的会话号）',
+        'anchor': "  chatsRef.current = chats;\n",
+        'replace': "  void chats; // 注入：最新值镜像不再更新\n",
+        'expect': 'chatsRef 镜像被删或变成一次性了',
+    },
+    {
+        'file': CHAT,
+        'id': 'B7',
+        'visible': True,
+        'name': '桌面自己拦下「建一个X」（批次 L 那侧的意图检测永远收不到这句话）',
+        'anchor': "    const value = input.trim();\n    if (!value) return;\n",
+        'replace': (
+            "    const value = input.trim();\n"
+            "    if (!value) return;\n"
+            "    if (/^建一个/.test(value)) {\n"
+            "      setChatNote('（注入）桌面自己拦下了建智能体那句话');\n"
+            "      return;\n"
+            "    }\n"
+        ),
+        'expect': '守卫③',
     },
 ]
 
