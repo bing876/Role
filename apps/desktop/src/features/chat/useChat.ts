@@ -368,7 +368,25 @@ export function useChat(options: UseChatOptions): ChatApi {
     }
   };
 
-  /** 登出/换号：聊天这一侧一次清干净（原来在 `onLogout` 里散着写） */
+  /**
+   * 登出/换号：聊天这一侧一次清干净（原来在 `onLogout` 里散着写）。
+   *
+   * ★ F5 修复（2026-09-25，用户拍板「现在修」）：**这一轮的残留也要清**——
+   *   `searchHint` / `runningLoopId` / `runningLoopWcId` / `streaming` / `streamingAgentId`。
+   *
+   *   原来这五个是**有意**不清的（抽 hook 时逐字保留了既有行为，记成了 F5）。
+   *   真踩到的场景：**流式进行中登出/换号**（长任务时 `/chat/stream` 会开着好几分钟，
+   *   服务端那一路还在跑），这五个值会留到下一次登录，界面上露出三处：
+   *     · 「🚀 AI 任务执行中」卡片回来（判据 `runningLoopId && streaming`）—— 上一轮的活早没了；
+   *     · 输入框变成「打字中…」**且被禁用**（判据 `streaming`）—— 用户想说话说不出来；
+   *     · 联网搜索那行「正在搜索：…」（判据 `streaming && streamingAgentId === curAgentId`）。
+   *   ★ 说清一处**比原报告多出来的**：F5 原报告只写了那三个值，实现时发现
+   *     `streaming` / `streamingAgentId` 是**同一批残留**（不清它，输入框会被锁住，
+   *     等于只修了一半）—— 所以这里一并清，并在验收网里给"按钮/禁用"单独一条断言
+   *     （反证 C4 专门拆这两个值）。
+   *   清了之后新会话开局就是"这一轮不存在"；服务端真在跑的任务由 `/chat/state` 的
+   *   `current_task` 那行如实显示（权威在服务端，桌面不猜）。
+   */
   const resetChat = () => {
     setChatNote('');
     setStreamText('');
@@ -376,11 +394,12 @@ export function useChat(options: UseChatOptions): ChatApi {
     historyLoadedRef.current = new Set();
     setAgentSteps([]);
     setAgentDoc(null);
-    /**
-     * ★ 有意**不**在这里清 `searchHint` / `runningLoopId` / `runningLoopWcId`：
-     *   原 `onLogout` 也没清它们（这是既有行为）。抽 hook 不许顺手改产品行为 ——
-     *   真要改是另一个提交（已记进缺陷清单：登出后这三个值会留到下一次登录）。
-     */
+    /** F5：这一轮的残留（见上面那段说明；顺序与 `sendChat` 的 finally 一致，便于对照） */
+    setSearchHint('');
+    setRunningLoopId(null);
+    setRunningLoopWcId(null);
+    setStreaming(false);
+    setStreamingAgentId(null);
   };
   /**
    * 第 6 步：发送 = 走 /chat/stream（带 JWT，fetch 读 SSE；EventSource 加不了 Authorization 所以不用它）。

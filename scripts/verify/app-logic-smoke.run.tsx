@@ -253,6 +253,23 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   const method = (init?.method ?? 'GET').toUpperCase();
   requests.push({ method, path, body: init?.body });
 
+  /**
+   * ★ F5：**同一个 App 实例里**重新登录（走真登录表单）。
+   *   为什么要这个桩：F5 的残留值住在 hook 的 state 里 —— 只有"登出 → 登录页 →
+   *   在**同一个实例**里登录回来"才会露出来；重新挂一个 App 是**新实例**（干净的），
+   *   测不出这个缺陷（第一版就是这么写错的，反证 C3/C4 当场抓出假绿）。
+   */
+  if (path === '/auth/login/sms') {
+    return json({
+      token: 'smoke-token-2',
+      user: { id: 1, phone: '13800000000', xyz: 'XYZ10001', has_password: true },
+      project: PROJECT,
+      agents: [{ id: 97, name: '小助' }],
+    });
+  }
+  if (path === '/auth/sms/send') {
+    return json({ ok: true });
+  }
   if (path === '/auth/me') {
     if (authMeFails) return new Response(JSON.stringify({ error: 'token 过期' }), { status: 401, headers: { 'content-type': 'application/json' } });
     return json({ user: { id: 1, phone: '13800000000', xyz: '', has_password: hasPassword }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
@@ -333,7 +350,13 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/agent/task/current') return json({ task: null });
   if (path === '/settings') return json({});
   if (path.includes('/visibility')) return json({ visibility: 'status' });
-  if (path === '/health') return json({ ok: true, service: 'ai-workbench' });
+  /**
+   * ★ 与服务端**一字不差**的标识（`apps/server/src/index.ts` 里那句）：
+   *   AuthScreen 的"等后端就绪"探测认的是 `service === 'ai-workbench-server'`，
+   *   桩里写短了（'ai-workbench'）→ 它永远停在「正在准备后端…」→ 登录按钮一直禁用。
+   *   F5 那条要**在同一个 App 实例里**走真登录表单，所以这里必须写对。
+   */
+  if (path === '/health') return json({ ok: true, service: 'ai-workbench-server' });
   // 删除一条资料
   const del = /^\/knowledge\/(\d+)$/.exec(path);
   if (del && method === 'DELETE') {
@@ -1510,6 +1533,66 @@ await check('片 7b·守卫③ 建智能体：桌面不拦、原话原样送给�
     /要建一个「销售助手」/,
     '服务端那句确认话术没显示出来（批次 L 的确认环节在桌面上看不见）',
   );
+});
+
+/**
+ * ★ F5（2026-09-25 修，用户拍板「现在修」）：**流式进行中登出 → 重新登录**，
+ *   上一轮的那几处"还在跑"的痕迹一个都不许露出来。
+ *
+ * 为什么这条必须这么测：F5 的触发条件就是"流**还开着**的时候登出"（长任务就是这样），
+ *   所以这里**故意不 sseEnd()** —— 让它像真任务一样挂着，再去登出。
+ *   （如果先 sseEnd()，`sendChat` 的 finally 会自己把那几个值清掉，这条断言就测了个空。）
+ */
+await check('★ F5：流式进行中登出 → 重新登录，上一轮的「任务在跑」痕迹一个都不许露', async () => {
+  await typeIntoInput('做点长活');
+  clickSend();
+  await waitFor('第七轮 /chat/stream 发出', () => streamBodies.length >= 7);
+  ssePush('meta', { conversationId: 4247, agentId: 97 });
+  ssePush('loop', { loopId: 'loop-f5', wcId: 7777 });
+  ssePush('search', { phase: 'start', query: '深圳天气' });
+  ssePush(null, { delta: '好，我开始处理这个长任务。' });
+  await flush(3);
+  // 前置：这一轮**确实在跑**（否则下面那些"不许露"的断言全都在测空气）
+  assert.match(q('.chat')?.textContent ?? '', /AI 任务执行中/, '前置不成立：任务卡没出现');
+  assert.equal(q('.inputBar button')?.textContent, '发送补充', '前置不成立：输入框没进「发送补充」');
+
+  // 流还开着就登出
+  click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
+  await flush(4);
+  assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
+
+  /**
+   * ★ 关键：**在同一个 App 实例里**登录回来（走真登录表单：手机号 + 验证码 → 登录/注册）。
+   *   残留值住在 hook 的 state 里，只有同实例才看得见 —— 重新挂一个 App 是全新实例，
+   *   什么都不会露（第一版就是这么写的，反证 C3/C4 抓到假绿后才改成现在这样）。
+   */
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  const boxes = qa('.authWrap .authInput');
+  assert.ok(boxes.length >= 2, `登录表单的输入框数量不对：${boxes.length}`);
+  await act(async () => {
+    setter.call(boxes[0], '13800000000');
+    boxes[0]!.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    setter.call(boxes[1], '123456');
+    boxes[1]!.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  await flush(2);
+  click(qa('.authWrap button').find((b) => /登录 \/ 注册/.test(b.textContent ?? '')) ?? null, '登录 / 注册');
+  await waitFor('发出 /auth/login/sms', () => requestsTo('/auth/login/sms').length > 0);
+  await waitFor('重新登录后离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  await flush(4);
+
+  assert.ok(
+    !(q('.chat')?.textContent ?? '').includes('AI 任务执行中'),
+    '上一轮的「AI 任务执行中」卡片露出来了（F5 复发：登出没清循环号）',
+  );
+  const btn = q('.inputBar button');
+  assert.equal(
+    btn?.textContent,
+    '发送',
+    `输入框按钮还停在上一轮（F5 复发：登出没清流式态）：${btn?.textContent}`,
+  );
+  assert.ok(!(q('.inputBar input') as HTMLInputElement | null)?.disabled, '输入框是禁用的（上一轮的「打字中」把用户锁在外面了）');
+  assert.equal(q('.searchHint'), null, '上一轮的「正在搜索：…」那行露出来了（F5 复发：登出没清搜索提示）');
 });
 
 await act(async () => rootSend.unmount());

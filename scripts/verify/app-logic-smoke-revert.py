@@ -192,6 +192,31 @@ MUTATIONS = [
         'replace': "      setProjectNote(`切换项目没成：${(e as Error).message}`);\n",
         'expect': '失败提示没有 ⚠ 前缀',
     },
+    {
+        'file': CHAT,
+        'id': 'C3',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 上一轮的任务卡回到屏幕上
+        'name': '把 F5 打回去：登出不清这一轮的残留（重新登录后界面以为任务还在跑）',
+        'anchor': (
+            "    /** F5：这一轮的残留（见上面那段说明；顺序与 `sendChat` 的 finally 一致，便于对照） */\n"
+            "    setSearchHint('');\n"
+            "    setRunningLoopId(null);\n"
+            "    setRunningLoopWcId(null);\n"
+            "    setStreaming(false);\n"
+            "    setStreamingAgentId(null);\n"
+        ),
+        'replace': "",  # 什么都不清（F5 原状）
+        'expect': 'AI 任务执行中',
+    },
+    {
+        'file': CHAT,
+        'id': 'C4',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 输入框被锁成「打字中…」
+        'name': 'F5 只修一半：清循环号但不清流式态（输入框还锁在上一轮的「打字中」）',
+        'anchor': "    setStreaming(false);\n    setStreamingAgentId(null);\n  };\n",
+        'replace': "  };\n",
+        'expect': '输入框按钮还停在上一轮',
+    },
     # ---- 片 5：features/auth（这一片**全部**是 user-visible 注入：
     #      只让内部调用计数变红不算反证 —— 用户 2026-09-24 拍板）----
     {
