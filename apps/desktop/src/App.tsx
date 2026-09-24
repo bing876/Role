@@ -66,6 +66,7 @@ import {
 import type { ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
 import { useBrowserGlue } from './app/browserGlue';
+import { useProjects } from './features/projects';
 
 /**
  * 第 2 步（内嵌版）「脸和门」：
@@ -816,7 +817,6 @@ export default function App() {
    *   - `agents` 与 `curProjectId` **永远一起更新**（见 enterProject），
    *     所以「名单里挑母鸡」不会挑到别的项目的人。
    */
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [curProjectId, setCurProjectId] = useState<number | null>(null);
   const curProjectRef = useRef<number | null>(null);
   const agentsRef = useRef<AgentView[]>([]);
@@ -830,10 +830,6 @@ export default function App() {
    * 那张页落到兜底分区 `…-project-none`，宁可让它登出，也绝不让它跟真项目混。
    */
   const agentProjectRef = useRef<Map<number, number>>(new Map());
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [projectBusy, setProjectBusy] = useState(false);
-  const [projectNote, setProjectNote] = useState('');
   /** 第 15 步 · 第一层：用户记忆库（账号级，所有智能体都能读，界面上也列出来） */
   /** 第 15 步 · 第二层：**当前智能体**的项目记忆（智能体级，切智能体就整块换掉） */
   /** 记忆合并第四批：待确认记忆（decision/fact 需用户确认才生效） */
@@ -1068,32 +1064,6 @@ export default function App() {
   };
 
   // ---- 子阶段 2-B：项目层（最小化验证版；不做正式 UI 交互）----
-  /** 读项目列表；把「当前使用中的项目」同步到 state 与 ref，并返回它 */
-  const loadProjects = async (): Promise<number | null> => {
-    const sess = sessionRef.current;
-    if (!sess) return null;
-    try {
-      const r = await authFetchJson<ProjectListResult>('/projects', {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return null;
-      setProjects(r.projects);
-      /**
-       * ★ 把项目列表推给主进程 —— 分区闸（`will-attach-webview`）靠它判定归属。
-       * 主进程那个事件是**同步**的，没法自己去拉，所以必须在这里显式同步一次。
-       * 拿不到列表时（上面 catch）不同步，主进程会保持"还没同步过"的宽松状态。
-       */
-      void window.workbench?.syncProjects?.(r.projects.map((p) => p.id));
-      curProjectRef.current = r.currentProjectId;
-      setCurProjectId(r.currentProjectId);
-      setProjectNote('');
-      return r.currentProjectId;
-    } catch (e) {
-      setProjectNote(`读不到项目列表：${(e as Error).message}`);
-      return null;
-    }
-  };
-
   /**
    * 进入某个项目：先把「新项目 id」和「它的名单」**一次性**写进 state，再补拉历史 / 项目记忆 /
    * 会话状态 / 资料列表。这样中间不会出现「项目已经换了、名单还是上一个项目的」那一帧。
@@ -1124,52 +1094,30 @@ export default function App() {
     void loadKnowledge(id);
   };
 
-  /** 切换当前项目：服务端 activate 先落地，再进这个项目（名单与资料一起换） */
-  const switchProject = async (id: number) => {
-    const sess = sessionRef.current;
-    if (!sess || projectBusy || id === curProjectRef.current) return;
-    setProjectBusy(true);
-    setProjectNote('');
-    try {
-      await authFetchJson<ProjectUpdateResult>(`/projects/${id}/activate`, {
-        method: 'POST',
-        body: '{}',
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return;
-      await enterProject(id);
-      await loadProjects();
-    } catch (e) {
-      setProjectNote(`切换项目没成：${(e as Error).message}`);
-    } finally {
-      setProjectBusy(false);
-    }
-  };
-
-  /** 新建项目（服务端连带建一只母鸡并设为当前项目）→ 直接进这个新项目 */
-  const createProject = async () => {
-    const sess = sessionRef.current;
-    const name = newProjectName.trim();
-    if (!sess || projectBusy || !name) return;
-    setProjectBusy(true);
-    setProjectNote('');
-    try {
-      const r = await authFetchJson<ProjectCreateResult>('/projects', {
-        method: 'POST',
-        body: JSON.stringify({ name }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return;
-      setNewProjectName('');
-      setProjectNote(`项目「${r.project.name}」建好了（自带一只母鸡），已经切过去。`);
-      await enterProject(r.project.id);
-      await loadProjects();
-    } catch (e) {
-      setProjectNote(`建项目没成：${(e as Error).message}`);
-    } finally {
-      setProjectBusy(false);
-    }
-  };
+  /**
+   * 批次 M · 逻辑抽离第 4 片：项目列表 / 切换 / 新建搬进 `features/projects`。
+   * ★ **进入项目（enterProject）留在上面这一层** —— 它要同时动 chat / memory / knowledge 三块，
+   *   属于跨 feature 协调，按拍板只能待在组合层；这里把它注入给 hook。
+   * ★ 同名解构 → 下面 JSX（disabled={projectBusy} 等）一个字都不用改。
+   */
+  const {
+    projects,
+    projectsOpen,
+    setProjectsOpen,
+    projectBusy,
+    projectNote,
+    newProjectName,
+    setNewProjectName,
+    loadProjects,
+    switchProject,
+    createProject,
+    resetProjects,
+  } = useProjects({
+    sessionRef,
+    curProjectRef,
+    onCurrentProject: setCurProjectId,
+    onEnterProject: enterProject,
+  });
 
   /** 切智能体 = 换一份聊天：换消息列表、换项目记忆 */
   const selectAgent = (agent: AgentView) => {
@@ -1483,14 +1431,11 @@ export default function App() {
     setUserMem([]);
     setProjMem([]);
     setPendingMem([]);
-    setProjects([]);
+    resetProjects();
     curProjectRef.current = null;
     // Phase 3：换号了就把「agentId → projectId」清掉（id 会跨账号复用，留着会把分区认错人）
     agentProjectRef.current.clear();
     setCurProjectId(null);
-    setProjectsOpen(false);
-    setNewProjectName('');
-    setProjectNote('');
     if (!session) return;
     void refreshTask();
     void loadUserMemory();
@@ -1553,13 +1498,9 @@ export default function App() {
     setPendingMem([]);
     setPendingMemOpen(false);
     // 子阶段 2-B：项目层也清掉（换号不该看见上一个号的项目名/名单）
-    setProjects([]);
+    resetProjects();
     curProjectRef.current = null;
     setCurProjectId(null);
-    setProjectsOpen(false);
-    setNewProjectName('');
-    setProjectNote('');
-    setProjectBusy(false);
     setAgentStates({}); // 第 16 步：会话状态（当前任务/保活）不留在登录页
     setKeepaliveBusy(false);
     // 第 7 步：驾驶员循环和 token 一并停掉/清掉（主进程里也不留）

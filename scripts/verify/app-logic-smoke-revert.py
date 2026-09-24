@@ -27,6 +27,7 @@ FEATURES = REPO / 'apps' / 'desktop' / 'src' / 'features'
 KNOWLEDGE = FEATURES / 'knowledge' / 'useKnowledge.ts'
 MEMORY = FEATURES / 'memory' / 'useMemory.ts'
 GLUE = FEATURES.parent / 'app' / 'browserGlue.ts'
+PROJECTS = FEATURES / 'projects' / 'useProjects.ts'
 
 MUTATIONS = [
     {
@@ -126,6 +127,31 @@ MUTATIONS = [
         'anchor': "  const curHelp = curAgentId !== null ? helpCards[curAgentId] ?? null : null;",
         'replace': "  const curHelp = Object.values(helpCards)[0] ?? null;",
         'expect': '漏到 98 号对话里',
+    },
+    # ---- 片 4：features/projects ----
+    {
+        'file': PROJECTS,
+        'id': 'P1',
+        'name': 'switchProject 跳过服务端 activate（界面先切、后端没落地）',
+        'anchor': "      await authFetchJson<ProjectUpdateResult>(`/projects/${id}/activate`, {\n        method: 'POST',\n        body: '{}',\n        headers: { authorization: `Bearer ${sess.token}` },\n      });\n      if (sessionRef.current?.token !== sess.token) return;\n",
+        'replace': "",
+        'expect': '发出 activate',
+    },
+    {
+        'file': PROJECTS,
+        'id': 'P2',
+        'name': 'loadProjects 不把列表写进界面 state（拉回来了但不显示）',
+        'anchor': "      setProjects(r.projects);\n",
+        'replace': "",
+        'expect': '项目行数不对',
+    },
+    {
+        'file': PROJECTS,
+        'id': 'P3',
+        'name': 'createProject 的 body 少送名字',
+        'anchor': "        body: JSON.stringify({ name }),",
+        'replace': "        body: JSON.stringify({}),",
+        'expect': '建项目的 body 不对',
     },
 ]
 

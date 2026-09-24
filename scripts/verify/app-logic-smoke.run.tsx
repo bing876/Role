@@ -138,9 +138,18 @@ const DOCS = [
   { id: 12, filename: '隐私政策.pdf', kind: 'pdf', byteSize: 8192, chunkCount: 7, createdAt: '2026-09-24T00:00:00.000Z', projectId: 7 },
 ];
 const PROJECT = { id: 7, name: '默认项目', isCurrent: true, isDefault: true, henAgentId: null };
+/** 第二个项目 + 它自己的名单/资料：用来验「切项目 = 名单与资料一起换」 */
+const PROJECT_B = { id: 8, name: '实验项目', isCurrent: false, isDefault: false, henAgentId: 88 };
 const AGENTS = [
   { id: 97, name: '小助', kind: 'assistant', deletable: false, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
 ];
+const AGENTS_B = [
+  { id: 98, name: '卡布', kind: 'worker', deletable: true, projectId: 8, personaStatus: 'ready', persona: null, conversationId: 502, status: 'idle' },
+];
+/** 当前项目：`/projects/:id/activate` 会改它（与真服务端一样） */
+let currentProjectId = 7;
+/** 新建出来的项目（`POST /projects`） */
+let createdProject: { id: number; name: string } | null = null;
 const STATE = {
   conversationId: 501, current_task: '', latest_user_intent: '', browser_confirmed: false,
   login_required: false, sensitive_action: false, last_page_summary: '', already_told_user_login_themselves: false, keepalive: false,
@@ -166,8 +175,25 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   requests.push({ method, path, body: init?.body });
 
   if (path === '/auth/me') return json({ user: { id: 1, phone: '13800000000', xyz: '' }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
-  if (path === '/projects') return json({ projects: [PROJECT], currentProjectId: 7 });
-  if (path === '/agents') return json({ agents: AGENTS });
+  if (path === '/projects' && method === 'GET') {
+    return json({ projects: [PROJECT, PROJECT_B].map((p) => ({ ...p, isCurrent: p.id === currentProjectId })), currentProjectId });
+  }
+  if (path === '/projects' && method === 'POST') {
+    const name = (JSON.parse(String(init?.body ?? '{}')) as { name?: string }).name ?? '';
+    createdProject = { id: 9, name, isCurrent: true, isDefault: false, henAgentId: 99 };
+    currentProjectId = 9;
+    return json({ project: createdProject, henAgent: { id: 99, name: '小鸡' } });
+  }
+  if (/^\/projects\/\d+\/activate$/.test(path)) {
+    currentProjectId = Number(path.split('/')[2]);
+    return json({ ok: true, currentProjectId });
+  }
+  if (path === '/agents') {
+    const pid = Number(new URLSearchParams(url.split('?')[1] ?? '').get('projectId') ?? currentProjectId);
+    if (pid === 8) return json({ agents: AGENTS_B });
+    if (pid === 9) return json({ agents: [{ ...AGENTS_B[0], id: 99, name: '小鸡', projectId: 9 }] });
+    return json({ agents: AGENTS });
+  }
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
   if (path === '/chat/history') return json({ conversationId: 501, messages: [] });
   if (path === '/memory/user') return json({ items: USER_MEM });
@@ -176,7 +202,10 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/memories') return json({ active: [], pending: [...PENDING_MEM] });
   if (path === '/memory/forget') return json({ ok: true });
   if (path === '/memories/confirm' || path === '/memories/reject') return json({ ok: true });
-  if (path === '/knowledge') return json({ documents: DOCS });
+  if (path === '/knowledge') {
+    const pid = Number(new URLSearchParams(url.split('?')[1] ?? '').get('projectId') ?? currentProjectId);
+    return json({ documents: pid === 7 ? DOCS : [] });
+  }
   if (path === '/agent/task/current') return json({ task: null });
   if (path === '/settings') return json({});
   if (path.includes('/visibility')) return json({ visibility: 'status' });
@@ -466,6 +495,10 @@ await check('主进程说「这一轮的上下文没了」→ 弹出确认卡，
   assert.ok(q('.loopGone') === null, '点完还留着卡 —— 会是一张点不动的卡');
 });
 
+/** ★ 切项目前后必须还是**同一个节点**（不是"又渲染出一个一样的"）——`browser/` 那套位置计算全指着它 */
+const heldLayer = q('.browserLayer');
+const heldWebview = q('webview');
+
 await check('useBrowserGlue：切智能体时视图跟着切（有卡进 embed / 没卡也恒调 exitEmbed）', async () => {
   const calls: string[] = [];
   const fakeBrowser = {
@@ -520,6 +553,78 @@ await check('useBrowserGlue：切智能体时视图跟着切（有卡进 embed /
 
   await act(async () => hostRoot.unmount());
   host.remove();
+});
+
+
+// ---------------------------------------------------------------------------
+// ⑤ features/projects（片 4）—— 列表 / 切换 / 新建，以及「切项目绝不碰浏览器」
+// ---------------------------------------------------------------------------
+log('');
+log('--- ⑤ 项目：列表 / 切换（名单与资料一起换）/ 新建 ---');
+
+/** 项目面板的展开按钮（文案里带「项目」二字） */
+const projectToggle = (): Element | null => qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('项目')) ?? null;
+
+await check('项目面板列出两个项目，当前那个标着「使用中」', async () => {
+  click(projectToggle(), '项目面板入口');
+  await flush(3);
+  const rows = qa('.projectBox__row');
+  assert.equal(rows.length, 2, `项目行数不对：${rows.length}`);
+  const on = qa('.projectBox__row').filter((r) => r.className.includes('contact--on'));
+  assert.equal(on.length, 1, `「使用中」的项目应当只有一个：${on.length}`);
+  assert.match(on[0].textContent ?? '', /默认项目/, `使用中的不是 7 号：${on[0].textContent}`);
+});
+
+await check('点 8 号项目 → POST /projects/8/activate（body {}），随后按新项目重拉名单与资料', async () => {
+  const before = requests.length;
+  const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '8');
+  click(row ?? null, '8 号项目');
+  await waitFor('发出 activate', () => requests.some((r) => r.path === '/projects/8/activate'));
+  await flush(4);
+  const act = requests.filter((r) => r.path === '/projects/8/activate').pop()!;
+  assert.equal(act.method, 'POST', `方法不对：${act.method}`);
+  assert.equal(String(act.body), '{}', `activate 的 body 必须是空对象：${String(act.body)}`);
+  // 名单与资料都按 8 号项目重拉
+  assert.ok(requests.slice(before).some((r) => r.path === '/agents' && r.path === '/agents'), '没重拉名单');
+  assert.ok(requests.some((r) => r.path === '/agents'), '没拉过 /agents');
+  assert.match(q('aside.sidebar .agentList')?.textContent ?? '', /卡布/, '侧栏名单没换成 8 号项目的人');
+  const memBtns = qa('aside.sidebar .btn').map((b) => b.textContent ?? '');
+  assert.ok(memBtns.some((t) => t.includes('项目记忆（0）')), `切项目后项目记忆应当清空：${memBtns.filter((t) => t.includes('项目记忆')).join('|')}`);
+});
+
+await check('★ 切项目绝不碰浏览器：那一层与那一个 <webview> 还在，且是同一个节点', async () => {
+  const layer = q('.browserLayer');
+  const wv = q('webview');
+  assert.ok(layer, '切项目把浏览器层弄没了（第 20 步的规矩：所有页一直挂着）');
+  assert.ok(wv, '切项目把 <webview> 卸载了（这条是硬规则）');
+  // 节点身份：还是**切换前那个元素对象**（不是"又渲染出一个一样的"）
+  assert.ok(heldLayer === null || heldLayer === layer, '浏览器层不是原来那个节点（被重建了）');
+  assert.ok(heldWebview === null || heldWebview === wv, '<webview> 不是原来那个节点（被重建了）');
+});
+
+await check('新建项目 → POST /projects（body 带名字）→ 进入新项目（顺带钉住 F1：提示会被刷新清掉）', async () => {
+  const input = q('.projectBox__name');
+  assert.ok(input, '新项目名字输入框不见了');
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(input, '我的新项目');
+    input!.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  await flush(2);
+  click(q('.projectBox__create'), '新建项目');
+  await waitFor('发出 POST /projects', () => requests.some((r) => r.path === '/projects' && r.method === 'POST'));
+  await flush(4);
+  const req = requests.filter((r) => r.path === '/projects' && r.method === 'POST').pop()!;
+  const body = JSON.parse(String(req.body)) as { name?: string };
+  assert.equal(body.name, '我的新项目', `建项目的 body 不对：${JSON.stringify(body)}`);
+  assert.match(q('aside.sidebar .agentList')?.textContent ?? '', /小鸡/, '没有进到新项目（名单还是旧的）');
+  /**
+   * ★ 发现 F1（**既有**行为，不是本片抽坏的）：`createProject` 里那句
+   *   「项目「X」建好了…」紧接着被 `loadProjects()` 末尾的 `setProjectNote('')` 清掉 ——
+   *   界面上等于没有确认。抽 hook 时**逐字保留**了这个顺序（重构片不许顺手改产品行为），
+   *   这条断言就是把这个事实钉住：note 现在是空的。要不要改由用户拍。
+   */
+  assert.ok(!q('.projectBox__note'), `新建项目的提示被随后的刷新清掉了（既有行为，见 F1）：${q('.projectBox__note')?.textContent}`);
 });
 
 await act(async () => rootGlue.unmount());
