@@ -47,6 +47,15 @@ export interface ProjectsApi {
   resetProjects: () => void;
 }
 
+/**
+ * ★ F2 修复（2026-09-25，用户拍板选方案 ②）：
+ *   **失败一律带 `⚠ ` 前缀，成功保持朴素**（成功文案就一句人话，前面不加任何符号）。
+ *   为什么是前缀而不是"成功也写一行字"：失败与成功**同用一行** `projectNote`，
+ *   加符号能让"坏没坏"一眼看出来，不必去读句子。
+ *   为什么不用"两个槽位 + 两套样式"（方案 ③）：那要动 CSS，属阶段 2（已记进缺陷清单）。
+ *   注意：这个前缀是**文案约定**，不是状态标记 —— 别拿它当程序里的判据。
+ */
+
 export function useProjects({
   sessionRef,
   curProjectRef,
@@ -88,7 +97,7 @@ export function useProjects({
        */
       return r.currentProjectId;
     } catch (e) {
-      setProjectNote(`读不到项目列表：${(e as Error).message}`);
+      setProjectNote(`⚠ 读不到项目列表：${(e as Error).message}`);
       return null;
     }
   };
@@ -109,7 +118,7 @@ export function useProjects({
       await onEnterProject(id);
       await loadProjects();
     } catch (e) {
-      setProjectNote(`切换项目没成：${(e as Error).message}`);
+      setProjectNote(`⚠ 切换项目没成：${(e as Error).message}`);
     } finally {
       setProjectBusy(false);
     }
@@ -134,7 +143,7 @@ export function useProjects({
       await onEnterProject(r.project.id);
       await loadProjects();
     } catch (e) {
-      setProjectNote(`建项目没成：${(e as Error).message}`);
+      setProjectNote(`⚠ 建项目没成：${(e as Error).message}`);
     } finally {
       setProjectBusy(false);
     }

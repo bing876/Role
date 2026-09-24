@@ -183,6 +183,15 @@ MUTATIONS = [
         'replace': "      curProjectRef.current = r.currentProjectId;\n      onCurrentProject(r.currentProjectId);\n      setProjectNote('');\n",
         'expect': '没有确认文案',
     },
+    {
+        'file': PROJECTS,
+        'id': 'P5',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 失败提示没有 ⚠ 了
+        'name': '把 F2 打回去：切换失败的提示丢掉 ⚠ 前缀（成功/失败又长得一样）',
+        'anchor': "      setProjectNote(`⚠ 切换项目没成：${(e as Error).message}`);\n",
+        'replace': "      setProjectNote(`切换项目没成：${(e as Error).message}`);\n",
+        'expect': '失败提示没有 ⚠ 前缀',
+    },
     # ---- 片 5：features/auth（这一片**全部**是 user-visible 注入：
     #      只让内部调用计数变红不算反证 —— 用户 2026-09-24 拍板）----
     {

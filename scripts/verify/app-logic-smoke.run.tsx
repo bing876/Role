@@ -219,6 +219,8 @@ const bridgeMode = { getTaskState: 'ok' as 'ok' | 'missing' | 'null', backendDow
 /** 会话那一节要用的两个开关：让 /auth/me 失败、密码是否已经设过 */
 let authMeFails = false;
 let hasPassword = false;
+/** ★ F2：把 `activate` 打成失败（验"失败提示带 ⚠ 前缀"这条），默认关着 */
+let activateFails = false;
 /** 任务快照（默认"完成了但没读" → 红点亮着） */
 let TASK: { id: number; status: string; goal: string; steps: string[]; unread: boolean; summary?: string; docTitle?: string; unreadHint?: string; outline?: string[] } | null = {
   id: 55, status: 'done', goal: '整理季度数据', steps: ['读表', '算数'], unread: true,
@@ -273,6 +275,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ project: createdProject, henAgent: { id: 99, name: '小鸡' } });
   }
   if (/^\/projects\/\d+\/activate$/.test(path)) {
+    if (activateFails) {
+      return new Response(JSON.stringify({ error: '项目不存在或无权访问' }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     currentProjectId = Number(path.split('/')[2]);
     return json({ ok: true, currentProjectId });
   }
@@ -809,6 +817,40 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
   const note = q('.projectBox__note');
   assert.ok(note, '新建项目成功后没有确认文案（提示又被刷新清掉了 —— F1 复发）');
   assert.match(note?.textContent ?? '', /建好了/, `确认文案不对：${note?.textContent}`);
+  /** ★ F2：成功是**朴素**的（前缀只属于失败）—— 成功后还挂个 ⚠ 会让用户以为坏了 */
+  assert.ok(!/⚠/.test(note?.textContent ?? ''), `成功文案不该带 ⚠：${note?.textContent}`);
+});
+
+/**
+ * ★ F2（2026-09-25，用户拍板方案 ②）：失败与成功**共用同一行** `projectNote`，
+ *   所以失败必须一眼能看出"坏了" —— 统一 `⚠ ` 前缀，成功保持朴素。
+ *   这一条走的是**真实的失败路径**：服务端回 400 → `authFetchJson` 抛错 → catch 里写提示。
+ *   反证 P5 把前缀去掉 → 这条立刻红（屏幕上少了那个符号）。
+ */
+await check('★ F2：切换项目失败时，那行提示带 ⚠ 前缀（一眼看出坏了，不用读句子）', async () => {
+  activateFails = true;
+  const before = requestsTo('/projects/7/activate').length;
+  const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '7');
+  assert.ok(row, '找不到「默认项目」那一行（7 号）');
+  click(row, '7 号项目（这一次服务端会拒绝）');
+  await waitFor('发出 activate（失败那一次）', () => requestsTo('/projects/7/activate').length > before);
+  await flush(4);
+  activateFails = false;
+  const note = q('.projectBox__note');
+  assert.ok(note, '切换失败后那一行什么都没写（用户不知道刚才那一下成没成）');
+  assert.match(note?.textContent ?? '', /^\s*⚠/, `失败提示没有 ⚠ 前缀（成功失败又看不出区别了）：「${note?.textContent}」`);
+  assert.match(note?.textContent ?? '', /切换项目没成/, `失败提示文案不对：${note?.textContent}`);
+  assert.match(note?.textContent ?? '', /项目不存在或无权访问/, `没把服务端那句话带给用户：${note?.textContent}`);
+  /**
+   * 而且**没进**那个项目（失败就是没切）：侧栏名单还是新项目里的「小鸡」。
+   * （不拿 `.contact--on` 判：桩里 `GET /projects` 只回 7/8 两条，新建出来的 9 号
+   *   不在列表里，所以"哪一行标使用中"在桩里本来就不准 —— 名单才是干净的判据。）
+   */
+  assert.match(
+    q('aside.sidebar .agentList')?.textContent ?? '',
+    /小鸡/,
+    '切换失败却把名单换掉了（失败也被当成功用了）',
+  );
 });
 
 await act(async () => rootGlue.unmount());
