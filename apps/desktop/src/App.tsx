@@ -68,6 +68,8 @@ import { useResourceGuard } from './resources/useResourceGuard';
 import { useBrowserGlue } from './app/browserGlue';
 import { useProjects } from './features/projects';
 import { useAuth } from './features/auth';
+import { useTasks } from './features/tasks';
+import type { CurrentTask } from './features/tasks';
 
 /**
  * 第 2 步（内嵌版）「脸和门」：
@@ -248,18 +250,9 @@ function driveStateView(
  * （和 server 端 promptPolicy.isContinueMarker 保持同一套词表。）
  */
 
-/** 第 8 步：GET /agent/task/current 的形态（红点/结果都认这个，不信内存假数据） */
-interface CurrentTask {
-  id: number;
-  status: string;
-  goal: string;
-  steps: string[];
-  unread: boolean;
-  summary?: string;
-  docTitle?: string;
-  unreadHint?: string;
-  outline?: string[];
-}
+/**
+ * 第 8 步：`CurrentTask` 的**定义**随片 6 一起搬进 `features/tasks`（那边是唯一 owner）。
+ */
 
 /**
  * 第 6 步：不再放写死的开场白。
@@ -634,10 +627,6 @@ function AgentGuide({
 
 export default function App() {
   /** 头像右上角红点：第 8 步起由服务端 tasks.unread 驱动（登录后拉 current，done 事件点亮，看完熄灭） */
-  const [hasUnread, setHasUnread] = useState(false);
-  const [curTask, setCurTask] = useState<CurrentTask | null>(null);
-  const [taskDetailOpen, setTaskDetailOpen] = useState(false);
-  const [docNote, setDocNote] = useState('');
   /**
    * 第 4 步：任务状态机的镜像。
    * 权威状态在主进程（driver.ts），挂载时取一次 + 之后靠 'state' 广播同步；
@@ -737,6 +726,26 @@ export default function App() {
    */
   const sessionRef = useRef<AuthSession | null>(null);
   sessionRef.current = session;
+
+  /**
+   * 批次 M · 逻辑抽离第 6 片：任务快照 / 结果详情 / 文档下载搬进 `features/tasks`。
+   * ★ 同名解构（连 setter 都同名）→ 主进程事件分发那几处 `setHasUnread(…)`、
+   *   JSX 里的 `curTask` / `taskDetailOpen` / `docNote` 一个字都不用改。
+   */
+  const {
+    curTask,
+    setCurTask,
+    taskDetailOpen,
+    setTaskDetailOpen,
+    docNote,
+    setDocNote,
+    hasUnread,
+    setHasUnread,
+    refreshTask,
+    openTaskResult,
+    downloadTaskDoc,
+    resetTasks,
+  } = useTasks({ sessionRef, session });
 
   /**
    * 静默登录（带已存 token 调 `/auth/me` 换回 profile）也搬进 `features/auth` 了 ——
@@ -1363,53 +1372,10 @@ export default function App() {
     reset: resetKnowledge,
   } = useKnowledge({ sessionRef, curProjectRef });
 
-  const refreshTask = async () => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      const r = await authFetchJson<{ task: CurrentTask | null }>('/agent/task/current', {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (r.task) {
-        setCurTask(r.task);
-        setHasUnread(r.task.status === 'done' && r.task.unread);
-      }
-    } catch {
-      /* 后端/库没起时红点保持原样，不打扰 */
-    }
-  };
-
-  /** 看完结果 → 服务端标记已读、红点熄灭 */
-  const openTaskResult = async () => {
-    if (!curTask) return;
-    setTaskDetailOpen(true);
-    if (curTask.unread) {
-      const sess = sessionRef.current;
-      try {
-        await authFetchJson('/agent/task/read', {
-          method: 'POST',
-          body: JSON.stringify({ taskId: curTask.id }),
-          headers: { authorization: `Bearer ${sess?.token ?? ''}` },
-        });
-        setCurTask({ ...curTask, unread: false });
-        setHasUnread(false);
-      } catch {
-        /* 标已读失败就留着红点，下次再点 */
-      }
-    }
-  };
-
-  /** 下载 .md：主进程弹“另存为”+写盘，内容经脱敏兜底 */
-  const downloadTaskDoc = async () => {
-    if (!curTask || !session) return;
-    setDocNote('正在准备文档…');
-    const r = await window.workbench?.downloadDoc(curTask.id, API_BASE());
-    if (!r) return;
-    if (r.saved) setDocNote(`已保存：${r.path}`);
-    else if (r.canceled) setDocNote('已取消保存');
-    else setDocNote(`下载失败：${r.error ?? '未知原因'}`);
-  };
-
+  /**
+   * 任务三件套（`refreshTask` / `openTaskResult` / `downloadTaskDoc`）搬进 `features/tasks` 了，
+   * 见上面的 useTasks 解构 —— 本文件只留调用点。
+   */
   /**
    * 会话变了：把**所有**智能体的聊天缓存清掉，重新拉智能体列表 / 用户记忆库 / 任务快照 / 资料列表。
    * 具体某个智能体的历史由 loadAgents → loadAgentHistory 拉（一个智能体一份聊天，互不干扰）。
@@ -1479,10 +1445,7 @@ export default function App() {
     browser.closeAllTabs();
     setAgentSteps([]);
     setAgentDoc(null);
-    setCurTask(null);
-    setTaskDetailOpen(false);
-    setDocNote('');
-    setHasUnread(false);
+    resetTasks();
     setAgentAwaitInfo(false);
     setAgentAwaitAgent(null);
     // 资料（知识库）的清理收进 feature：documents / open / uploading / deletingId / note 一次清干净

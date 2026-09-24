@@ -29,6 +29,7 @@ MEMORY = FEATURES / 'memory' / 'useMemory.ts'
 GLUE = FEATURES.parent / 'app' / 'browserGlue.ts'
 PROJECTS = FEATURES / 'projects' / 'useProjects.ts'
 AUTH = FEATURES / 'auth' / 'useAuth.ts'
+TASKS = FEATURES / 'tasks' / 'useTasks.ts'
 
 MUTATIONS = [
     {
@@ -206,6 +207,34 @@ MUTATIONS = [
         'replace': "      // 注入：本地不同步",
         'visible': True,
         'expect': 'has_password 没跟着更新',
+    },
+    # ---- 片 6：features/tasks ----
+    {
+        'file': TASKS,
+        'id': 'T1',
+        'name': 'refreshTask 丢掉「完成且未读」的判断（红点乱亮）',
+        'anchor': "        setHasUnread(r.task.status === 'done' && r.task.unread);",
+        'replace': "        setHasUnread(false);",
+        'visible': True,
+        'expect': '界面上却没有红点',
+    },
+    {
+        'file': TASKS,
+        'id': 'T2',
+        'name': 'openTaskResult 不熄红点（看完还亮着）',
+        'anchor': "        setCurTask({ ...curTask, unread: false });\n        setHasUnread(false);",
+        'replace': "        void 0;",
+        'visible': True,
+        'expect': '红点还亮着',
+    },
+    {
+        'file': TASKS,
+        'id': 'T3',
+        'name': '下载文档把「已保存」写成「已取消」（那一行文案错）',
+        'anchor': "    if (r.saved) setDocNote(`已保存：${r.path}`);\n    else if (r.canceled) setDocNote('已取消保存');",
+        'replace': "    if (r.saved) setDocNote('已取消保存');\n    else if (r.canceled) setDocNote(`已保存：${r.path}`);",
+        'visible': True,
+        'expect': '没有把保存路径写出来',
     },
 ]
 

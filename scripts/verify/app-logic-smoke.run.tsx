@@ -100,6 +100,12 @@ const bridge = new Proxy(
      *   签名见 shared：`onSmsMockCode(cb) => () => void`。
      */
     onSmsMockCode: () => () => {},
+    /**
+     * ★ 主进程状态机镜像：**必须给真值**。
+     *   缺了它 Proxy 兜底会返回 `undefined` → `bridge.getTaskState().then(setTask)` 把
+     *   `task` 置成 undefined → `task.phase` 在渲染期炸（片 6 当场踩到，见 F3）。
+     */
+    getTaskState: async () => ({ phase: 'idle', detail: '冒烟桩：等待主进程同步', step: 0, blocked: false }),
     resourceSnapshot: async () => null,
     resourceInstances: async () => [],
     agentLanes: async () => [],
@@ -120,6 +126,11 @@ const bridge = new Proxy(
     /** 会话：登出/静默登录都要把凭证同步给主进程（不记就看不见这条清场动作） */
     syncSession: async (_apiBase: string, token: string) => {
       bridgeCalls.push(`syncSession('${token}')`);
+    },
+    /** 文档下载（主进程弹另存为 + 写盘）；这里固定"保存成功" */
+    downloadDoc: async (taskId: number) => {
+      bridgeCalls.push(`downloadDoc(${taskId})`);
+      return { saved: true, path: '/home/user/任务-55.md' };
     },
     /** 分区白名单：登出必须清空，否则下一位登录者继承上一位的项目 */
     syncProjects: async (ids: number[]) => {
@@ -176,6 +187,11 @@ let PENDING_MEM = [
 /** 会话那一节要用的两个开关：让 /auth/me 失败、密码是否已经设过 */
 let authMeFails = false;
 let hasPassword = false;
+/** 任务快照（默认"完成了但没读" → 红点亮着） */
+let TASK: { id: number; status: string; goal: string; steps: string[]; unread: boolean; summary?: string; docTitle?: string; unreadHint?: string; outline?: string[] } | null = {
+  id: 55, status: 'done', goal: '整理季度数据', steps: ['读表', '算数'], unread: true,
+  summary: '一共 12 张表，结论在第 3 页', docTitle: '季度数据整理', unreadHint: '结果文档已生成', outline: ['目标', '过程', '结论'],
+};
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -225,6 +241,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/memories') return json({ active: [], pending: [...PENDING_MEM] });
   if (path === '/memory/forget') return json({ ok: true });
   if (path === '/memories/confirm' || path === '/memories/reject') return json({ ok: true });
+  if (path === '/agent/task/current') return json({ task: TASK });
+  if (path === '/agent/task/read') {
+    TASK = { ...TASK!, unread: false };
+    return json({ ok: true });
+  }
   if (path === '/knowledge') {
     const pid = Number(new URLSearchParams(url.split('?')[1] ?? '').get('projectId') ?? currentProjectId);
     return json({ documents: pid === 7 ? DOCS : [] });
@@ -774,6 +795,44 @@ await check('改密码（已设过）：必须带原密码 —— 不带就会�
   const req = requests.filter((r) => r.path === '/auth/password/set').pop()!;
   const body = JSON.parse(String(req.body)) as Record<string, string>;
   assert.equal(body.old_password, 'oldpass123', `原密码没送出去：${JSON.stringify(body)}`);
+  await act(async () => root.unmount());
+});
+
+await check('任务快照：红了红点、显示「未读」和结果摘要，点「查看结果」→ 标已读后红点熄灭', async () => {
+  TASK = { ...TASK!, unread: true };
+  // ★ 红点只画在「小助」那种 assistant 头像上；上一节把当前项目切到 9 号（名单里是 worker 小鸡），
+  //   这里拨回 7 号，才是"有红点可看"的场景。
+  currentProjectId = 7;
+  const root = await mountApp(true);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('任务快照出现', () => q('.taskResult') !== null);
+  assert.ok(q('.red-dot'), '服务端说未读，界面上却没有红点');
+  assert.match(q('.taskResult')?.textContent ?? '', /未读|未读/, '没有未读标记');
+  assert.match(q('.taskResult')?.textContent ?? '', /整理季度数据/, '目标没显示');
+
+  click(qa('button').find((b) => (b.textContent ?? '').includes('查看结果')) ?? null, '查看结果');
+  await waitFor('发出 /agent/task/read', () => requests.some((r) => r.path === '/agent/task/read'));
+  await flush(3);
+  // ★ 用户能看见的：红点熄灭 + 未读标记变成已读 + 摘要展开
+  assert.ok(!q('.red-dot'), '标已读之后红点还亮着');
+  assert.match(q('.taskResult')?.textContent ?? '', /已读/, '未读标记没变成已读');
+  assert.match(q('.taskResult')?.textContent ?? '', /一共 12 张表/, '点开结果后摘要没显示');
+  const readReq = requests.filter((r) => r.path === '/agent/task/read').pop()!;
+  assert.equal(JSON.parse(String(readReq.body)).taskId, 55, `标已读没带对 taskId：${String(readReq.body)}`);
+  await act(async () => root.unmount());
+});
+
+await check('下载文档：走主进程 downloadDoc，并把「已保存：路径」写在那一行', async () => {
+  TASK = { ...TASK!, unread: false };
+  bridgeCalls.length = 0;
+  const root = await mountApp(true);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('任务快照出现', () => q('.taskResult') !== null);
+  click(q('.docDownload'), '下载文档（.md）');
+  await waitFor('downloadDoc 被调用', () => bridgeCalls.some((c) => c.startsWith('downloadDoc(')));
+  await flush(3);
+  assert.deepEqual(bridgeCalls.filter((c) => c.startsWith('downloadDoc(')), ['downloadDoc(55)'], `下载调的 taskId 不对：${JSON.stringify(bridgeCalls)}`);
+  assert.match(doc.body.textContent ?? '', /已保存：\/home\/user\/任务-55\.md/, '下载成功后没有把保存路径写出来');
   await act(async () => root.unmount());
 });
 
