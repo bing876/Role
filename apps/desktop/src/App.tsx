@@ -12,10 +12,6 @@ import type {
   ChatSource,
   ChatStateResult,
   ConversationStateView,
-  KnowledgeDeleteResult,
-  KnowledgeDocument,
-  KnowledgeListResult,
-  KnowledgeUploadResult,
   MemoryEntry,
   MemoryLayerList,
   MemoryItem,
@@ -35,6 +31,13 @@ import type { ChatMentionMeta, ChatSpeaker } from '@ai-workbench/shared';
  * 判定收在 `./mentionGate`（可单测），App.tsx 不在 3500 行的组件里散写规则。
  */
 import { shouldFallbackLaunch } from './mentionGate';
+/**
+ * 批次 M · 逻辑抽离第 1 片：`API_BASE` / `TOKEN_KEY` / `authFetchJson` / `dbHint`
+ * 原先写在本文件里（模块级、组件之外），被 30 多处逻辑用到。抽出 feature 时它们
+ * 必须离开 App.tsx —— 否则每个 feature 都要反向依赖 App。现已原样搬到 `shared/api.ts`。
+ */
+import { API_BASE, TOKEN_KEY, authFetchJson, dbHint } from './shared/api';
+import { useKnowledge } from './features/knowledge';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -287,16 +290,6 @@ interface CurrentTask {
 // - 未登录时整个工作台不渲染（登录门控在 App 的 return 处），不做“游客看假数据”那一套。
 // ---------------------------------------------------------------------------
 
-/** 后端地址：默认 127.0.0.1:8787；浏览器直测模式下自动使用相对路径走 Vite 代理 */
-const API_BASE = () => {
-  const custom = localStorage.getItem('workbench.apiBase');
-  if (custom) return custom;
-  if (typeof window !== 'undefined' && !(window as any).workbench?.isElectron) {
-    return '';
-  }
-  return 'http://127.0.0.1:8787';
-};
-const TOKEN_KEY = 'workbench.token';
 
 /**
  * 第 22 步：可调配置的**兜底值** —— `packages/shared` 里 `DEFAULT_SETTINGS` 的第二份。
@@ -323,38 +316,6 @@ const SETTINGS_FALLBACK: WorkbenchSettings = {
   resourceSysMemFloorMB: 1536,
 };
 
-async function authFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE()}${path}`, {
-      ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-    });
-  } catch {
-    // ★ 文案要指向本机真正可用的那个动作。
-    // 这台机器上没有可用的 Docker（PG 是便携包），"npm run db:up" 是跑不通的；
-    // 正确做法是双击仓库根的 start-dev.cmd（它清陈旧 pid → 起 PG → 等库真能查 → 起服务端）。
-    throw new Error(`连不上后端 ${API_BASE()}：先双击仓库根目录的 start-dev.cmd 起库和服务端，再重试`);
-  }
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(dbHint(data.error) ?? `HTTP ${res.status}`);
-  return data;
-}
-
-/**
- * 把服务端那句「先跑 docker compose…」换成本机真正可用的指引。
- *
- * 服务端 8 个 route 都会回同一句 503 文案（docker / npm run db:up），
- * 但本机没有可用的 Docker —— 对着这句照做只会更困惑。
- * 这里统一在渲染层做一次替换，改动面最小、也不会漏掉某个 route。
- */
-function dbHint(msg?: string): string | undefined {
-  if (!msg) return msg;
-  if (msg.includes('数据库连不上')) {
-    return '数据库没连上：双击仓库根目录的 start-dev.cmd（它会起库 + 服务端并等到真正可用），再点一次';
-  }
-  return msg;
-}
 
 type AuthTab = 'sms' | 'xyz' | 'wechat';
 
@@ -896,17 +857,11 @@ export default function App() {
   /** 保活开关正在请求中（防连点） */
   const [keepaliveBusy, setKeepaliveBusy] = useState(false);
   /** 第 11 步：知识库资料独立于 memories；只展示当前账号的文件元信息和已入库段数。 */
-  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([]);
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
-  const [knowledgeUploading, setKnowledgeUploading] = useState(false);
-  const [knowledgeNote, setKnowledgeNote] = useState('');
   /** 建完能改人设：编辑态 */
   const [personaEditOpen, setPersonaEditOpen] = useState(false);
   const [personaEditAgentId, setPersonaEditAgentId] = useState<number | null>(null);
   const [personaEditDraft, setPersonaEditDraft] = useState<AgentPersona>({ name: '', who: '', tone: '', duty: '' });
   /** 第 19 步：正在删的那条资料 id（按钮显示「删除中…」并防连点），null = 没有删除在跑 */
-  const [knowledgeDeletingId, setKnowledgeDeletingId] = useState<number | null>(null);
-  const knowledgeFileRef = useRef<HTMLInputElement | null>(null);
   /** 第 7 步：主进程 'agent' 事件的镜像（步摘要/文档结论），权威循环在主进程 */
   const [agentSteps, setAgentSteps] = useState<string[]>([]);
   const [agentDoc, setAgentDoc] = useState<{ title: string; outline: string[] } | null>(null);
@@ -1542,105 +1497,30 @@ export default function App() {
   const sessionRef = useRef<AuthSession | null>(null);
   sessionRef.current = session;
 
-  // ---- 第 11 步：资料上传/列表。文件直接由当前渲染进程 POST 到本机服务端，
-  // 不经过 preload，不开新窗口；multipart 的 Content-Type 必须让浏览器自己带 boundary。 ----
   /**
-   * 子阶段 2-B：资料列表**按项目**拉（`?projectId=`）。
-   * 不传就走服务端的「当前使用中的项目」——两条路都以服务端为准，前端不自己过滤。
-   */
-  const loadKnowledge = async (projectId?: number | null) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    const pid = projectId === undefined ? curProjectRef.current : projectId;
-    try {
-      const r = await authFetchJson<KnowledgeListResult>(pid === null ? '/knowledge' : `/knowledge?projectId=${pid}`, {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      // 切号期间晚到的 A 号响应不能覆盖 B 号列表。
-      if (sessionRef.current?.token !== sess.token) return;
-      setKnowledgeDocs(r.documents);
-    } catch {
-      /* 资料列表属于辅助入口，后端暂不可达时不打扰已登录界面 */
-    }
-  };
-  const uploadKnowledgeFile = async (file: File) => {
-    const sess = sessionRef.current;
-    if (!sess || knowledgeUploading) return;
-    const supported = /\.(txt|md|pdf)$/i.test(file.name);
-    if (!supported) {
-      setKnowledgeNote('只支持 .txt、.md、.pdf 文件。');
-      return;
-    }
-    if (file.size > 12 * 1024 * 1024) {
-      setKnowledgeNote('文件超过 12 MB，本版请拆分后上传。');
-      return;
-    }
-    setKnowledgeNote('');
-    setKnowledgeUploading(true);
-    try {
-      const form = new FormData();
-      form.append('file', file, file.name);
-      let res: Response;
-      try {
-        res = await fetch(`${API_BASE()}/knowledge/upload`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${sess.token}` },
-          body: form,
-        });
-      } catch {
-        throw new Error(`连不上后端 ${API_BASE()}：先双击仓库根目录的 start-dev.cmd 起库和服务端，再重试`);
-      }
-      const data = (await res.json().catch(() => ({}))) as KnowledgeUploadResult & { error?: string };
-      if (!res.ok) throw new Error(dbHint(data.error) ?? `HTTP ${res.status}`);
-      // 若用户在上传过程中退出/切换账号，不把旧账号的成功提示带到新账号界面。
-      if (sessionRef.current?.token !== sess.token) return;
-      const doc = data.document;
-      setKnowledgeNote(`《${doc.filename}》已入库，共 ${doc.chunkCount} 个片段。`);
-      await loadKnowledge(curProjectRef.current);
-    } catch (e) {
-      setKnowledgeNote(`上传没有入库：${(e as Error).message}`);
-    } finally {
-      setKnowledgeUploading(false);
-    }
-  };
-  const onChooseKnowledgeFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
-    // 清空值后，用户选择同一份文件也会再次触发 change。
-    event.currentTarget.value = '';
-    if (file) void uploadKnowledgeFile(file);
-  };
-
-  /**
-   * 第 19 步：删掉当前账号的一条资料（服务端连它的切块一起删）。
+   * 批次 M · 逻辑抽离第 1 片：资料（知识库）的逻辑搬进 `features/knowledge`。
    *
-   * 一点就删、只回一句人话 —— 不做二次确认弹窗，也不做回收站/重命名（本步明确不做）。
-   * 删除权限完全由服务端的 JWT 决定：这里只传资料 id，删不到别人的资料（会得到 404）。
-   * 本地列表用「过滤掉这条」而不是整表重拉，避免删完闪烁；刷新页面时以服务端为准。
+   * ★ 这里**只换来源，不改名字**：下面解构出来的 `knowledgeDocs` / `loadKnowledge` …
+   *   与原变量同名，所以本文件 3714 行里的 JSX **一个字都不用改**（用户 2026-09-24 的叫停：
+   *   设计语言未定稿前不搬 JSX/CSS，只抽逻辑）。
+   * ★ `sessionRef` / `curProjectRef` 是**注入**进去的（hook 不自己持有真相）——
+   *   这两个镜像 ref 一个都没删，见本文件里"最新值镜像"那条注释。
    */
-  const deleteKnowledgeDoc = async (doc: KnowledgeDocument) => {
-    const sess = sessionRef.current;
-    if (!sess || knowledgeDeletingId !== null) return;
-    setKnowledgeNote('');
-    setKnowledgeDeletingId(doc.id);
-    try {
-      const r = await authFetchJson<KnowledgeDeleteResult>(`/knowledge/${doc.id}`, {
-        method: 'DELETE',
-        // 空 body 会被 fastify 判 400，这里明确送一个 JSON 空对象。
-        body: '{}',
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      // 删除期间切了账号：不要拿 A 号的结果去动 B 号的列表/提示。
-      if (sessionRef.current?.token !== sess.token) return;
-      setKnowledgeDocs((prev) => prev.filter((d) => d.id !== doc.id));
-      setKnowledgeNote(`《${doc.filename}》已删除${r.removedChunks ? `（连同 ${r.removedChunks} 个片段）` : ''}。`);
-    } catch (e) {
-      if (sessionRef.current?.token !== sess.token) return;
-      setKnowledgeNote(`删除失败：${(e as Error).message}`);
-      void loadKnowledge(curProjectRef.current); // 服务端说没有这份资料时，用真实列表把界面拉回来
-    } finally {
-      setKnowledgeDeletingId(null);
-    }
-  };
+  const {
+    documents: knowledgeDocs,
+    setDocuments: setKnowledgeDocs,
+    open: knowledgeOpen,
+    setOpen: setKnowledgeOpen,
+    uploading: knowledgeUploading,
+    note: knowledgeNote,
+    deletingId: knowledgeDeletingId,
+    fileRef: knowledgeFileRef,
+    load: loadKnowledge,
+    upload: uploadKnowledgeFile,
+    onChooseFile: onChooseKnowledgeFile,
+    remove: deleteKnowledgeDoc,
+    reset: resetKnowledge,
+  } = useKnowledge({ sessionRef, curProjectRef });
 
   const refreshTask = async () => {
     const sess = sessionRef.current;
@@ -1794,11 +1674,8 @@ export default function App() {
     setHasUnread(false);
     setAgentAwaitInfo(false);
     setAgentAwaitAgent(null);
-    setKnowledgeDocs([]);
-    setKnowledgeOpen(false);
-    setKnowledgeUploading(false);
-    setKnowledgeDeletingId(null);
-    setKnowledgeNote('');
+    // 资料（知识库）的清理收进 feature：documents / open / uploading / deletingId / note 一次清干净
+    resetKnowledge();
   };
 
   // ---- 第 18 步：中栏浏览器工作区（第 20 步起：**每个智能体一套独立浏览器**，无活页上限）----

@@ -123,6 +123,12 @@ const bridge = new Proxy(
       resourceSysMemFloorMB: 1536,
     }),
     setSettings: async (patch: Record<string, unknown>) => patch,
+    /**
+     * ★ 这类方法**直接返回退订函数**（不是走 bridge.on），Proxy 的兜底会返回 Promise
+     *   把它破坏成 `off is not a function` —— 登出回到登录页时 AuthScreen 会立刻踩到。
+     *   签名见 shared：`onSmsMockCode(cb) => () => void`。
+     */
+    onSmsMockCode: () => () => {},
     resourceSnapshot: async () => null,
     resourceInstances: async () => [],
     agentLanes: async () => [],
