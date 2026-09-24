@@ -125,7 +125,7 @@ npm run dev                               # 桌面端（Vite + Electron）
 | 命令 | 覆盖 | 依赖 |
 | --- | --- | --- |
 | `npm run verify` | 下面除 `verify:db` 外的全部，**外加 `verify:db:pglite`**（goal 加密自检，不需要外部库） | 无（内存库 PGlite / 读源码） |
-| `npm run verify:redact` | 脱敏占位符（字数与值形状），断言一律整串精确相等 | — |
+| `npm run verify:redact` | 脱敏占位符（字数与值形状）+ `longdigits`（≥21 位连续纯数字串：判定与掩码**共用同一个边界常量**，⑤-1 用 12~30 位逐长度对照表钉住两边同口径），断言一律整串精确相等 | — |
 | `npm run verify:mention` | `@点名` 三层：解析器（两端同一份实现，含全仓「只许有一处定义」防漂移闸）、服务端决定层（R-A/R-B/R-C）、渲染层闸门 + 接线 | — |
 | `npm run verify:mention:e2e` | `@点名` **真机端到端**：真后端 + 真 PostgreSQL + 桩模型（桩把每次上游请求原样截下来，用来证明「模型收到的正文里没有 `@名字`」与「该不调模型的轮真的没调」），跑完把测试账号整体删掉 | 真 PostgreSQL + `apps/server/dist`（脚本会先 build） |
 | `npm run verify:tools` | 工具表、注册表契约、回滚开关 | — |
@@ -158,11 +158,18 @@ npm run dev                               # 桌面端（Vite + Electron）
 - **记忆 / 路由是模糊字面匹配，不是语义检索**：分词 + 加权 + Jaccard，零字面重叠的同义句（「爱喝拿铁」vs「喜欢喝咖啡」）照样检索不到。真语义要另接 embedding 模型（DeepSeek 没有 embedding API），调用点只有 `memories.ts` 的 `wordHits` 与 `chiefOfStaff.ts` 的 `routeByFuzzy`。
 - **模型路由目前只按任务类型选**：闲聊里「简单 / 复杂」的判断只写进日志，两者选的是同一个模型配置；不配 `DEEPSEEK_MODEL_*` 时所有任务都走 `DEEPSEEK_MODEL`。
 - **交接文件明文落盘**：`handoffs/*.md` 和 `board.md` 写的是任务原文，与数据库「内容全密文」的口径不一致（库里同一份任务 `agent_delegations.task` 是脱敏存的）。修法二选一：写盘前走 `redactForStorage`，或整体改为存库密文、文件只做导出视图。
-- **脱敏只认 13~20 位数字串与正好 18 位的身份证**：`redact.ts` 的 `VALUE_PATTERNS` 边界之外会漏 ——
-  21 位以上的流水号、两个卡号紧贴无分隔（34 位）这类输入**完全不脱敏**，明文会落进 `tasks.payload.steps`。
-  放宽上限会误伤长订单号/时间戳，且 `detectSensitive` 用同一组边界，要改得两处一起改；
-  `npm run verify:redact` 的 ③-7/③-8 两条断言把现状钉住了（改边界的人会先看到红）。
-  另：18 位纯数字身份证会被标成 `card` 而不是 `idcard`（`card` 那条排在前面先命中；标签不含内容）。
+- **脱敏认的形状**：`密码/口令/pwd: X`、`验证码/otp: X`、13~20 位数字串（`card`，允许空格/横线分组）、
+  正好 18 位身份证（`idcard`）、CVV，以及 2026-09-24 补上的 **`longdigits`：≥21 位连续纯数字串整段脱敏**
+  （以前 21 位流水号、两个卡号紧贴无分隔的 34 位串会**整段明文**落进 `tasks.payload.steps` 这个明文列）。
+  边界只有一个来源 `LONG_DIGITS_MIN`，`detectSensitive`（判定 → 拒绝委派/派工）与 `VALUE_PATTERNS`（掩码 → 落库）
+  都由它拼正则；`npm run verify:redact` 的 ⑤ 段用 12~30 位**逐长度对照表**钉住两边同口径，
+  另有 `scripts/verify/redact-longdigits-revert-proof.py`（7 处注入：挪边界、摘掩码、摘判定、把 longdigits 挪到 otp 之后、
+  判定正则带 `g`、硬编码第二份边界、摘标签 case，全部必须红）。
+  **仍未修的两条小残留**（不是漏网，是标签与尾巴）：① 18 位纯数字身份证被标成 `card` 而不是 `idcard`
+  （`card` 那条排前面先命中；标签不含内容，改顺序会连带改判定侧的类别）；② **分组写法**超过 20 位时
+  （`6222 0212 3456 7890 1234 5678`）`card` 抹掉前 20 位、尾巴 4 位留着 —— `longdigits` 只管**连续**纯数字串，
+  不跨分隔符，而 4 位数字本身不构成卡号/流水号（两条都写进了断言，谁改谁会先看到红）。
+  夹在字母/下划线里的数字串（base64、token 形状）**不涂**：那不是「独立的纯数字串」，涂了只会打花正常文本。
   占位符里的「N 字」是**被替换掉那一段的实际长度**（含分组用的空格/横线），不是整句长度 —— 这条曾经错过，
   修完的反证与断言见 `docs/acceptance/收尾6-goal加密-验收报告.md` 第 10 节。
 - **重启恢复的工具去重**只有逻辑模拟测试（`self-check-fixes.mjs`），还没有「执行后、结果落库前 kill 进程」的真进程测试。

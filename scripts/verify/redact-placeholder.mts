@@ -26,13 +26,31 @@
  *   ③ 反例证明贪婪匹配不会吞掉非敏感内容（数字串两侧的中文/英文/短数字/标点一个字节不动）。
  * 另加第 ④ 段：`scrubTaskText` 的「」形状与 `taskDisplayTitle` 的 80 字上限 / 非空兜底。
  *
+ * ★ 2026-09-24 追加（用户拍板「批次 J 之后补 longdigits」）：第 ⑤ 段验 `longdigits` ——
+ *   ≥21 位**连续纯数字串**整段脱敏，且**判定（`detectSensitive`）与掩码（`VALUE_PATTERNS`）共用同一个边界常量**。
+ *   原先 ③-7/③-8 两条是「钉住漏网现状」的断言（当时明确记为已知缺口），本次按新规则**改口径**：
+ *   同样的输入现在必须被脱敏。改的是断言口径、不是把断言改松 —— 旧口径要求的「不许悄悄改边界」
+ *   由 ⑤-1 的**逐长度对照表**（12~30 位每一位都验）接过去，比原来两条更严。
+ *
  * 跑的是生产代码本体（`apps/server/src/orchestrator/redact.ts`），不是副本：
  *   npm run verify:redact        （已挂进 npm run verify 主链）
  *
  * ★ 断言一律用**整串精确相等**，不用 `includes`：
  *   `includes('已脱敏')` 这种断言在字数错成 79 时照样绿 —— 那正是这个 bug 能溜过去的原因。
  */
-import { redactForStorage, scrubTaskText, taskDisplayTitle } from '../../apps/server/src/orchestrator/redact';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  detectSensitive,
+  redactForStorage,
+  scrubTaskText,
+  sensitiveLabel,
+  taskDisplayTitle,
+} from '../../apps/server/src/orchestrator/redact';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const read = (rel: string): string => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
 let passes = 0;
 let fails = 0;
@@ -279,22 +297,26 @@ log('--- ③ 反例：贪婪匹配不会吞掉非敏感内容（两侧文本必�
     eq(redactForStorage(dbl), dbl);
   });
 
-  // ---- 边界钉：13~20 位才命中。范围外的**不脱敏**，这是既有缺口，钉在这里防止有人悄悄改边界 ----
+  // ---- 边界钉：13~20 位归 card、≥21 位归 longdigits、12 位以下不涂。改边界的人先看到这里 ----
   log('      边界：12 位 / 21 位 / 34 位连排（两串数字紧贴无分隔）');
   check('③-6：12 位（下限外）不脱敏 —— 短数字串是订单号/数量的常见形状，不该被涂', () => {
     const t = '订单 123456789012 号';
     eq(redactForStorage(t), t);
   });
-  check('③-7：21 位（上限外）不脱敏 —— **已知缺口**：card 上限 20 位、idcard 正好 18 位，超出的连续数字串整段漏网', () => {
+  /**
+   * ★ 这两条原来是「钉住漏网」的（≥21 位整段明文落库，当已知缺口记着）。
+   * 用户 2026-09-24 拍板补 `longdigits` 之后**改口径**：同样的输入现在必须被整段脱敏。
+   * 注意这不是「把断言改松」—— 旧断言要防的是「有人悄悄改边界」，那份职责由 ⑤-1 的
+   * 12~30 位逐长度对照表接手（比两条点断言更严：每一个长度都验，且判定与掩码必须同口径）。
+   */
+  check('③-7：21 位（card 上限之外）→ 整段脱敏成 longdigits，字数就是 21（不再是漏网）', () => {
     const t = '流水 123456789012345678901 号';
-    eq(redactForStorage(t), t, );
+    eq(redactForStorage(t), '流水 [已脱敏·longdigits·21字] 号');
   });
-  check('③-8：34 位连排（两个卡号紧贴无分隔）也不脱敏 —— 同一条已知缺口，钉住它，改边界的人会先看到这里', () => {
+  check('③-8：34 位连排（两个卡号紧贴无分隔）→ 整段脱敏成 longdigits·34字，两侧文本逐字节原样', () => {
     const t = '卡号 6222021234567890110101199003071234 结束';
-    eq(redactForStorage(t), t);
-    log('      ↑ 这是**漏网**，不是「不需要脱敏」：真出现这种输入，明文会原样落进 payload.steps。');
-    log('        没在本批修：放宽上限会把 21+ 位的订单号/流水号/时间戳也涂掉（误伤可读性），');
-    log('        且 detectSensitive 用的是同一组边界，要改得两处一起改 + 重新过一遍验收。已记进验收报告「查到但没修」。');
+    eq(redactForStorage(t), '卡号 [已脱敏·longdigits·34字] 结束');
+    log('      ↑ 旧版这里是**漏网**（明文原样落进 payload.steps）；现在整段抹掉，且不多吞一个字符。');
   });
 }
 
@@ -327,6 +349,125 @@ log('--- ④ scrubTaskText（「」形状 + 值形状）与 taskDisplayTitle（8
   });
   check('④-6：连续空白折叠成一个空格（显示字段不该带 \t 与多空格）', () => {
     eq(taskDisplayTitle('把  报表   发到\t工作群'), '把 报表 发到 工作群');
+  });
+}
+
+// ------------------------------------------------------------------ ⑤ longdigits（≥21 位连续纯数字串）
+log('');
+log('--- ⑤ longdigits：≥21 位连续纯数字串整段脱敏，且**判定与掩码共用同一个边界** ---');
+{
+  /**
+   * 为什么要单独立一段：这条规则的用户要求原话是「`detectSensitive` 要同步改（两处共用同一组边界）」。
+   * 「两处一起改」最容易的失败方式不是漏改，而是**改完各自漂移** —— 判定说敏感、掩码不抹（明文落库），
+   * 或者掩码抹了、判定说没事（委派照样发出去）。所以 ⑤-1 用**逐长度对照表**把两边钉在同一根尺子上，
+   * ⑤-2 再从源码层面钉住「边界只有一个常量、没有第二份硬编码」。
+   */
+  const run = (n: number): string => `串${'9'.repeat(n)}尾`;
+
+  // ⑤-1 12~30 位逐长度：掩码结果与判定类别必须同口径（这一段替代原来 ③-7/③-8 那两条点断言）
+  const rows: string[] = [];
+  let tableOk = true;
+  for (let n = 12; n <= 30; n += 1) {
+    const t = run(n);
+    const out = redactForStorage(t);
+    const hit = detectSensitive(t);
+    const wantTag = n <= 12 ? null : n <= 20 ? 'card' : 'longdigits';
+    const wantHit = n <= 12 ? '' : n <= 20 ? 'card' : 'longdigits';
+    const wantOut = wantTag === null ? t : `串[已脱敏·${wantTag}·${n}字]尾`;
+    const ok = out === wantOut && hit === wantHit;
+    if (!ok) tableOk = false;
+    rows.push(`${n}位→${hit || '(不判)'}${ok ? '' : ` ★实际 out=${JSON.stringify(out)} hit=${hit}`}`);
+  }
+  log(`      ${rows.join('  ')}`);
+  check('⑤-1：12~30 位**每一个长度**上，掩码与判定同口径（≤12 不动、13~20 归 card、≥21 归 longdigits，字数恒等于串长）', () => {
+    if (!tableOk) throw new Error('对照表里有长度不一致（见上面带 ★ 的那几格）');
+  });
+
+  // ⑤-2 源码接线：边界只有一份常量，判定与掩码都从它拼正则
+  const src = read('apps/server/src/orchestrator/redact.ts');
+  check('⑤-2：边界只有一个来源（LONG_DIGITS_MIN = 21），全文件没有任何硬编码的 `{21,}`', () => {
+    eq((src.match(/const LONG_DIGITS_MIN = 21;/g) ?? []).length, 1, 'LONG_DIGITS_MIN 定义应当只有一处');
+    eq(/\{21,\}/.test(src), false, '出现了硬编码的 {21,} —— 边界被抄了第二份，两处就会各自漂移');
+    // 掩码用带 g 的那份（一段文本里可能有好几串），判定用**不带 g** 的那份（带 g 的 .test() 会因 lastIndex 漏判）
+    eq(/const LONG_DIGITS_RE_G = new RegExp\(LONG_DIGITS_SRC, 'g'\);/.test(src), true, '掩码那份应当是全局的');
+    eq(/const LONG_DIGITS_RE = new RegExp\(LONG_DIGITS_SRC\);/.test(src), true, '判定那份**不能**带 g');
+    eq(/\{ re: LONG_DIGITS_RE_G, tag: 'longdigits' \}/.test(src), true, 'VALUE_PATTERNS 里应当引同一个常量拼出来的正则');
+    eq(/if \(LONG_DIGITS_RE\.test\(t\)\) return 'longdigits';/.test(src), true, 'detectSensitive 里应当引同一个常量拼出来的正则');
+  });
+  check('⑤-2b：掩码表里 longdigits 排在 otp / cvv **之前**（这条顺序本身是安全属性，见 ⑤-3）', () => {
+    const table = src.slice(src.indexOf('const VALUE_PATTERNS'), src.indexOf('/**\n * 这段文本里有没有敏感内容'));
+    const iLong = table.indexOf("tag: 'longdigits'");
+    const iOtp = table.indexOf("tag: 'otp'");
+    const iCard = table.indexOf("tag: 'card'");
+    if (!(iLong > 0 && iOtp > 0 && iCard > 0)) throw new Error('掩码表里找不到这三条之一');
+    if (!(iLong < iOtp && iLong < iCard)) throw new Error(`顺序被改了：longdigits@${iLong} otp@${iOtp} card@${iCard}`);
+  });
+  check('⑤-2c：类别与标签都补齐了（SensitiveHit 联合类型 + sensitiveLabel 的 case）', () => {
+    eq(/export type SensitiveHit = [^;]*'longdigits'/.test(src), true, 'SensitiveHit 里没有 longdigits');
+    eq(/case 'longdigits':/.test(src), true, 'sensitiveLabel 里没有 longdigits 的 case');
+    eq(sensitiveLabel('longdigits'), '超长数字串（21 位以上的连续数字）');
+  });
+
+  // ⑤-3 短上限的字段名规则不许留尾巴
+  const otp = redactForStorage('验证码123456789012345678901');
+  const cvv = redactForStorage('安全码123456789012345678901');
+  log(`      验证码→${otp}`);
+  log(`      安全码→${cvv}`);
+  check('⑤-3：`验证码` / `安全码` 后面接 21 位数字 → **整段**抹掉，不留尾巴（otp 的值上限只有 10、cvv 只有 4，排后面就会留 11 / 17 位明文）', () => {
+    eq(otp, '验证码[已脱敏·longdigits·21字]');
+    eq(cvv, '安全码[已脱敏·longdigits·21字]');
+    for (const [name, out] of [['验证码', otp], ['安全码', cvv]] as const) {
+      eq(/\d{5,}/.test(out), false, `${name} 那条输出里还留着 5 位以上的连续数字：${out}`);
+    }
+  });
+  check('⑤-4：`密码是` + 21 位仍归 password（值上限 64 不留尾巴，且这个标签比 longdigits 更有信息量）', () => {
+    eq(redactForStorage('密码是123456789012345678901'), '密码是[已脱敏·password·21字]');
+    eq(detectSensitive('密码是123456789012345678901'), 'password');
+  });
+
+  // ⑤-5 ~ ⑤-7 命中与不命中的形状
+  check('⑤-5：紧贴中文（没有空格）也命中 —— 中文输入最常见的形状', () => {
+    eq(redactForStorage('流水号123456789012345678901结束'), '流水号[已脱敏·longdigits·21字]结束');
+    eq(detectSensitive('流水号123456789012345678901结束'), 'longdigits');
+  });
+  check('⑤-6：夹在字母/下划线里的数字串**不涂**（base64、token 形状；不是「独立的纯数字串」）', () => {
+    const b64 = 'aGVsbG8xMjM0NTY3ODkwMTIzNDU2Nzg5MDEyMzQ1Ng==';
+    eq(redactForStorage(b64), b64);
+    const embed = 'abc123456789012345678901def';
+    eq(redactForStorage(embed), embed);
+    eq(detectSensitive(embed), '');
+  });
+  check('⑤-7：分组写法（空格/横线）仍归 card，longdigits 不去抢', () => {
+    eq(redactForStorage('6222 0212 3456 7890'), '[已脱敏·card·19字]');
+    // 已知残留（既有 card 行为，本批没动）：分组超过 20 位时 card 抹掉前 20 位、尾巴 4 位留着。
+    // 4 位数字本身不构成卡号/流水号，且改 card 的上限会牵动 ③-4/③-5 与 detectSensitive 的既有口径。
+    eq(redactForStorage('6222 0212 3456 7890 1234 5678'), '[已脱敏·card·24字] 5678');
+  });
+  check('⑤-8：JSON 里的长整数、小数、一段里好几串 —— 各自整段抹掉，字数各自正确', () => {
+    eq(redactForStorage('{"id":123456789012345678901,"n":1}'), '{"id":[已脱敏·longdigits·21字],"n":1}');
+    eq(redactForStorage('金额123456789012345678901.55元'), '金额[已脱敏·longdigits·21字].55元');
+    const two = redactForStorage('两段 1234567890123456789012345 和 99999999999999999999999');
+    eq(two, '两段 [已脱敏·longdigits·25字] 和 [已脱敏·longdigits·23字]');
+    eq(redactForStorage('1234567890123456789012345678901234567890'), '[已脱敏·longdigits·40字]');
+  });
+
+  // ⑤-9 稳定性与「标签不含原文」
+  check('⑤-9：判定连续调用结果稳定（带 g 的正则 .test() 会因 lastIndex 漏判 —— 这就是判定那份不带 g 的理由）', () => {
+    const t = '流水 123456789012345678901 号';
+    eq(Array.from({ length: 5 }, () => detectSensitive(t)).join(','), 'longdigits,longdigits,longdigits,longdigits,longdigits');
+    eq(new Set(Array.from({ length: 3 }, () => redactForStorage(t))).size, 1, '同一串输入抹出来的结果不该每次不同');
+  });
+  check('⑤-9b：拒绝原因里的那句人话**不含原文**（它会进委派拒绝与频道留痕）', () => {
+    const secret = '123456789012345678901';
+    const label = sensitiveLabel(detectSensitive(`帮我查这串流水 ${secret} 的来源`));
+    eq(label.includes(secret), false, '标签里出现了原文数字');
+    eq(label, '超长数字串（21 位以上的连续数字）');
+  });
+
+  // ⑤-10 下游那两条通道也走同一张表（步骤摘要是明文列，这道脱敏是它唯一的闸）
+  check('⑤-10：scrubTaskText（步骤摘要）与 taskDisplayTitle（任务卡显示）同样抹掉 ≥21 位串', () => {
+    eq(scrubTaskText('写入「123456789012345678901」到搜索框'), '写入「[已脱敏·21字]」到搜索框');
+    eq(taskDisplayTitle('查 123456789012345678901 的余额'), '查 [已脱敏·longdigits·21字] 的余额');
   });
 }
 
