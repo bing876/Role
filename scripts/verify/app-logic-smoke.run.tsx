@@ -117,6 +117,14 @@ const bridge = new Proxy(
     agentDrop: async (wcId: number) => {
       bridgeCalls.push(`agentDrop(${wcId})`);
     },
+    /** 会话：登出/静默登录都要把凭证同步给主进程（不记就看不见这条清场动作） */
+    syncSession: async (_apiBase: string, token: string) => {
+      bridgeCalls.push(`syncSession('${token}')`);
+    },
+    /** 分区白名单：登出必须清空，否则下一位登录者继承上一位的项目 */
+    syncProjects: async (ids: number[]) => {
+      bridgeCalls.push(`syncProjects([${ids.join(',')}])`);
+    },
   } as Record<string, unknown>,
   {
     get(target, prop) {
@@ -165,6 +173,9 @@ let PENDING_MEM = [
   { id: 321, type: 'decision' as const, content: '决定用 A 方案', updatedAt: '2026-09-24T00:00:00.000Z' },
   { id: 322, type: 'fact' as const, content: '项目代号是猎户座', updatedAt: '2026-09-24T00:00:00.000Z' },
 ];
+/** 会话那一节要用的两个开关：让 /auth/me 失败、密码是否已经设过 */
+let authMeFails = false;
+let hasPassword = false;
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -175,7 +186,18 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   const method = (init?.method ?? 'GET').toUpperCase();
   requests.push({ method, path, body: init?.body });
 
-  if (path === '/auth/me') return json({ user: { id: 1, phone: '13800000000', xyz: '' }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
+  if (path === '/auth/me') {
+    if (authMeFails) return new Response(JSON.stringify({ error: 'token 过期' }), { status: 401, headers: { 'content-type': 'application/json' } });
+    return json({ user: { id: 1, phone: '13800000000', xyz: '', has_password: hasPassword }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
+  }
+  if (path === '/auth/password/set') {
+    const b = JSON.parse(String(init?.body ?? '{}')) as { old_password?: string; new_password?: string };
+    if (hasPassword && !b.old_password) {
+      return new Response(JSON.stringify({ error: '已经设过密码了，要先验原密码' }), { status: 400, headers: { 'content-type': 'application/json' } });
+    }
+    hasPassword = true;
+    return json({ ok: true, message: '密码已设置，下次可以用 XYZ + 密码登录。' });
+  }
   if (path === '/projects' && method === 'GET') {
     return json({ projects: [PROJECT, PROJECT_B].map((p) => ({ ...p, isCurrent: p.id === currentProjectId })), currentProjectId });
   }
@@ -249,6 +271,28 @@ async function waitFor(name: string, pred: () => boolean, rounds = 50): Promise<
   }
   throw new Error(`等不到条件：${name}`);
 }
+/**
+ * ★ 顶层前置条件检查：不成立时**不要让整张网崩掉**。
+ *   崩掉的网只会给出 `等不到条件：xxx` 然后中断 —— 后面每一条断言都看不见，
+ *   反证脚本也没法判断"到底咬住了哪条"。这里记一条 FAIL，然后继续跑，
+ *   让后续断言各自把自己的失败原因说出来。
+ */
+async function ensure(name: string, pred: () => boolean): Promise<void> {
+  try {
+    await waitFor(name, pred);
+  } catch (e) {
+    fails += 1;
+    log(`  ✗ 前置条件不成立：${name}`);
+    log(`      ${(e as Error).message.split('\n')[0]}`);
+  }
+}
+/**
+ * ★ 「在登录页」不能用 `.authWrap` 判定 —— **"正在恢复登录状态…"那个占位页也是 `.authWrap`**，
+ *   两者混在一起就会出现"身份卡在检查中也算回到登录页"的假绿（片 5 的反证 A2 当场抓到）。
+ *   真登录页（`AuthScreen`）有 `.authTabs`，占位页没有。
+ */
+const onLoginScreen = (): boolean => !!q('.authWrap .authTabs');
+const onCheckingScreen = (): boolean => (q('.authWrap')?.textContent ?? '').includes('正在恢复登录状态');
 const doc = dom.window.document;
 const q = (sel: string): Element | null => doc.querySelector(sel);
 const qa = (sel: string): Element[] => Array.from(doc.querySelectorAll(sel));
@@ -440,7 +484,7 @@ await act(async () => {
   rootGlue.render(React.createElement(App));
 });
 await flush(4);
-await waitFor('第三个 App 起来（侧栏在）', () => !!q('aside.sidebar'));
+await ensure('第三个 App 起来（侧栏在）', () => !!q('aside.sidebar'));
 
 await check('主进程说「AI 求助」→ 聊天区长出求助卡（文案与类型都对）', async () => {
   emitAgent({ kind: 'help', wcId: 4242, helpKind: 'captcha', question: '这个滑块我过不去', hint: '请帮她拖一下' });
@@ -631,6 +675,122 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
 await act(async () => rootGlue.unmount());
 
 // ---------------------------------------------------------------------------
+// ⑥ features/auth（片 5）—— 静默登录 / 改密码 / 登出
+// ---------------------------------------------------------------------------
+log('');
+log('--- ⑥ 会话：静默登录 / 改密码 / 登出 ---');
+
+/** 挂一个干净的 App（每次都先把登录态放好，再挂） */
+async function mountApp(withToken: boolean): Promise<ReturnType<typeof createRoot>> {
+  if (withToken) dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+  else dom.window.localStorage.removeItem('workbench.token');
+  /** ★ 每次都用**新的**容器：同一个容器重复 createRoot 会警告，且"卸载→再挂"行为不保证 */
+  doc.querySelectorAll('#root').forEach((n) => n.remove());
+  const host = doc.createElement('div');
+  host.id = 'root';
+  doc.body.appendChild(host);
+  const root = createRoot(host);
+  await act(async () => {
+    root.render(React.createElement(App));
+  });
+  await flush(4);
+  return root;
+}
+
+await check('有 token：静默登录成功 —— 不进登录页，token 留在本地', async () => {
+  authMeFails = false;
+  const root = await mountApp(true);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  assert.ok(dom.window.localStorage.getItem('workbench.token'), '静默登录成功后 token 不该被清掉');
+  await act(async () => root.unmount());
+});
+
+await check('token 失效：踢回登录页、清掉本地 token、把主进程那份凭证也清掉', async () => {
+  authMeFails = true;
+  bridgeCalls.length = 0;
+  const root = await mountApp(true);
+  await waitFor('回到登录页（不是卡在"正在恢复登录状态"）', onLoginScreen);
+  assert.ok(!dom.window.localStorage.getItem('workbench.token'), '过期 token 还留在本地（下次启动还会再撞一次）');
+  assert.ok(bridgeCalls.some((c) => c.startsWith('syncSession(') && c.includes("''")), `没清主进程那份凭证：${JSON.stringify(bridgeCalls)}`);
+  await act(async () => root.unmount());
+  authMeFails = false;
+});
+
+await check('改密码：首次设置只送新密码，成功后页面上真的显示服务端那句话', async () => {
+  hasPassword = false;
+  const root = await mountApp(true);
+  await waitFor('离开登录页', () => q('.authWrap') === null);
+  /**
+   * ★ 「我的号」那一块在 `{curAgent && (…)}` 里（与记忆/资料同一个面板），
+   *   所以要等名单拉回来、有当前智能体之后，密码输入框才存在。
+   */
+  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  const setVal = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  const newInput = qa('input[placeholder="新密码（≥8 位）"]')[0];
+  assert.ok(newInput, '找不到新密码输入框');
+  await act(async () => {
+    setVal.call(newInput, 'newpass123');
+    newInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  await flush(2);
+  const btn = qa('button').find((b) => (b.textContent ?? '').includes('设置密码')) ?? null;
+  click(btn, '设置密码');
+  await waitFor('发出 /auth/password/set', () => requests.some((r) => r.path === '/auth/password/set'));
+  await flush(3);
+  const req = requests.filter((r) => r.path === '/auth/password/set').pop()!;
+  const body = JSON.parse(String(req.body)) as Record<string, string>;
+  assert.equal(body.new_password, 'newpass123', `新密码没送出去：${JSON.stringify(body)}`);
+  assert.ok(!('old_password' in body), `首次设置不该要原密码：${JSON.stringify(body)}`);
+  assert.match(doc.body.textContent ?? '', /密码已设置，下次可以用 XYZ \+ 密码登录。/, '服务端那句话没显示出来');
+  assert.match(doc.body.textContent ?? '', /密码：已设置/, '本地的 has_password 没跟着更新（界面还说不认识密码）');
+  await act(async () => root.unmount());
+});
+
+await check('改密码（已设过）：必须带原密码 —— 不带就会被服务端挡下并显示原因', async () => {
+  const root = await mountApp(true);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  const setVal = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  const oldInput = qa('input[placeholder="原密码"]')[0];
+  const newInput = qa('input[placeholder="新密码（≥8 位）"]')[0];
+  assert.ok(oldInput && newInput, `密码输入框不全（原=${!!oldInput} 新=${!!newInput}）—— 已设过密码时必须有原密码那格`);
+  await act(async () => {
+    setVal.call(oldInput, 'oldpass123');
+    oldInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    setVal.call(newInput, 'newpass456');
+    newInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  await flush(2);
+  // 已设过密码时按钮文案变成「修改密码」—— 两种都认
+  click(qa('button').find((b) => /设置密码|修改密码/.test(b.textContent ?? '')) ?? null, '设置/修改密码');
+  await waitFor('发出第二次 /auth/password/set', () => requestsTo('/auth/password/set').length >= 2);
+  await flush(3);
+  /**
+   * ★ 顺序有意如此：**先看用户能看见的东西**（页面上那句话），再看请求体。
+   *   反过来的话，"body 少送原密码"这类注入会被请求体断言先拦住，
+   *   于是"用户其实看到了失败"这个更重要的现象就永远不会被测到（片 5 的反证 A1 抓到的）。
+   */
+  assert.match(doc.body.textContent ?? '', /密码已设置/, '第二次改密码没成功（页面没显示成功文案）');
+  const req = requests.filter((r) => r.path === '/auth/password/set').pop()!;
+  const body = JSON.parse(String(req.body)) as Record<string, string>;
+  assert.equal(body.old_password, 'oldpass123', `原密码没送出去：${JSON.stringify(body)}`);
+  await act(async () => root.unmount());
+});
+
+await check('登出：退出登录 → 回登录页 + 清 token + 清主进程凭证 + 清分区白名单', async () => {
+  bridgeCalls.length = 0;
+  const root = await mountApp(true);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
+  await waitFor('回到登录页', onLoginScreen);
+  assert.ok(!dom.window.localStorage.getItem('workbench.token'), '登出后 token 还在本地');
+  assert.ok(bridgeCalls.some((c) => c.includes('syncSession(')), `没清主进程凭证：${JSON.stringify(bridgeCalls)}`);
+  assert.ok(bridgeCalls.some((c) => c.includes('syncProjects(')), `没清分区白名单：${JSON.stringify(bridgeCalls)}`);
+  await act(async () => root.unmount());
+});
+
+// ---------------------------------------------------------------------------
 // ④ 直接挂真实 hook：会话切换期间「晚到的旧响应不许覆盖新列表」（真 hook，不是副本）
 //    （这条守卫写在 useKnowledge.load 里，App 级别很难稳定触发，所以在真实 hook 上验）
 // ---------------------------------------------------------------------------
@@ -735,4 +895,9 @@ log('');
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
 log(`  （期间发出 ${requests.length} 条真实请求）`);
-if (fails > 0) process.exitCode = 1;
+/**
+ * ★ 收尾：jsdom + 多轮挂载/卸载会留下计时器句柄，进程可能**挂着不退出**
+ *   （反证脚本的 subprocess 会一直等 —— 表现为"假死"，非常难查）。
+ *   所以打印完结论后用一个小计时器显式退出：既给 stdout 留出冲刷时间，也不拖住调用方。
+ */
+setTimeout(() => process.exit(fails > 0 ? 1 : 0), 50);

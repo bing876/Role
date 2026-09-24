@@ -67,6 +67,7 @@ import type { ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
 import { useBrowserGlue } from './app/browserGlue';
 import { useProjects } from './features/projects';
+import { useAuth } from './features/auth';
 
 /**
  * 第 2 步（内嵌版）「脸和门」：
@@ -700,18 +701,33 @@ export default function App() {
   /** 第 1 步的 IPC 自检，留着当回归哨兵 */
   const [bridgeInfo, setBridgeInfo] = useState('检测中…');
 
-  // ---- 第 5 步：会话。JWT 从 localStorage 读回后只放内存 state；绝不 console 打全文 ----
-  const [session, setSession] = useState<AuthSession | null>(null);
+  /**
+   * 批次 M · 逻辑抽离第 5 片：**会话**（静默登录 / 改密码 / 登出）搬进 `features/auth`。
+   *
+   * ★ 依旧**只换来源、不改名字** → 下面 30 多处 `session?.token`、JSX 里的
+   *   `pwOld/pwNew/pwMsg/onSubmitPassword/onLogout` 一个字都不用改。
+   * ★ 登出被有意切成两半：会话那一半在 hook（`signOutSession`），
+   *   跨 feature 清场那一半留在本文件的 `onLogout`（见那里的注释）。
+   */
+  const {
+    session,
+    setSession,
+    checkingAuth,
+    pwOld,
+    setPwOld,
+    pwNew,
+    setPwNew,
+    pwMsg,
+    setPwMsg,
+    submitPassword: onSubmitPassword,
+    signOutSession,
+  } = useAuth();
   /**
    * 多智能体编排 · 「内部频道」面板开没开。
    *
    * 只是个视图开关（与 `browser.view` 同一性质）：开了盖在中栏上面看智能体之间的
    * 委派对话，关掉就回到原来的样子 —— **不 start / 不 resume / 不碰任何一路驾驶**。
    */
-  const [checkingAuth, setCheckingAuth] = useState(() => Boolean(localStorage.getItem(TOKEN_KEY)));
-  const [pwOld, setPwOld] = useState('');
-  const [pwNew, setPwNew] = useState('');
-  const [pwMsg, setPwMsg] = useState('');
 
   /**
    * ★ 批次 M · 逻辑抽离时**上移**：`sessionRef` 原先声明在下面（第 8 步任务快照那段），
@@ -722,33 +738,10 @@ export default function App() {
   const sessionRef = useRef<AuthSession | null>(null);
   sessionRef.current = session;
 
-  /** 带已存 token 调 /auth/me：能换回 profile 就静默登录，换不回来就清 token 回登录页 */
-  useEffect(() => {
-    const saved = localStorage.getItem(TOKEN_KEY);
-    if (!saved) return;
-    let off = false; // 卸载标志：慢回来的响应不再 setState
-    authFetchJson<AuthProfile>('/auth/me', { headers: { authorization: `Bearer ${saved}` } })
-      .then((p) => {
-        if (off) return;
-        /**
-         * ★ F5 后的静默恢复 —— **必须**同步给主进程。
-         * 这条路径完全不经过主进程（token 是从 localStorage 直接读出来的），
-         * 不同步的话就会出现「渲染层已登录、主进程没凭证」，
-         * 用户刷新后立刻点下载文档就会报"没有登录凭证"。
-         */
-        void window.workbench?.syncSession?.(API_BASE(), saved);
-        setSession({ ...p, token: saved });
-      })
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        // 登录态失效 → 顺手把主进程那份也清掉，别留着一份过期的还能发请求
-        void window.workbench?.syncSession?.(API_BASE(), '');
-        if (!off) setSession(null);
-      })
-      .finally(() => { if (!off) setCheckingAuth(false); });
-    return () => { off = true; };
-  }, []);
-
+  /**
+   * 静默登录（带已存 token 调 `/auth/me` 换回 profile）也搬进 `features/auth` 了 ——
+   * 它和 session 是同一件事，分开写就会出现"两个地方各自决定登录态"。
+   */
   // ---- 第 6 步：流式聊天状态（真聊天，不再是内存假数据）----
   /**
    * 第 13 步：这一轮的**用户原话**是不是「开网页指令」。
@@ -1450,37 +1443,14 @@ export default function App() {
     })();
   }, [session]);
 
-  const onSubmitPassword = async () => {
-    if (!session) return;
-    setPwMsg('');
-    try {
-      const body: Record<string, string> = { new_password: pwNew };
-      if (session.user.has_password) body.old_password = pwOld;
-      const r = await authFetchJson<{ ok: boolean; message: string }>('/auth/password/set', {
-        method: 'POST',
-        body: JSON.stringify(body),
-        headers: { authorization: `Bearer ${session.token}` },
-      });
-      setPwMsg(r.message);
-      setPwOld('');
-      setPwNew('');
-      setSession((s) => (s ? { ...s, user: { ...s.user, has_password: true } } : s));
-    } catch (e) {
-      setPwMsg((e as Error).message);
-    }
-  };
-
+  /**
+   * 登出 = **两半**（这一片有意切开的）：
+   *   ① 会话那一半 → `signOutSession()`（清 token / 清主进程凭证 / 清分区白名单 / session 置空）；
+   *   ② 跨 feature 清场那一半 → 下面这些 reset（聊天 / 名单 / 两层记忆 / 资料 / 任务 / 网页）。
+   * 本函数只剩"顺序"，两半各归各位 —— 这也是它必须留在 App 的原因。
+   */
   const onLogout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    // ★ 登出 → 把主进程那份凭证也清掉（它是内存里的，不主动清就得等进程退出）
-    void window.workbench?.syncSession?.(API_BASE(), '');
-    /**
-     * ★ 登出 → 分区闸的项目集合也要清空。
-     * 不清的话下一位登录者会**继承上一位的项目白名单**，分区闸就等于没装。
-     */
-    void window.workbench?.syncProjects?.([]);
-    setSession(null);
-    setPwMsg('');
+    signOutSession();
     // 第 6 步：聊天痕迹也清掉（历史本来就在服务端，重启登录后由 /chat/history 还原）
     setChatNote('');
     setStreamText('');

@@ -28,6 +28,7 @@ KNOWLEDGE = FEATURES / 'knowledge' / 'useKnowledge.ts'
 MEMORY = FEATURES / 'memory' / 'useMemory.ts'
 GLUE = FEATURES.parent / 'app' / 'browserGlue.ts'
 PROJECTS = FEATURES / 'projects' / 'useProjects.ts'
+AUTH = FEATURES / 'auth' / 'useAuth.ts'
 
 MUTATIONS = [
     {
@@ -167,6 +168,44 @@ MUTATIONS = [
         'anchor': "        body: JSON.stringify({ name }),",
         'replace': "        body: JSON.stringify({}),",
         'expect': '建项目的 body 不对',
+    },
+    # ---- 片 5：features/auth（这一片**全部**是 user-visible 注入：
+    #      只让内部调用计数变红不算反证 —— 用户 2026-09-24 拍板）----
+    {
+        'file': AUTH,
+        'id': 'A1',
+        'name': '改密码时不再按「已设过密码」带原密码（服务端会挡下并显示原因）',
+        'anchor': "      if (session.user.has_password) body.old_password = pwOld;",
+        'replace': "      // 注入：永远不带原密码",
+        'visible': True,
+        'expect': '第二次改密码没成功',
+    },
+    {
+        'file': AUTH,
+        'id': 'A2',
+        'name': '静默登录失败后不再退出「检查中」（界面永远停在检查中）',
+        'anchor': "      .finally(() => { if (!off) setCheckingAuth(false); });",
+        'replace': "      .finally(() => { void off; });",
+        'visible': True,
+        'expect': '回到登录页',
+    },
+    {
+        'file': AUTH,
+        'id': 'A3',
+        'name': '登出不清 session（人还"登录着"）',
+        'anchor': "    setSession(null);\n    setPwMsg('');\n  };",
+        'replace': "    setPwMsg('');\n  };",
+        'visible': True,
+        'expect': '回到登录页',
+    },
+    {
+        'file': AUTH,
+        'id': 'A4',
+        'name': '改密码成功后不更新本地 has_password（界面还说"未设置"）',
+        'anchor': "      setSession((s) => (s ? { ...s, user: { ...s.user, has_password: true } } : s));",
+        'replace': "      // 注入：本地不同步",
+        'visible': True,
+        'expect': 'has_password 没跟着更新',
     },
 ]
 
