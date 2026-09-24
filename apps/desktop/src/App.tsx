@@ -69,6 +69,8 @@ import { useBrowserGlue } from './app/browserGlue';
 import { useProjects } from './features/projects';
 import { useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
+import { useChat } from './features/chat';
+import type { AgentChat, Message, Role } from './features/chat';
 import type { CurrentTask } from './features/tasks';
 
 /**
@@ -177,27 +179,10 @@ import type { CurrentTask } from './features/tasks';
  *   - 分区规则、母鸡调度、项目级记忆都不在本子阶段范围内。
  */
 
-/** 第 18 步：聊天只剩这两种角色 —— 网页不再以消息形式出现在聊天里（看中栏工作区） */
-type Role = 'user' | 'assistant';
-type Message = {
-  id: number;
-  role: Role;
-  text: string;
-  /**
-   * 第 26 步：这条回复引用到的网页来源（本轮联网检索命中的）。
-   * 只有走过搜索的助手回复才有；渲染成气泡下方的可点链接。
-   */
-  sources?: ChatSource[];
-  /**
-   * 批次 J：这句助手话是**哪个智能体**说的（@点名换人之后，同一条会话里会有不同人开口）。
-   * undefined = 不知道（老数据 / 服务端没给）—— 界面就**不挂名字牌**，绝不拿当前智能体冒充。
-   */
-  speaker?: ChatSpeaker;
-};
-/** 第 15 步：一个智能体 = 一份聊天（自己的消息列表 + 自己的会话号） */
-type AgentChat = { messages: Message[]; convId: number | null };
-/** 空列表用同一个常量：切智能体时引用稳定，不会每次渲染都造新数组 */
-const EMPTY_MESSAGES: Message[] = [];
+/**
+ * 第 15 步：`Role` / `Message` / `AgentChat` / `EMPTY_MESSAGES` 的**定义**随片 7a 一起搬进
+ * `features/chat`（那边是唯一 owner）；本文件只 import 类型用。
+ */
 
 /**
  * 阶段简报 · 方案 B：临时测试条用的相位中文名。
@@ -651,18 +636,15 @@ export default function App() {
    * chats[agentId] = { messages, convId }；切换智能体只是换渲染哪一份，
    * 绝不把两个智能体的消息揉成一条时间线。
    */
-  const [chats, setChats] = useState<Record<number, AgentChat>>({});
-  /** 异步回包里读最新 chats（闭包里拿 state 会拿到旧的） */
-  const chatsRef = useRef<Record<number, AgentChat>>({});
-  chatsRef.current = chats;
+  /**
+   * ★ 这两个**留在 App**（不进 hook）：`curAgentId` 是左栏的选择，浏览器 / 记忆 / 胶水都要读；
+   *   `curAgentRef` 是它的「最新值镜像」（异步回包里读它，闭包里的 state 是旧的）。
+   *   片 7a 搬聊天状态时，**它们一个都没删**（用户点名的红线）。
+   */
   /** 左栏选中的那个智能体；null = 还没拿到列表 */
   const [curAgentId, setCurAgentId] = useState<number | null>(null);
   /** 异步回调里读「此刻是哪个智能体」——直接用 state 会拿到挂载时的旧闭包值 */
   const curAgentRef = useRef<number | null>(null);
-  curAgentRef.current = curAgentId;
-  /** 已经拉过历史的智能体，来回切换不反复请求 */
-  const historyLoadedRef = useRef<Set<number>>(new Set());
-
   /**
    * 收尾 7 | 电脑三级可见度（批次 H 的 `agents.computer_visibility`）：status / preview / takeover。
    * 默认 `status`（收起，不抢焦点）—— 这是批次 H 的设计前提，也是服务端那列的默认值。
@@ -671,22 +653,6 @@ export default function App() {
    */
   const [computerVisibility, setComputerVisibility] = useState<ComputerVisibilityLevel>('status');
 
-  /** 只改**某一个**智能体的那份聊天。异步回包（尤其是流式）必须用它，别用下面的 setMessages */
-  const patchChat = (agentId: number, patch: (c: AgentChat) => AgentChat) => {
-    setChats((prev) => {
-      const cur = prev[agentId] ?? { messages: [], convId: null };
-      const next = patch(cur);
-      return next === cur ? prev : { ...prev, [agentId]: next };
-    });
-  };
-  const curChat = curAgentId === null ? undefined : chats[curAgentId];
-  const messages = curChat?.messages ?? EMPTY_MESSAGES;
-  /** 往「当前智能体」那份聊天里追加/替换消息（沿用第 6 步以来的调用点写法） */
-  const setMessages = (updater: Message[] | ((prev: Message[]) => Message[])) => {
-    const id = curAgentRef.current;
-    if (id === null) return;
-    patchChat(id, (c) => ({ ...c, messages: typeof updater === 'function' ? updater(c.messages) : updater }));
-  };
   /** 第 1 步的 IPC 自检，留着当回归哨兵 */
   const [bridgeInfo, setBridgeInfo] = useState('检测中…');
 
@@ -759,13 +725,9 @@ export default function App() {
    * 第 15 步：按智能体分别记（否则在 A 里开的网页会压掉 B 里的确认按钮）。
    */
   const lastUserWasOpenRef = useRef<Record<number, boolean>>({});
-  const [streaming, setStreaming] = useState(false);
   /** 第 15 步：这轮流式是**哪个**智能体在打字——切走后不该在别的智能体里冒出打字气泡 */
-  const [streamingAgentId, setStreamingAgentId] = useState<number | null>(null);
   /** 打字机中的半截助手回复（done 之前只活在这里；库里只有完成的全文） */
-  const [streamText, setStreamText] = useState('');
   /** 聊天区一条可关闭的提示（未配置模型 / 出错 / 已先行暂停等），不冒充 AI 的话 */
-  const [chatNote, setChatNote] = useState('');
   /**
    * 第 26 步：联网搜索的**过程提示**（一行小字，如「正在搜索：今天有什么新闻」）。
    *
@@ -852,25 +814,8 @@ export default function App() {
   const [personaEditDraft, setPersonaEditDraft] = useState<AgentPersona>({ name: '', who: '', tone: '', duty: '' });
   /** 第 19 步：正在删的那条资料 id（按钮显示「删除中…」并防连点），null = 没有删除在跑 */
   /** 第 7 步：主进程 'agent' 事件的镜像（步摘要/文档结论），权威循环在主进程 */
-  const [agentSteps, setAgentSteps] = useState<string[]>([]);
-  const [agentDoc, setAgentDoc] = useState<{ title: string; outline: string[] } | null>(null);
 
-  /** 聊天里追加一条「小助之外」的系统泡（driver 循环的问话/结论/报错），只进内存展示 */
-  const pushChatLine = (text: string) => {
-    setMessages((prev) => prev.concat({ id: Date.now() + Math.floor(Math.random() * 1000), role: 'assistant', text }));
-  };
 
-  /**
-   * 第 17 步：按智能体落桶的系统泡。
-   * 两路驾驶可能分属两个智能体，事件里的 wcId 决定这条话进谁的聊天 ——
-   * 绝不按「此刻正在看的那个智能体」乱写（那正是「聊天串了」）。
-   */
-  const pushChatLineFor = (agentId: number, text: string) => {
-    patchChat(agentId, (c) => ({
-      ...c,
-      messages: c.messages.concat({ id: Date.now() + Math.floor(Math.random() * 1000), role: 'assistant', text }),
-    }));
-  };
 
   /**
    * 第 22 步：改可调配置（并发数 / 多实例上限）。
@@ -914,6 +859,42 @@ export default function App() {
    * ★ `sessionRef` / `curAgentRef` 是**注入**的：这两个"最新值镜像"ref 原样留在 App 里。
    * ★ `onNote` 传的是 `setChatNote`：提示文案仍写在聊天流里，但 memory feature 不依赖 chat 的 state。
    */
+  /**
+   * 批次 M · 逻辑抽离第 7a 片：**聊天这一侧的 state 与历史**搬进 `features/chat`。
+   *
+   * ★ 依旧**只换来源、不改名字** → 本文件 100 多处 `messages` / `setMessages` / `chatNote` /
+   *   `agentSteps` / `streaming` … 以及 JSX 一个字都不用改。
+   * ★ `setChatNote` 现在从 hook 出来，仍是**其它 feature 唯一往聊天里说话的通道**
+   *   （浏览器工作区、记忆、胶水都拿它当 `onNote`）—— 所以这个 hook 必须排在它们之前。
+   * ★ `sendChat`（485 行）**还没搬**（片 7b）：它继续用这里透出的名字，行为一字未变。
+   */
+  const {
+    chats,
+    setChats,
+    chatsRef,
+    historyLoadedRef,
+    curChat,
+    messages,
+    setMessages,
+    patchChat,
+    streaming,
+    setStreaming,
+    streamingAgentId,
+    setStreamingAgentId,
+    streamText,
+    setStreamText,
+    chatNote,
+    setChatNote,
+    agentSteps,
+    setAgentSteps,
+    agentDoc,
+    setAgentDoc,
+    pushChatLine,
+    pushChatLineFor,
+    loadAgentHistory,
+    resetChat,
+  } = useChat({ sessionRef, curAgentId, curAgentRef });
+
   const {
     user: userMem,
     setUser: setUserMem,
@@ -986,27 +967,6 @@ export default function App() {
     }
   };
 
-  /** 拉某个智能体自己的那条会话历史（一个智能体一份聊天，不串） */
-  const loadAgentHistory = async (agent: AgentView) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    const q = agent.conversationId !== null ? `?conversationId=${agent.conversationId}` : `?agentId=${agent.id}`;
-    try {
-      const h = await authFetchJson<ChatHistoryResult>(`/chat/history${q}`, {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return; // 切号期间晚到的响应丢掉
-      historyLoadedRef.current.add(agent.id);
-      patchChat(agent.id, () => ({
-        // 批次 J：历史里的发言人一并带过来（服务端 speaker_agent_id → {id,name}）；
-        // 老行没有这一列 → undefined → 气泡不挂名字牌（不猜、不拿当前智能体冒充）
-        messages: h.messages.map((m) => ({ id: m.id, role: m.role, text: m.text, sources: m.sources, speaker: m.speaker })),
-        convId: h.conversationId,
-      }));
-    } catch (e) {
-      setChatNote(`拉取历史失败：${(e as Error).message}`);
-    }
-  };
 
   /**
    * 子阶段 2-B：按项目取智能体名单（**纯取，不动 state**）。
@@ -1418,13 +1378,10 @@ export default function App() {
   const onLogout = () => {
     signOutSession();
     // 第 6 步：聊天痕迹也清掉（历史本来就在服务端，重启登录后由 /chat/history 还原）
-    setChatNote('');
-    setStreamText('');
-    // 第 15 步：所有智能体的聊天、列表、两层记忆全部清掉（会话 effect 也会兜一遍）
-    setChats({});
+    // 聊天这一侧（提示 / 流式文本 / 所有智能体的聊天缓存 / 历史账本 / 步骤 / 文档）一次清干净
+    resetChat();
     setCurAgentId(null);
     curAgentRef.current = null;
-    historyLoadedRef.current = new Set();
     setAgents([]);
     setAgentNote('');
     setUserMem([]);
@@ -1443,8 +1400,6 @@ export default function App() {
     void window.workbench?.agentStop();
     // 第 18 步：所有网页一并关掉（换号不该看见上一个号的网页）——由浏览器工作区自己清
     browser.closeAllTabs();
-    setAgentSteps([]);
-    setAgentDoc(null);
     resetTasks();
     setAgentAwaitInfo(false);
     setAgentAwaitAgent(null);

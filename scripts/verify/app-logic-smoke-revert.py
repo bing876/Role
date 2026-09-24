@@ -31,6 +31,7 @@ PROJECTS = FEATURES / 'projects' / 'useProjects.ts'
 AUTH = FEATURES / 'auth' / 'useAuth.ts'
 TASKS = FEATURES / 'tasks' / 'useTasks.ts'
 APP_TSX = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
+CHAT = FEATURES / 'chat' / 'useChat.ts'
 
 MUTATIONS = [
     {
@@ -255,6 +256,25 @@ MUTATIONS = [
         'replace': "        setTask(parsed as TaskState);",
         'visible': True,
         'expect': '坏负载把好状态覆盖掉了',
+    },
+    # ---- 片 7a：features/chat ----
+    {
+        'file': CHAT,
+        'id': 'C1',
+        'name': 'loadAgentHistory 丢掉「切号期间晚到的响应丢掉」这条守卫（会把 A 的历史写进 B）',
+        'anchor': "      if (sessionRef.current?.token !== sess.token) return; // 切号期间晚到的响应丢掉\n",
+        'replace': "",
+        'visible': True,
+        'expect': '切号后 A 号晚到的历史写进了聊天桶',
+    },
+    {
+        'file': CHAT,
+        'id': 'C2',
+        'name': 'resetChat 忘了清聊天桶（登出后还留着上一个号的对话）',
+        'anchor': "    setChats({});\n    historyLoadedRef.current = new Set();",
+        'replace': "    // 注入：不清聊天桶",
+        'visible': True,
+        'expect': 'resetChat 之后桶没清空',
     },
 ]
 

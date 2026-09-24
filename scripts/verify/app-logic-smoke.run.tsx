@@ -242,7 +242,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ agents: AGENTS });
   }
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
-  if (path === '/chat/history') return json({ conversationId: 501, messages: [] });
+  if (path === '/chat/history') {
+    const qs2 = new URLSearchParams(url.split('?')[1] ?? '');
+    const aid = Number(qs2.get('agentId') ?? '');
+    if (aid === 98) return json({ conversationId: 502, messages: [{ id: 901, role: 'user', text: '八号的历史' }, { id: 902, role: 'assistant', text: '我是卡布' }] });
+    return json({ conversationId: 501, messages: [{ id: 900, role: 'assistant', text: '九七号的历史' }] });
+  }
   if (path === '/memory/user') return json({ items: USER_MEM });
   const pm = /^\/agents\/(\d+)\/memory$/.exec(path);
   if (pm) return json({ items: Number(pm[1]) === 97 ? PROJ_MEM : [] });
@@ -283,6 +288,7 @@ const App = (await import('../../apps/desktop/src/App')).default;
 const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge');
 const { useMemory } = await import('../../apps/desktop/src/features/memory');
 const { useBrowserGlue } = await import('../../apps/desktop/src/app/browserGlue');
+const { useChat } = await import('../../apps/desktop/src/features/chat');
 
 async function flush(rounds = 10): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
@@ -913,6 +919,61 @@ await check('F3-C2（用户点名场景·正用着后端重启）：工作台不
   await act(async () => root.unmount());
 });
 
+await check('聊天（片 7a）：切智能体 → 按 agentId 拉历史，气泡真的画出来', async () => {
+  currentProjectId = 7;
+  const root = await mountApp(true);
+  await ensure('App 起来（侧栏在）', () => !!q('aside.sidebar'));
+  await ensure('当前智能体的历史拉回来了', () => (doc.body.textContent ?? '').includes('九七号的历史'));
+  assert.match(doc.body.textContent ?? '', /九七号的历史/, '97 号的历史没渲染出来');
+  // 切到 98 号（8 号项目里的「卡布」）→ 应当拉它的历史，且**不串**成 97 号的
+  const other = qa('.contact[data-agent-id]').find((n) => n.getAttribute('data-agent-id') === '98');
+  if (other) {
+    click(other, '卡布');
+    await flush(5);
+    assert.ok(requestsTo('/chat/history').some((r) => r.path === '/chat/history'), '没发 /chat/history');
+    assert.match(doc.body.textContent ?? '', /我是卡布/, '切过去没拉 98 号自己的历史');
+  }
+  await act(async () => root.unmount());
+});
+
+await check('useChat：resetChat 之后聊天桶必须空（登出/换号不残留上一个号的对话）', async () => {
+  /**
+   * ★ 这条原来写成"登出后页面里没有旧对话文字 || 请求过历史"—— **那是假绿**：
+   *   后半个条件恒真（之前当然请求过历史），所以把 `resetChat` 里的清桶删掉也照样绿。
+   *   现在改成把 hook 的桶计数**渲染出来**再断言（能看见的东西才配当证据）。
+   */
+  const sessionRef = { current: { token: 'tok-A' } } as { current: { token: string } | null };
+  let api: { loadAgentHistory: (a: { id: number; conversationId: number | null }) => Promise<void>; resetChat: () => void } | null = null;
+  function Host() {
+    const chat = useChat({ sessionRef: sessionRef as never, curAgentId: 97, curAgentRef: { current: 97 } as never });
+    api = chat as never;
+    return React.createElement('span', { id: 'bucketView' }, `桶:${Object.keys(chat.chats).length}`);
+  }
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const hostRoot = createRoot(host);
+  await act(async () => {
+    hostRoot.render(React.createElement(Host));
+  });
+  await flush(2);
+  assert.equal(host.textContent, '桶:0', `一开始桶就该是空的：${host.textContent}`);
+
+  await act(async () => {
+    await api!.loadAgentHistory({ id: 97, conversationId: 501 });
+  });
+  await flush(2);
+  assert.equal(host.textContent, '桶:1', `拉了历史之后桶里应当有 1 份：${host.textContent}`);
+
+  await act(async () => {
+    api!.resetChat();
+  });
+  await flush(2);
+  assert.equal(host.textContent, '桶:0', `resetChat 之后桶没清空（登出会残留上一个号的对话）：${host.textContent}`);
+
+  await act(async () => hostRoot.unmount());
+  host.remove();
+});
+
 await check('登出：退出登录 → 回登录页 + 清 token + 清主进程凭证 + 清分区白名单', async () => {
   bridgeCalls.length = 0;
   const root = await mountApp(true);
@@ -1039,6 +1100,50 @@ await check('useMemory：切走智能体后，A 号的慢响应不许覆盖项�
   await act(async () => hostRoot.unmount());
   host.remove();
 });
+await check('useChat：切号之后，A 号晚到的历史不许写进聊天桶', async () => {
+  const sessionRef = { current: { token: 'tok-A' } } as { current: { token: string } | null };
+  const curAgentRef = { current: 97 as number | null };
+  let api: { chats: Record<number, { messages: { text: string }[] }>; loadAgentHistory: (a: { id: number; conversationId: number | null }) => Promise<void> } | null = null;
+
+  const realFetch = globalThis.fetch;
+  let release: (() => void) | null = null;
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const raw = typeof input === 'string' ? input : (input as Request).url;
+    const path = raw.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
+    if (path !== '/chat/history') return realFetch(input as RequestInfo);
+    await new Promise<void>((resolve) => { release = resolve; });
+    return json({ conversationId: 501, messages: [{ id: 1, role: 'assistant', text: 'A 号的旧历史' }] });
+  }) as typeof fetch;
+
+  function Host() {
+    api = useChat({
+      sessionRef: sessionRef as never,
+      curAgentId: 97,
+      curAgentRef: curAgentRef as never,
+    });
+    return null;
+  }
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const hostRoot = createRoot(host);
+  await act(async () => {
+    hostRoot.render(React.createElement(Host));
+  });
+  await flush(2);
+
+  const pending = api!.loadAgentHistory({ id: 97, conversationId: 501 });
+  await flush(2);
+  sessionRef.current = { token: 'tok-B' }; // 期间切了号
+  release?.();
+  await pending;
+  await flush(2);
+  assert.deepEqual(Object.keys(api!.chats), [], '切号后 A 号晚到的历史写进了聊天桶（守卫被删/被改坏）');
+
+  globalThis.fetch = realFetch;
+  await act(async () => hostRoot.unmount());
+  host.remove();
+});
+
 log('');
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
