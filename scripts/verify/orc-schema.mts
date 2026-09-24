@@ -99,6 +99,8 @@ async function main(): Promise<void> {
       'finished_at:timestamp with time zone',
       'result:jsonb',
       'error:text',
+      // 批次 K：跟进扫的"上次催办时间"（幂等：同一条 30 分钟内只提醒一次），见 orchestrator/followup.ts
+      'last_followed_at:timestamp with time zone',
     ],
   };
 

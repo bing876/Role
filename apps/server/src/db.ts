@@ -329,6 +329,8 @@ CREATE INDEX IF NOT EXISTS idx_task_pauses_user ON task_pauses (user_id, paused_
 -- 同一条循环同时只应有一次「未解除」的挂起：部分唯一索引兜底（防重复请求写两行）
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_task_pauses_open
   ON task_pauses (loop_id) WHERE resumed_at IS NULL;
+-- 批次 K：挂起跟进的"上次催办时间"（幂等：同一条挂起 N 分钟内只提醒一次，见 orchestrator/followup.ts）
+ALTER TABLE task_pauses ADD COLUMN IF NOT EXISTS last_followed_at TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
 -- 多智能体编排（2026-09-23）：**智能体之间的内部频道** + 委派记录。
@@ -391,6 +393,8 @@ CREATE TABLE IF NOT EXISTS agent_delegations (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_user ON agent_delegations (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_channel ON agent_delegations (channel_id, id DESC);
+-- 批次 K：委派跟进的"上次催办时间"（幂等：同一条委派 N 分钟内只提醒一次，见 orchestrator/followup.ts）
+ALTER TABLE agent_delegations ADD COLUMN IF NOT EXISTS last_followed_at TIMESTAMPTZ;
 
 -- 定时/事件触发（Routines）：Gro kBot 的 Routines，描述=长期规矩，对话=一次活
 -- trigger_type: interval(每 N 分钟)/cron(表达式)/event(事件)
