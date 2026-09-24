@@ -245,6 +245,17 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS state_updated_at TIMESTAMPTZ 
 -- 明文 JSONB（不是密文）是刻意的：内容是公开网页地址，且要能直接在界面上渲染。
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB;
 
+-- 批次 J · @点名换人：这条消息**是谁说的**（发言人 = 某个智能体）。
+--   · 只写在 role='assistant' 的行上：助手气泡必须能回答「这句话是哪个智能体说的」，
+--     否则中途 @ 换人之后，历史回看全是同一个头像，看不出换过人。
+--   · role='user' 的行恒为 NULL（用户不是智能体）。
+--   · NULL 还有第二层含义：这行是「本批次之前」写的老数据 —— 老数据不回填、不猜，
+--     前端按「未知发言人」渲染（沿用会话当前智能体），绝不假装知道。
+--   · ON DELETE SET NULL：智能体被删掉时，历史消息不能被连坐删掉（消息属于会话，不属于智能体）。
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS speaker_agent_id BIGINT NULL
+  REFERENCES agents(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_speaker ON messages (speaker_agent_id);
+
 -- 第 15 步 · 第二层（已合并到 memories）：项目记忆原来是 agent_memories 表，智能体级。
 -- 记忆合并第一批后单一 memories 表（agent_id = 智能体ID = 智能体级），旧表由迁移逻辑 DROP。
 -- 这里不再 CREATE 旧表，避免新库又建出两套。

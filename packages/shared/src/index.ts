@@ -570,6 +570,21 @@ export interface ChatSource {
   domain: string;
 }
 
+/**
+ * 批次 J · @点名换人：一条消息的**发言人**。
+ *
+ * 为什么要它：中途 @ 了别的智能体之后，同一会话里就出现「不同人说的话」。
+ * 历史接口若只回 role（user/assistant），回看时全是同一个头像，看不出换过人。
+ *
+ * · 只有 role='assistant' 的行会有 speaker（用户不是智能体，user 行恒为 undefined）；
+ * · `name` 为 null 表示「这个智能体已经被删了」（外键 ON DELETE SET NULL 之后 id 也没了，
+ *   所以这里的 null 只可能是 id 在、名字取不到的极端脏数据）—— 界面按「未知发言人」渲染，不猜。
+ */
+export interface ChatSpeaker {
+  id: number;
+  name: string | null;
+}
+
 export interface ChatRow {
   id: number;
   role: 'user' | 'assistant';
@@ -579,7 +594,39 @@ export interface ChatRow {
    * 只有走过搜索的回复才有；没搜过 / 老数据都是 undefined。
    */
   sources?: ChatSource[];
+  /**
+   * 批次 J：这句话是谁说的（发言人）。
+   * 老数据（本批次之前入库的行）与 user 行都是 undefined —— **不回填、不猜**。
+   */
+  speaker?: ChatSpeaker;
   created_at?: string;
+}
+
+/**
+ * 批次 J · SSE meta 里带的**点名情况**。
+ *
+ * ★ 绝不带消息正文（正文可能含密码/卡号）—— 与 `mentionSummary` 同一条规矩。
+ *   界面要的是「这一轮换人了没有、点到了谁、为什么没换」，这些都不需要正文。
+ */
+export interface ChatMentionMeta {
+  /** 这一轮实际的发言人（换人成功=被点名者；R-A/R-B/没点名=原来那个） */
+  speakerAgentId: number | null;
+  speakerName: string | null;
+  /**
+   * 本轮结果：
+   * · none  = 没有点名（含「@ 了但名单里没这个人」「@ 与名字之间有空格」）→ 照普通聊天走
+   * · self  = R-B：点的就是当前发言人 → 视作没写 @，不改派、不报错
+   * · switch= 已换人：这一轮由被点名者发言（用它的人设/记忆/技能 + 先前上下文）
+   * · busy  = R-A：被点名者正忙/在等 → **没有静默改派**，回一段告知（见 notice）
+   * · empty = R-C 边界：整条只写了 @名字 → 不调模型，反问要做什么
+   */
+  kind: 'none' | 'self' | 'switch' | 'busy' | 'empty';
+  /** 全部命中（按出现顺序）。**只有第一个是发言人**（拍板 2），其余仅进这个列表 */
+  hits: { agentId: number; name: string }[];
+  /** 写在名单外的 @名字（不影响路由；界面可以不显示，留着排查「@ 了没反应」） */
+  unknown?: string[];
+  /** busy / empty 时服务端替智能体说的那句告知（正文里也发过一份，这里给界面对账用） */
+  notice?: string;
 }
 
 /** GET /chat/history 的响应：没有会话时 conversationId 为 null、messages 为空数组 */
@@ -590,7 +637,13 @@ export interface ChatHistoryResult {
 
 /** /chat/stream 的 SSE 事件负载（data: 里的 JSON） */
 export type ChatStreamEvent =
-  | { conversationId: number; userMessageId: number; agentId?: number | null } // event: meta（流第一帧）
+  | {
+      conversationId: number;
+      userMessageId: number;
+      agentId?: number | null;
+      /** 批次 J：这一轮的点名情况（没写 @ 时 kind='none'、hits=[]，字段恒在，界面不用判空） */
+      mention?: ChatMentionMeta;
+    } // event: meta（流第一帧）
   | { delta: string } // 打字机：逐段追加
   | { conversationId: number; messageId: number; contentLength: number } // event: done（助手已落库）
   /**

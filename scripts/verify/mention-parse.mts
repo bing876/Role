@@ -15,6 +15,7 @@
  *       确定性（同输入同输出、与名单顺序无关）/ 全仓只许有一份实现
  */
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -298,6 +299,34 @@ log('--- ⑦ 确定性：同输入同输出、纯函数、不改入参 ---');
 
 // ------------------------------------------------------------------ ⑧ 全仓只许有一份实现
 log('');
+log('--- ⑨ 摘 @ 之后**不许抹掉用户的换行**（tidy 只收拾空格）---');
+{
+  /**
+   * 为什么要单独立一条：`\s+` 是包含 `\n` 的。
+   * 早先那版清理写的是 `replace(/\s+/g,' ')`，于是「@研究员 帮我写：\n标题\n正文」
+   * 交给模型时变成了一行 —— 用户排好的版被点名逻辑顺手抹平了。
+   * 换行是用户写的，只有「摘掉 @名字 留下的双空格」才需要收拾。
+   */
+  const r = parseMention('@研究员 帮我写：\n标题\n正文', ROSTER);
+  log(`      ${JSON.stringify({ text: r.text })}`);
+  check('正文里的换行原样保留（只在摘掉 @名字 处收拾空格）', () => {
+    assert.equal(r.text, '帮我写：\n标题\n正文');
+  });
+  const r2 = parseMention('@研究员   看看   这组  数据', ROSTER);
+  check('摘掉 @名字 之后，多出来的空格压成一个', () => {
+    assert.equal(r2.text, '看看 这组 数据');
+  });
+  const r3 = parseMention('@研究员\n\n看一下这份报表', ROSTER);
+  check('@名字 独占一行时，剩下的正文首尾空白去掉（不留开头空行）', () => {
+    assert.equal(r3.text, '看一下这份报表');
+  });
+  const r4 = parseMention('第一行\n第二行', ROSTER);
+  check('反例：一个 @ 都没写 → 正文一个字都不动（连空白都不收拾）', () => {
+    assert.equal(r4.text, '第一行\n第二行');
+  });
+}
+
+log('');
 log('--- ⑧ 防漂移：全仓只许有一份 parseMention 实现（两端共用，不许各抄一份）---');
 {
   /**
@@ -326,6 +355,65 @@ log('--- ⑧ 防漂移：全仓只许有一份 parseMention 实现（两端共�
   check('全仓 parseMention 的定义只在 packages/shared/src/mention.ts 一处（本脚本自己不算：标签与正则都避开了那段字面量）', () => {
     assert.deepEqual(hits, [path.join('packages', 'shared', 'src', 'mention.ts')]);
   });
+}
+
+// ------------------------------------------------------------------ ⑩ dist 半份跟踪 = fresh clone 起不来
+log('');
+log('--- ⑩ shared 的 dist：要么整份不跟踪，要么整份跟踪（半份会让新克隆的服务端启动即崩）---');
+{
+  /**
+   * 这条是真踩出来的（2026-09-24，批次 J）：`.gitignore` 里有 `dist/`，但
+   * `packages/shared/dist/index.js`、`tools.js` 这些是当年 `git add -f` 进去的 —— 也就是**部分跟踪**。
+   * 本批给 shared 新增了 `mention.ts`，编译出的 `dist/mention.js` 被 `dist/` 规则挡住没进库，
+   * 而**已跟踪**的 `dist/index.js` 里写着 `__exportStar(require("./mention"))`。
+   * 后果：新克隆的仓库不跑 `npm run build -w @ai-workbench/shared` 就起服务端 →
+   * `require('@ai-workbench/shared')` 直接 ERR_MODULE_NOT_FOUND，**启动即崩**，
+   * 而在开发机上永远复现不了（本地 dist 是全的）。
+   *
+   * 所以钉一条：只要 dist 里有**任何**文件被跟踪，磁盘上每个 .js/.d.ts 就都必须被跟踪。
+   * （正解是「dist 整个不跟踪、靠 build 生成」，但那要动既有的 index.js/tools.js，
+   *   不属本批；先用这条闸把「半份」这个状态挡住。）
+   */
+  const distDir = path.join(ROOT, 'packages', 'shared', 'dist');
+  if (!fs.existsSync(distDir)) {
+    log('      （本地没有 dist：跳过 —— 没 build 过就没有半份跟踪的问题）');
+  } else {
+    const onDisk = fs
+      .readdirSync(distDir)
+      .filter((f) => /\.(js|d\.ts)$/.test(f))
+      .sort();
+    let tracked: string[] = [];
+    let gitOk = true;
+    try {
+      // ★ 这是 ESM（.mts），没有 require —— 第一版在这里写了 require，被 try/catch 吞成
+      //   「git 不可用」而静默跳过（断言没跑却看着像跑了，正是最坏的那种假绿）
+      tracked = execFileSync('git', ['ls-files', 'packages/shared/dist'], { cwd: ROOT, encoding: 'utf8' })
+        .split('\n')
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((rel) => path.basename(rel))
+        .filter((f) => /\.(js|d\.ts)$/.test(f))
+        .sort();
+    } catch {
+      gitOk = false;
+    }
+    log(`      磁盘 ${onDisk.length} 个（${onDisk.join(', ')}）`);
+    log(`      跟踪 ${tracked.length} 个（${tracked.join(', ') || 'git 不可用'}）`);
+    if (!gitOk) {
+      log('      git 不可用 → 这一段跳过（不作数，也不算失败）');
+    } else if (tracked.length === 0) {
+      check('dist 一份都没跟踪（这是理想状态：靠 build 生成）', () => assert.ok(true));
+    } else {
+      const missing = onDisk.filter((f) => !tracked.includes(f));
+      check('部分跟踪时，磁盘上每个 .js/.d.ts 都必须在版本库里（否则新克隆的服务端 require 不到 → 启动即崩）', () => {
+        assert.deepEqual(missing, [], `没进库的：${missing.join(', ')}`);
+      });
+      check('反过来说：库里跟踪的 dist 文件也必须都还在磁盘上（不许留下指向空气的记录）', () => {
+        const ghost = tracked.filter((f) => !onDisk.includes(f));
+        assert.deepEqual(ghost, [], `磁盘上没有的：${ghost.join(', ')}`);
+      });
+    }
+  }
 }
 
 log('');

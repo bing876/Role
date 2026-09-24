@@ -1,3 +1,4 @@
+"use strict";
 /**
  * 批次 J（2026-09-24）| `@某智能体` 中途拉人 —— **确定性解析器**
  * ==================================================================
@@ -33,13 +34,9 @@
  *   用户写 `@小助手` 时会命中 `小助` 并把「手」留给正文 —— 这靠规则 3（最长名优先）解决：
  *   真有两个相近名字，它们都在名单里，长的会先命中。
  */
-
-/** 名单里的一条：能点名的人（服务端按当前项目查 `agents` 表得到） */
-export interface MentionRosterEntry {
-  id: number;
-  name: string;
-}
-
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.parseMention = parseMention;
+exports.mentionSummary = mentionSummary;
 /**
  * 摘掉 `@名字` 之后的清理：空格/制表符压成一个，**换行原样保留**，首尾空白去掉。
  *
@@ -47,44 +44,16 @@ export interface MentionRosterEntry {
  *   「@研究员 帮我写：\n标题\n正文」被压成一行之后，模型看到的是一段没有分行的需求。
  *   换行是用户写的，不是点名留下的垃圾；只有空格才需要收拾（摘掉 @名字 会留下双空格）。
  */
-function tidy(s: string): string {
-  return s.replace(/[^\S\n]+/g, ' ').trim();
+function tidy(s) {
+    return s.replace(/[^\S\n]+/g, ' ').trim();
 }
-
-/** 一次命中（`span` 用来精确摘除，不靠字符串替换 —— 同名出现两次也不会摘错位置） */
-export interface MentionHit {
-  agentId: number;
-  name: string;
-  /** `@` 在原文里的下标（含） */
-  start: number;
-  /** 名字末尾在原文里的下标（不含），即 `text.slice(start, end)` === `@名字` */
-  end: number;
-}
-
-export interface MentionParseResult {
-  /** 说话人：第一个命中的人；没命中 / R-B（@ 的就是当前说话人）时为 null */
-  speaker: MentionHit | null;
-  /** 全部命中（按出现顺序，含 speaker 自己）；进 SSE meta 的 mention 列表 */
-  mentions: MentionHit[];
-  /** R-C：摘掉所有 `@名字` 之后、要交给智能体的文本（可能为空串 → 见 textEmpty） */
-  text: string;
-  /** 摘完只剩空白：用户只写了个 @名字、没写要它做什么。调用方该给一句人话提示，不是 500 */
-  textEmpty: boolean;
-  /** R-B：@ 的就是当前说话人（已按「当作没写 @」处理） */
-  selfMention: boolean;
-  /** 写了 `@` 但名单里没有的名字（不影响路由；用于反证与调试，界面可以不显示） */
-  unknown: string[];
-}
-
 /**
  * 邮箱本地部字符：`@` 左边紧贴这些字符时，这个 `@` 属于邮箱/句柄，不是点名。
  * 只列 RFC 5322 里最常见的这几个就够 —— 规则要能一句话讲清，比覆盖全更重要。
  */
 const EMAIL_LOCAL_CHAR = /[A-Za-z0-9_.+\-]/;
-
 /** `@` 之后最多往后看几个字符找名字（防止在超长消息上退化成 O(n·m) 的全量比对） */
 const MAX_NAME_LEN = 64;
-
 /**
  * 解析一句话里的 `@点名`。
  *
@@ -92,89 +61,84 @@ const MAX_NAME_LEN = 64;
  * @param roster 能点名的人（调用方按当前项目/用户查好；空名单 → 永远不命中）
  * @param currentAgentId 当前这一路本来是谁在说话（R-B 用；不知道就不传）
  */
-export function parseMention(
-  text: string,
-  roster: MentionRosterEntry[],
-  currentAgentId?: number | null,
-): MentionParseResult {
-  const src = String(text ?? '');
-  const empty: MentionParseResult = {
-    speaker: null,
-    mentions: [],
-    text: tidy(src),
-    textEmpty: src.trim().length === 0,
-    selfMention: false,
-    unknown: [],
-  };
-  if (!src || !Array.isArray(roster) || roster.length === 0) return empty;
-
-  /**
-   * 名单先按名字长度**降序**排一次（规则 3：最长名优先）。
-   * 同长的按 id 升序，保证「同样输入永远同样结果」—— 确定性解析不能依赖数组的偶然顺序。
-   */
-  const sorted = roster
-    .filter((x) => x && typeof x.name === 'string' && x.name.length > 0 && Number.isInteger(x.id))
-    .slice()
-    .sort((a, b) => b.name.length - a.name.length || a.id - b.id);
-  if (sorted.length === 0) return empty;
-
-  const mentions: MentionHit[] = [];
-  const unknown: string[] = [];
-
-  for (let i = 0; i < src.length; i += 1) {
-    if (src[i] !== '@') continue;
-    // 规则 2：邮箱里的 @ 不算（左边紧贴邮箱本地部字符 → 这是 user@host 的一部分）
-    if (i > 0 && EMAIL_LOCAL_CHAR.test(src[i - 1])) continue;
-    // 规则 5（拍板 1）：@ 必须紧跟名字，中间有空格就不算点名
-    const at = i + 1;
-    if (at >= src.length) continue;
-    const hit = sorted.find((x) => {
-      const n = x.name;
-      return n.length <= MAX_NAME_LEN && src.startsWith(n, at);
-    });
-    if (hit) {
-      mentions.push({ agentId: hit.id, name: hit.name, start: i, end: at + hit.name.length });
-      i = at + hit.name.length - 1; // 跳过整段，名字里的 @ 不会被二次解析
-      continue;
+function parseMention(text, roster, currentAgentId) {
+    const src = String(text ?? '');
+    const empty = {
+        speaker: null,
+        mentions: [],
+        text: tidy(src),
+        textEmpty: src.trim().length === 0,
+        selfMention: false,
+        unknown: [],
+    };
+    if (!src || !Array.isArray(roster) || roster.length === 0)
+        return empty;
+    /**
+     * 名单先按名字长度**降序**排一次（规则 3：最长名优先）。
+     * 同长的按 id 升序，保证「同样输入永远同样结果」—— 确定性解析不能依赖数组的偶然顺序。
+     */
+    const sorted = roster
+        .filter((x) => x && typeof x.name === 'string' && x.name.length > 0 && Number.isInteger(x.id))
+        .slice()
+        .sort((a, b) => b.name.length - a.name.length || a.id - b.id);
+    if (sorted.length === 0)
+        return empty;
+    const mentions = [];
+    const unknown = [];
+    for (let i = 0; i < src.length; i += 1) {
+        if (src[i] !== '@')
+            continue;
+        // 规则 2：邮箱里的 @ 不算（左边紧贴邮箱本地部字符 → 这是 user@host 的一部分）
+        if (i > 0 && EMAIL_LOCAL_CHAR.test(src[i - 1]))
+            continue;
+        // 规则 5（拍板 1）：@ 必须紧跟名字，中间有空格就不算点名
+        const at = i + 1;
+        if (at >= src.length)
+            continue;
+        const hit = sorted.find((x) => {
+            const n = x.name;
+            return n.length <= MAX_NAME_LEN && src.startsWith(n, at);
+        });
+        if (hit) {
+            mentions.push({ agentId: hit.id, name: hit.name, start: i, end: at + hit.name.length });
+            i = at + hit.name.length - 1; // 跳过整段，名字里的 @ 不会被二次解析
+            continue;
+        }
+        // 名单外：记下「用户写了个 @ 但没这个人」，不当点名处理（规则 1）
+        const word = src.slice(at, at + MAX_NAME_LEN).match(/^[^\s，。！？；：、,.!?;:()（）【】[\]]+/);
+        if (word && word[0])
+            unknown.push(word[0]);
     }
-    // 名单外：记下「用户写了个 @ 但没这个人」，不当点名处理（规则 1）
-    const word = src.slice(at, at + MAX_NAME_LEN).match(/^[^\s，。！？；：、,.!?;:()（）【】[\]]+/);
-    if (word && word[0]) unknown.push(word[0]);
-  }
-
-  // R-C：按 span 从后往前摘，前面的下标才不会失效
-  let out = src;
-  for (let k = mentions.length - 1; k >= 0; k -= 1) {
-    const h = mentions[k];
-    out = out.slice(0, h.start) + out.slice(h.end);
-  }
-  const clean = tidy(out);
-
-  // 拍板 2 + R-B
-  const first = mentions[0] ?? null;
-  const selfMention = !!first && currentAgentId != null && first.agentId === currentAgentId;
-  return {
-    speaker: first && !selfMention ? first : null,
-    mentions,
-    text: clean,
-    textEmpty: clean.length === 0,
-    selfMention,
-    unknown,
-  };
+    // R-C：按 span 从后往前摘，前面的下标才不会失效
+    let out = src;
+    for (let k = mentions.length - 1; k >= 0; k -= 1) {
+        const h = mentions[k];
+        out = out.slice(0, h.start) + out.slice(h.end);
+    }
+    const clean = tidy(out);
+    // 拍板 2 + R-B
+    const first = mentions[0] ?? null;
+    const selfMention = !!first && currentAgentId != null && first.agentId === currentAgentId;
+    return {
+        speaker: first && !selfMention ? first : null,
+        mentions,
+        text: clean,
+        textEmpty: clean.length === 0,
+        selfMention,
+        unknown,
+    };
 }
-
 /**
  * 给日志/接口用的**非敏感**摘要（绝不带消息正文，正文可能含密码卡号）。
  * 只报「命中了谁、几个、正文还剩几个字」—— 排查「@ 了没反应」时够用。
  */
-export function mentionSummary(r: MentionParseResult): string {
-  if (r.mentions.length === 0) {
-    return r.unknown.length > 0 ? `点名未命中（名单外 ${r.unknown.length} 个）` : '无点名';
-  }
-  const who = r.mentions.map((m) => `#${m.agentId}`).join(',');
-  return (
-    `点名 ${r.mentions.length} 处（${who}）` +
-    (r.speaker ? `→ 说话人 #${r.speaker.agentId}` : r.selfMention ? '→ 就是当前说话人，按没写 @ 处理' : '→ 不改说话人') +
-    `，正文剩 ${[...r.text].length} 字`
-  );
+function mentionSummary(r) {
+    if (r.mentions.length === 0) {
+        return r.unknown.length > 0 ? `点名未命中（名单外 ${r.unknown.length} 个）` : '无点名';
+    }
+    const who = r.mentions.map((m) => `#${m.agentId}`).join(',');
+    return (`点名 ${r.mentions.length} 处（${who}）` +
+        (r.speaker ? `→ 说话人 #${r.speaker.agentId}` : r.selfMention ? '→ 就是当前说话人，按没写 @ 处理' : '→ 不改说话人') +
+        `，正文剩 ${[...r.text].length} 字`);
 }
+//# sourceMappingURL=mention.js.map

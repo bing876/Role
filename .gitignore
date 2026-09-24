@@ -125,3 +125,11 @@ docs/acceptance/**/*-dump.json
 # 同目录的 r4-acceptance-main-old.json 是**一次性基线**（LABEL=main-old 手工跑的对照），继续跟踪。
 docs/acceptance/r4-dispatch/r4-acceptance-HEAD.json
 docs/acceptance/r4-dispatch/server-HEAD.log
+
+# ── 2026-09-24 补（批次 J · @点名换人）──────────────────────────────
+# mention-e2e 的**可再生**取证产物：每次跑 scripts/verify/mention-e2e.mjs 都会重写，
+# 内容里只有时间戳/消息 id 在变 —— 留在版本库里就是「每跑一次脏一次树」（r4 那轮已经踩过）。
+# 真正要长期留着的证据**抄进** docs/acceptance/批次J-@点名换人-验收报告.md（那份跟踪）。
+docs/acceptance/mention/*.json
+docs/acceptance/mention/*.jsonl
+docs/acceptance/mention/*.log

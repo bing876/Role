@@ -28,6 +28,13 @@ import type {
   TaskState,
   WorkbenchSettings,
 } from '@ai-workbench/shared';
+import type { ChatMentionMeta, ChatSpeaker } from '@ai-workbench/shared';
+/**
+ * 批次 J · @点名（渲染进程这一侧）：解析与「兜底要不要发车」的判定都在 `./mentionGate` 里，
+ * 它引的是 packages/shared 的**同一份** parseMention（源码相对路径，理由见那个文件的头注释）。
+ * App.tsx 只调它、不在组件里散写规则 —— 规则一旦散在 3500 行的组件里就没人能验。
+ */
+import { parseLocalMention, shouldFallbackLaunch } from './mentionGate';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -162,6 +169,11 @@ type Message = {
    * 只有走过搜索的助手回复才有；渲染成气泡下方的可点链接。
    */
   sources?: ChatSource[];
+  /**
+   * 批次 J：这句助手话是**哪个智能体**说的（@点名换人之后，同一条会话里会有不同人开口）。
+   * undefined = 不知道（老数据 / 服务端没给）—— 界面就**不挂名字牌**，绝不拿当前智能体冒充。
+   */
+  speaker?: ChatSpeaker;
 };
 /** 第 15 步：一个智能体 = 一份聊天（自己的消息列表 + 自己的会话号） */
 type AgentChat = { messages: Message[]; convId: number | null };
@@ -1032,7 +1044,9 @@ export default function App() {
       if (sessionRef.current?.token !== sess.token) return; // 切号期间晚到的响应丢掉
       historyLoadedRef.current.add(agent.id);
       patchChat(agent.id, () => ({
-        messages: h.messages.map((m) => ({ id: m.id, role: m.role, text: m.text, sources: m.sources })),
+        // 批次 J：历史里的发言人一并带过来（服务端 speaker_agent_id → {id,name}）；
+        // 老行没有这一列 → undefined → 气泡不挂名字牌（不猜、不拿当前智能体冒充）
+        messages: h.messages.map((m) => ({ id: m.id, role: m.role, text: m.text, sources: m.sources, speaker: m.speaker })),
         convId: h.conversationId,
       }));
     } catch (e) {
@@ -2391,6 +2405,12 @@ export default function App() {
     setStreamingAgentId(myAgent);
     setStreamText('');
     let sawLoop = false;
+    /**
+     * 批次 J：本地也解析一次 @点名（**不是**替服务端做决定 —— 名单归属、谁在忙、换不换人只有
+     * 服务端说了算；这里只为「流断了也不误发车」，理由与规则见 `./mentionGate`）。
+     * 名单就是当前项目那份（`agents` 随切项目一起换，见文件顶部第 142 行的说明）。
+     */
+    const localMention = parseLocalMention(value, agentsRef.current, myAgent);
     try {
       const res = await fetch(`${API_BASE()}/chat/stream`, {
         method: 'POST',
@@ -2427,6 +2447,8 @@ export default function App() {
       let sawDone = false;
       /** 第 26 步：服务端在 done 里给的来源（已去重）；空数组 = 这轮没搜过 */
       let sawSources: ChatSource[] = [];
+      /** 批次 J：服务端对这一轮 @点名 的裁决（老后端不给 → null，按「没点名」渲染） */
+      let sawMention: ChatMentionMeta | null = null;
       for (;;) {
         const { done, value: chunk } = await reader.read();
         if (done) break;
@@ -2451,6 +2473,8 @@ export default function App() {
             results?: number;
             /** 第 26 步：done 事件带来的来源列表（本轮联网检索命中的网页） */
             sources?: ChatSource[];
+            /** 批次 J：meta 帧带来的点名裁决（谁开口、点到了谁、为什么没换人） */
+            mention?: ChatMentionMeta;
           };
           try {
             j = JSON.parse(dl.slice(5).trim());
@@ -2461,6 +2485,16 @@ export default function App() {
             // 会话号写回**发起时那个智能体**的桶（不是「此刻正在看的」那个）
             const cid = j.conversationId;
             patchChat(myAgent, (c) => (c.convId === cid ? c : { ...c, convId: cid }));
+            /**
+             * 批次 J：服务端的裁决到了。
+             * · 换人轮：正在打字的那个头像要跟着换（否则「研究员在答」却闪着「小助」的正在输入）；
+             * · 会话**不搬家**：这轮仍然显示在当前这条会话里，只是气泡上多一块名字牌 ——
+             *   用户要的是「叫另一个人就这段话说两句」，不是被甩到另一个聊天窗口去。
+             */
+            if (j.mention) {
+              sawMention = j.mention;
+              if (j.mention.speakerAgentId !== null) setStreamingAgentId(j.mention.speakerAgentId);
+            }
           } else if (ev === 'loop' && typeof j.loopId === 'string') {
             // 第 21 步：服务端已经建好工具循环 —— 现在才发车，带着这个循环号
             sawLoop = true;
@@ -2492,9 +2526,36 @@ export default function App() {
       /**
        * 第 21 步兜底：任务轮没拿到 loopId（老后端 / 流被掐）也要发车 ——
        * 主进程会自己调 /agent/loop/start 建一个（同一条引擎，不是第二套）。
+       *
+       * 批次 J 加了一道闸：**@点名轮不兜底发车**（判定收在 `shouldFallbackLaunch` 里，可单测）。
+       * 点名解决的是「谁来说话」，不是「去这张页上干活」；替用户把驾驶员发出去才是事故。
        */
-      if (pendingDrive() && !sawLoop) launch();
+      if (
+        shouldFallbackLaunch({
+          pendingDrive: Boolean(pendingDrive()),
+          sawLoop,
+          serverMentionKind: sawMention?.kind ?? null,
+          local: localMention,
+        })
+      )
+        launch();
       if (acc) {
+        /**
+         * 批次 J：这句是**谁**说的。
+         * · 服务端给了裁决 → 用它（换人轮就是被点名者）；
+         * · 老后端没给 mention → 退回「发起这轮的那个智能体」：那一轮本来只有它会答，不是猜；
+         * · 连名字都查不到 → speaker 留 undefined，气泡**不挂名字牌**（宁可不显示，不显示错的）。
+         * 之后切会话/刷新会由 /chat/history 的 speaker 覆盖成库里的真值。
+         */
+        const nameOfAgent = (id: number | null): string | null =>
+          agentsRef.current.find((a) => a.id === id)?.name ?? null;
+        const spokenBy: ChatSpeaker | undefined = sawMention
+          ? sawMention.speakerAgentId === null
+            ? undefined
+            : { id: sawMention.speakerAgentId, name: sawMention.speakerName || nameOfAgent(sawMention.speakerAgentId) }
+          : myAgent === null
+            ? undefined
+            : { id: myAgent, name: nameOfAgent(myAgent) };
         patchChat(myAgent, (c) => ({
           ...c,
           messages: c.messages.concat({
@@ -2503,6 +2564,7 @@ export default function App() {
             text: acc,
             /** 第 26 步：来源跟着这条回复走，渲染在气泡下方（没搜过就是 undefined） */
             sources: sawSources.length > 0 ? sawSources : undefined,
+            speaker: spokenBy,
           }),
         }));
       } else if (!sawDone) {
@@ -3366,6 +3428,39 @@ export default function App() {
           )}
           {messages.map((m, idx) => (
             <div key={m.id}>
+              {/**
+                * 批次 J · 发言人名字牌：**只在换人的那一句上挂**。
+                *
+                * · 每条助手气泡都挂名字 = 噪音（99% 的话都是同一个「当前智能体」说的）；
+                *   用户真正要一眼看出的是「这段对话里换过人」，所以只在与**上一条助手气泡**
+                *   不是同一个人时才挂（第一条有 speaker 的也会挂 —— 前面没有可比的）。
+                * · speaker 缺失（老数据 / 服务端没给）→ 什么都不挂，**不拿当前智能体冒充**。
+                * · 版式只给了最小可读样式（小字、半透明、右对齐）；1:1 的像素还原等用户的 HTML/CSS，
+                *   className 已经留好（msg__speaker），到时候直接改样式表就行。
+                */}
+              {(() => {
+                const sp = m.role === 'assistant' ? m.speaker : undefined;
+                if (!sp || !sp.name) return null;
+                let prevSpeakerId: number | null | undefined;
+                for (let i = idx - 1; i >= 0; i--) {
+                  const x = messages[i];
+                  if (x && x.role === 'assistant') {
+                    prevSpeakerId = x.speaker ? x.speaker.id : null;
+                    break;
+                  }
+                }
+                if (prevSpeakerId === sp.id) return null;
+                return (
+                  <div
+                    className="msg__speaker"
+                    data-agent-id={sp.id}
+                    title={`这句话是「${sp.name}」说的（智能体 #${sp.id}）`}
+                    style={{ fontSize: 11, opacity: 0.72, margin: '2px 0', textAlign: 'right' }}
+                  >
+                    {sp.name}
+                  </div>
+                );
+              })()}
               <div className={`msg ${m.role}`}>{m.text}</div>
               {/* 批次 E：第一个智能体提议同事，快捷建按钮（对话式建智能体、立刻建好不挡你） */}
               {m.role === 'assistant' && m.text.includes('建议先建这几位同事') && (

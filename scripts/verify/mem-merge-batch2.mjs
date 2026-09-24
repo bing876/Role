@@ -46,8 +46,31 @@ must(memContent.includes('chat_idle') && memContent.includes('convId'), 'memorie
 // 3. chat.ts 传入 conversationId
 const chatPath = path.join(root, 'apps/server/src/routes/chat.ts');
 const chatContent = fs.readFileSync(chatPath, 'utf8');
-must(chatContent.includes('buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId') && chatContent.includes('convId'), 'chat.ts 任务轮传 convId');
-must(chatContent.includes('buildMemoryBlock(pool, cipher, claims.sub, message, agentId') && chatContent.includes('convId'), 'chat.ts 闲聊轮传 convId');
+/**
+ * ★ 2026-09-24（批次 J · @点名换人）改的是**断言的写法**，不是断言的要求。
+ *
+ * 原来这两条比的是逐字面量的调用串：
+ *   `buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId`
+ *   `buildMemoryBlock(pool, cipher, claims.sub, message, agentId`
+ * 批次 J 把两处调用的实参改了：
+ *   · 检索用的正文从 `message` 换成剥掉 @名字 的 `mentionText`（@名字 不是记忆关键词）；
+ *   · 「按谁取记忆」从 `agentId` 换成这一轮的发言人 `turnSpeakerId ?? agentId`（换人轮要读被点名者那一份，
+ *     否则第 15 步「项目记忆绝不串号」那条规矩在换人之后就破了）。
+ * 字面量散了，但**这条要求一个字没变**：两轮都必须把 convId 传进去（会话级记忆靠它）。
+ *
+ * 所以改成「把 chat.ts 里所有 buildMemoryBlock 调用抓出来，逐个看最后一个实参」：
+ * 比字面量更严（将来新增调用点也会被查到），也不再因为参数改名而假红。
+ */
+const memCalls = [...chatContent.matchAll(/buildMemoryBlock\(([\s\S]*?)\);/g)].map((m) => m[1].trim());
+must(memCalls.length >= 2, `chat.ts 里 buildMemoryBlock 调用 ${memCalls.length} 处（应 ≥2：任务轮 + 闲聊轮）`);
+must(
+  memCalls.every((c) => /convId\s*\?\?\s*null$/.test(c)),
+  'chat.ts 每一处 buildMemoryBlock 都把 convId 作为最后一个实参传进去（任务轮 + 闲聊轮）',
+);
+must(
+  memCalls.some((c) => c.includes('loopAgentId')) && memCalls.some((c) => c.includes('turnSpeakerId')),
+  'chat.ts 任务轮按循环的智能体取记忆、闲聊轮按这一轮的发言人取记忆',
+);
 
 // 4. loop.ts 传入 conversationId
 const loopPath = path.join(root, 'apps/server/src/routes/loop.ts');

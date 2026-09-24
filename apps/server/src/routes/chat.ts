@@ -63,6 +63,20 @@ import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
 import { buildWhiteboardBlock } from '../orchestrator/whiteboard';
 import { buildSkillBlock } from '../orchestrator/skills';
+/**
+ * 批次 J · @点名换人。
+ * 解析本体在 packages/shared（两端同一份实现）；服务端这一层只做「名单从哪来 + 忙不忙 + 这轮怎么走」。
+ */
+import {
+  decisionNotice,
+  decisionSpeaker,
+  pickNoticeSpeaker,
+  loadMentionRoster,
+  resolveChatMention,
+  type ChatMentionDecision,
+} from '../orchestrator/mention';
+import { mentionSummary } from '@ai-workbench/shared';
+import type { ChatMentionMeta } from '@ai-workbench/shared';
 
 export interface ChatDeps {
   pool: Pool;
@@ -208,8 +222,44 @@ async function mergeLatestPageState(
 }
 
 /** 转发上游 SSE 时只回给桌面这三类事件；这里统一走 JSON.stringify 防换行截断 */
+/**
+ * SSE 帧的**唯一**写法。
+ *
+ * ★ 曾经有两处 `sseLocal` 复制品把 `\n` 写成了 `\\n`（模板字面量里就成了「反斜杠 + n」两个字符），
+ *   帧永远不结束 → 桌面收不到那一帧 → 「对话式建智能体」的确认句在界面上凭空消失。
+ *   批次 J 顺手把复制品删掉、统一走这里（与 @点名 同一条原则：一份实现，不许各处抄）。
+ */
 function sse(res: { write(c: string): unknown }, ev: string | null, data: unknown): void {
   res.write(`${ev ? `event: ${ev}\n` : ''}data: ${JSON.stringify(data)}\n\n`);
+}
+
+/**
+ * 批次 J：这一轮开口之前，「当前发言人」是谁 —— R-B（@ 自己 = 没点名）要用它做判据。
+ *
+ * · 带会话号 → 以**会话自己的 agent_id** 为准（比请求里的 agentId 权威；与任务轮 loopAgentId 同一条规矩）；
+ * · 只带 agentId → 就是它；
+ * · 都没有 → null（新会话：等路由或点名来决定谁开口）。
+ * 只认自己的会话（走 projects.user_id），别人的号当不存在 —— 与 resolveConversation 同口径。
+ */
+async function currentSpeakerOf(
+  pool: Pool,
+  userId: number,
+  conversationId: number | null,
+  agentIdFallback: number | null,
+): Promise<number | null> {
+  if (conversationId !== null) {
+    const r = await pool.query<{ agent_id: string | null }>(
+      `SELECT c.agent_id
+         FROM conversations c JOIN projects p ON p.id = c.project_id
+        WHERE c.id = $1 AND p.user_id = $2`,
+      [conversationId, userId],
+    );
+    if (r.rowCount === 1) {
+      const n = Number(r.rows[0].agent_id);
+      if (Number.isInteger(n) && n > 0) return n;
+    }
+  }
+  return agentIdFallback;
 }
 
 export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: ChatDeps): void {
@@ -293,9 +343,131 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           }
         } catch {}
       }
+      /**
+       * 批次 J · @点名解析。**位置是刻意的**：在路由闸之后、开会话之前。
+       *
+       * · 不受上面那道 `!conversationId && !agentId` 的限制 —— 会话**中途** @ 也要能换人，
+       *   这正是本批次要解决的场景（老逻辑只在「新会话且没指定智能体」时才路由）。
+       * · 命中就**覆盖**路由结果（用户点名 > 职责猜测），并且在开会话之前覆盖：
+       *   新会话要建在**被点名者**名下（resolveConversation 会按这个 agentId 找/建它自己的会话）。
+       * · 名单来自当前项目（跨项目点不到 → 名单里没有 → 规则 4 自动成立）。
+       * · 名单查询失败（DB 抖动）不炸这一轮：空名单 = 谁都没点到 = 照普通聊天走。
+       */
+      const currentSpeakerId = await currentSpeakerOf(pool, claims.sub, conversationId, agentId);
+      let mentionRoster: { id: number; name: string }[] = [];
+      try {
+        mentionRoster = await loadMentionRoster(pool, claims.sub);
+      } catch (e) {
+        console.warn('[chat] @点名名单加载失败（本轮按没点名处理）：', (e as Error).message);
+      }
+      const mention: ChatMentionDecision = resolveChatMention({
+        roster: mentionRoster,
+        message,
+        currentAgentId: currentSpeakerId,
+      });
+      /**
+       * R-C：交给模型的正文一律是**剥掉 @名字 之后**的那份。
+       * busy / empty 两种决定不调模型（下面直接回告知），所以它们没有 text —— 用原文占位即可。
+       */
+      /**
+       * ★ 一个命中都没有（kind='none'）时用**原文**，不用解析器收拾过的那份：
+       *   普通聊天占绝大多数轮次，它们的正文一个字都不该被点名逻辑碰过（连空白都不动）。
+       *   只有真摘掉过 `@名字` 的那几轮（self / switch）才用剥过的正文。
+       */
+      const mentionText = mention.kind === 'none' ? message : 'text' in mention ? mention.text : message;
+      const mentionSpeakerId = decisionSpeaker(mention);
+      if (mentionSpeakerId !== null) routedAgentId = mentionSpeakerId;
+      /** 这一轮到底谁开口（换人成功=被点名者；其余=会话/路由原来的那个） */
+      const turnSpeakerId = mentionSpeakerId ?? currentSpeakerId ?? routedAgentId ?? agentId;
+      const turnSpeakerName =
+        mention.kind === 'switch' || mention.kind === 'busy' || mention.kind === 'empty' || mention.kind === 'self'
+          ? mention.agentName || (mentionRoster.find((r) => r.id === turnSpeakerId)?.name ?? null)
+          : (mentionRoster.find((r) => r.id === turnSpeakerId)?.name ?? null);
+      /** 进 SSE meta 的点名情况（不含正文 —— 正文可能含密码卡号） */
+      const mentionMeta: ChatMentionMeta = {
+        speakerAgentId: turnSpeakerId,
+        speakerName: turnSpeakerName,
+        kind: mention.kind,
+        hits: ('mentions' in mention ? mention.mentions : []).map((m) => ({ agentId: m.agentId, name: m.name })),
+        /** 写了 @ 但名单里没这个名字（跨项目的人 / 打错的名字）—— 界面可以不显示，留着排查 */
+        unknown: mention.unknown.length > 0 ? mention.unknown : undefined,
+        notice: decisionNotice(mention) ?? undefined,
+      };
+      if (mention.kind !== 'none') {
+        // 只打摘要，不打正文（mentionSummary 的规矩：绝不带消息内容）
+        console.log(`[chat] ${mentionSummary({
+          speaker: mention.kind === 'switch' || mention.kind === 'busy'
+            ? { agentId: mention.agentId, name: mention.agentName, start: 0, end: 0 }
+            : null,
+          mentions: mentionMeta.hits.map((h) => ({ ...h, start: 0, end: 0 })),
+          text: mentionText,
+          textEmpty: mention.kind === 'empty',
+          selfMention: mention.kind === 'self',
+          unknown: mention.unknown,
+        })} → 决定=${mention.kind}`);
+      }
+
       const conv = await resolveConversation(pool, claims.sub, conversationId, message, routedAgentId ?? agentId);
       if ('err' in conv) return errJson(reply, conv.status, conv.err);
       const convId = conv.id;
+
+      /**
+       * 批次 J · R-A / R-C 边界：这两种**不调模型**，服务端替智能体说一句人话就收尾。
+       * · busy（R-A）：被点名者正忙/在等 → **不静默改派**，告知它在做什么 + 要不要等/换人；
+       * · empty（R-C 边界）：整条只写了 @名字 → 反问要它做什么（拿空正文去问模型只会得到废话）。
+       * 落库规矩：user 行存**原文**（含 @名字，气泡要显示用户真打了什么），
+       *           assistant 行存这句告知并记 speaker_agent_id（历史回看要知道是谁说的）。
+       */
+      const mentionNotice = decisionNotice(mention);
+      if (mentionNotice) {
+        /**
+         * 这句告知由谁说：busy 那一轮**不能**是被点名的那个正忙的智能体（替它开口 = 又一次静默改派）；
+         * empty 那一轮优先让被点名者自己问「你要我做什么」。规则见 pickNoticeSpeaker。
+         */
+        const noticeSpeakerId = pickNoticeSpeaker({
+          decision: mention,
+          currentSpeakerId,
+          fallbackAgentId: routedAgentId ?? agentId,
+          roster: mentionRoster,
+        });
+        const noticeSpeakerName =
+          mentionRoster.find((r) => r.id === noticeSpeakerId)?.name ?? null;
+        mentionMeta.speakerAgentId = noticeSpeakerId;
+        mentionMeta.speakerName = noticeSpeakerName;
+        const umn = await pool.query<{ id: string }>(
+          "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
+          [convId, cipher.encryptText(message)],
+        );
+        const amn = await pool.query<{ id: string }>(
+          "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
+          [convId, cipher.encryptText(mentionNotice), noticeSpeakerId],
+        );
+        reply.hijack();
+        const res = reply.raw;
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+          'access-control-allow-origin': req.headers.origin ?? '*',
+        });
+        sse(res, 'meta', {
+          conversationId: convId,
+          userMessageId: Number(umn.rows[0].id),
+          agentId: noticeSpeakerId,
+          mention: mentionMeta,
+        });
+        sse(res, null, { delta: mentionNotice });
+        sse(res, 'done', {
+          conversationId: convId,
+          messageId: Number(amn.rows[0].id),
+          contentLength: mentionNotice.length,
+          searches: 0,
+          sources: [],
+        });
+        res.end();
+        return;
+      }
 
       /**
        * 第 16 步：每轮先按**本轮最新消息**更新会话状态，再拿它拼上下文。
@@ -335,9 +507,15 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
                 "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
                 [convId, cipher.encryptText(message)],
               );
-              await pool.query(
-                "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2)",
-                [convId, cipher.encryptText(builtMsg)],
+              /**
+               * 批次 J：这句也是**某个智能体说的** → 记 speaker_agent_id。
+               * 顺手修两处老毛病：① 原来 `done.messageId` 塞的是 `Date.now()`（假 id，与库里那行对不上，
+               * 桌面刷新后按真 id 重拉就会错位）→ 改成 RETURNING 出来的真 id，与主路径一致；
+               * ② 原来这里抄了一份 `sseLocal`，把 `\n` 写成 `\\n`（帧永不结束，桌面收不到）→ 统一走 `sse()`。
+               */
+              const amTmp = await pool.query<{ id: string }>(
+                "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
+                [convId, cipher.encryptText(builtMsg), turnSpeakerId],
               );
               reply.hijack();
               const res = reply.raw;
@@ -348,12 +526,20 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
                 'x-accel-buffering': 'no',
                 'access-control-allow-origin': req.headers.origin ?? '*',
               });
-              const sseLocal = (ev: string | null, data: unknown) => {
-                res.write(`${ev ? `event: ${ev}\\n` : ''}data: ${JSON.stringify(data)}\\n\\n`);
-              };
-              sseLocal('meta', { conversationId: convId, userMessageId: Number(umTmp.rows[0].id), agentId: routedAgentId ?? agentId });
-              sseLocal(null, { delta: builtMsg });
-              sseLocal('done', { conversationId: convId, messageId: Date.now(), contentLength: builtMsg.length, searches: 0, sources: [] });
+              sse(res, 'meta', {
+                conversationId: convId,
+                userMessageId: Number(umTmp.rows[0].id),
+                agentId: turnSpeakerId,
+                mention: mentionMeta,
+              });
+              sse(res, null, { delta: builtMsg });
+              sse(res, 'done', {
+                conversationId: convId,
+                messageId: Number(amTmp.rows[0].id),
+                contentLength: builtMsg.length,
+                searches: 0,
+                sources: [],
+              });
               res.end();
               return;
             }
@@ -367,9 +553,10 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
             "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
             [convId, cipher.encryptText(message)],
           );
-          await pool.query(
-            "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2)",
-            [convId, cipher.encryptText(confirmMsg)],
+          // 批次 J：确认句同样记发言人（见上面同一处注释：真 id + 统一 sse()）
+          const amTmp2 = await pool.query<{ id: string }>(
+            "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
+            [convId, cipher.encryptText(confirmMsg), turnSpeakerId],
           );
           reply.hijack();
           const res = reply.raw;
@@ -380,12 +567,20 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
             'x-accel-buffering': 'no',
             'access-control-allow-origin': req.headers.origin ?? '*',
           });
-          const sseLocal = (ev: string | null, data: unknown) => {
-            res.write(`${ev ? `event: ${ev}\\n` : ''}data: ${JSON.stringify(data)}\\n\\n`);
-          };
-          sseLocal('meta', { conversationId: convId, userMessageId: Number(umTmp.rows[0].id), agentId: routedAgentId ?? agentId });
-          sseLocal(null, { delta: confirmMsg });
-          sseLocal('done', { conversationId: convId, messageId: Date.now(), contentLength: confirmMsg.length, searches: 0, sources: [] });
+          sse(res, 'meta', {
+            conversationId: convId,
+            userMessageId: Number(umTmp.rows[0].id),
+            agentId: turnSpeakerId,
+            mention: mentionMeta,
+          });
+          sse(res, null, { delta: confirmMsg });
+          sse(res, 'done', {
+            conversationId: convId,
+            messageId: Number(amTmp2.rows[0].id),
+            contentLength: confirmMsg.length,
+            searches: 0,
+            sources: [],
+          });
           res.end();
           return;
         }
@@ -480,7 +675,19 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
 
       const hasActivePage = Boolean(taskWcId || openedUrl || (typeof body?.pageUrl === 'string' && body.pageUrl.trim()));
       const isExplicitTask = body?.taskMode === true;
-      const isTaskMode = isExplicitTask || shouldEnterTaskMode(message, hasActivePage);
+      /**
+       * 批次 J：**@点名换人的那一轮不发车**（不进工具循环）。
+       *
+       * 理由不是「怕」，是两条路认的人不一样：工具循环的 agentId 取的是**会话自己的 agent_id**
+       * （下面 loopAgentId 就是这么算的），而点名换人换的是**这一轮谁开口**。真让被点名者去接管
+       * 别人正在跑的那张页（wcId、页面状态、循环名额都是原主人的），才会出乱子。
+       * 所以换人轮一律走聊天（自带 web_search，能力足够答话），桌面侧也不再做兜底发车（见 App.tsx）。
+       *
+       * R-B（@ 的就是当前发言人）不算换人轮 —— 按「视作没写 @」处理，发车判定照旧。
+       * 判定用的正文是剥掉 @名字 之后的 mentionText（@名字 不是任务内容，R-C）。
+       */
+      const mentionSwitchRound = mention.kind === 'switch';
+      const isTaskMode = !mentionSwitchRound && (isExplicitTask || shouldEnterTaskMode(mentionText, hasActivePage));
 
       /**
        * 第 21 步 · 任务轮：**这一轮不进聊天模型，交给工具循环**。
@@ -501,7 +708,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         let taskWhiteboardBlock: string | undefined;
         let taskSkillBlock: string | undefined;
         try {
-          taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, loopAgentId ?? null, convId ?? null);
+          taskMemoryBlock = await buildMemoryBlock(pool, cipher, claims.sub, mentionText, loopAgentId ?? null, convId ?? null);
         } catch (err) {
           console.warn('[chat] 任务轮记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
         }
@@ -511,7 +718,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           if (pid) {
             taskWhiteboardBlock = await buildWhiteboardBlock(pool, cipher, claims.sub, pid);
             try {
-              const skillRes = await buildSkillBlock(pool, cipher, claims.sub, pid, message);
+              const skillRes = await buildSkillBlock(pool, cipher, claims.sub, pid, mentionText);
               taskSkillBlock = skillRes.block;
             } catch {}
           }
@@ -523,7 +730,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           agentId: loopAgentId,
           conversationId: convId,
           wcId,
-          goal: message,
+          // R-C：交给循环的目标是剥掉 @名字 之后的正文（@名字 只是点名，不是任务内容）
+          goal: mentionText,
           pageUrl: pageUrl || openedUrl,
           // 多智能体编排：同项目同事名单（与 /agent/loop/start 走同一个拼装函数，
           // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
@@ -546,9 +754,11 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           }
         })();
         const opening = `好，我在${host ? `「${host}」` : '当前'}这张页上动手了，做完把结果给你。`;
+        // 批次 J：这句开场白是**跑循环那个智能体**说的 → 记 speaker_agent_id（以 loop.agentId 为准，
+        // 它来自会话自己的 agent_id，比请求里的 agentId 权威）
         await pool.query<{ id: string }>(
-          "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'assistant', $2) RETURNING id",
-          [convId, cipher.encryptText(opening)],
+          "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
+          [convId, cipher.encryptText(opening), loop.agentId ?? null],
         );
         reply.hijack();
         const res = reply.raw;
@@ -559,7 +769,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           'x-accel-buffering': 'no',
           'access-control-allow-origin': req.headers.origin ?? '*',
         });
-        sse(res, 'meta', { conversationId: convId, userMessageId, agentId: loop.agentId });
+        sse(res, 'meta', { conversationId: convId, userMessageId, agentId: loop.agentId, mention: mentionMeta });
         sse(res, 'loop', { loopId: loop.id, maxSteps: loop.maxSteps, agentId: loop.agentId, pageUrl: pageUrl || openedUrl, wcId });
         sse(res, null, { delta: opening });
         
@@ -571,20 +781,42 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       // 第 10 步：该用户已确认的档案记忆注入系统提示词（无记忆=空串，行为与第 9 步一致）
       // 第 16 步：它只是**参考**（buildMemoryBlock 自己带「可被当前指令覆盖」的表头）。
       // 记忆合并第二批：三级作用域，支持按 owner+agent+conversation 过滤
-      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, message, agentId ?? null, convId ?? null);
+      /**
+       * 批次 J：记忆的作用域跟着**这一轮的发言人**走 —— 换人轮就该读被点名者那一份项目记忆，
+       * 读成原主人的就串号了（第 15 步「绝不串号」那条规矩在换人之后同样成立）。
+       * 关键词匹配用剥掉 @名字 的正文（@名字 不是内容）。
+       */
+      const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, mentionText, turnSpeakerId ?? agentId ?? null, convId ?? null);
       // 批次 F | Skills：按触发条件匹配技能，注入 identityBlock 技能槽
       let skillBlock = '';
       try {
         const projRowForSkill = await pool.query<{ project_id: string }>('SELECT project_id FROM conversations WHERE id=$1', [convId]);
         const pidForSkill = Number(projRowForSkill.rows[0]?.project_id ?? 0);
-        const skillRes = await buildSkillBlock(pool, cipher, claims.sub, Number.isInteger(pidForSkill) && pidForSkill > 0 ? pidForSkill : null, message);
+        const skillRes = await buildSkillBlock(pool, cipher, claims.sub, Number.isInteger(pidForSkill) && pidForSkill > 0 ? pidForSkill : null, mentionText);
         skillBlock = skillRes.block;
       } catch {}
       // 第 15 步 · 两层记忆 + 当前智能体人设：
       //   - 用户记忆库（账号级）：所有智能体都读得到，是「这个人」的习惯/口味；
       //   - 项目记忆（智能体级）：**只**读当前会话所属智能体那一份，绝不串号；
       //   - 人设：引导表填完就按它干活；没填完只让模型引导用户去填表，不许空人设乱聊。
-      const agentCtx = await buildAgentContext(pool, cipher, claims.sub, convId, agentId, skillBlock);
+      /**
+       * 批次 J：换人轮要的是**被点名者**的人设与项目记忆。
+       *
+       * ★ buildAgentContext 的规矩是「给了 conversationId 就以**会话的 agent_id** 为准，
+       *   agentIdHint 只在会话没有 agent 时才用」—— 所以换人这一轮必须把 conversationId 传 null，
+       *   否则它会把会话原主人的人设原样拿回来，@ 换人就白换了（这是本批次最容易踩空的一处）。
+       * ★ 「先前上下文」不受影响：喂给模型的历史是按 convId 读的（下面 history），换人照样全给 ——
+       *   用户要的就是「让被点名者接着这段对话说」，不是把它拉到一段空白会话里。
+       */
+      const switchedSpeakerId = mention.kind === 'switch' ? mention.agentId : null;
+      const agentCtx = await buildAgentContext(
+        pool,
+        cipher,
+        claims.sub,
+        switchedSpeakerId !== null ? null : convId,
+        switchedSpeakerId ?? agentId,
+        skillBlock,
+      );
       const userMemoryBlockRaw = await buildUserMemoryBlock(pool, cipher, claims.sub);
       // 第 11 步：知识库资料是与 memories 完全独立的、仅聊天用的上下文位置。
       // buildKnowledgeBlock 只按当前 owner 的加密片段做关键词字面匹配；空命中/异常都返回空，
@@ -596,7 +828,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       );
       const convProjectId = Number(convProject.rows[0]?.project_id);
       const knowledgeBlock = Number.isInteger(convProjectId) && convProjectId > 0
-        ? await buildKnowledgeBlock(pool, cipher, claims.sub, message, convProjectId)
+        ? await buildKnowledgeBlock(pool, cipher, claims.sub, mentionText, convProjectId)
         : '';
       // 第 13 步：网页已开好时的当轮补充约束（只在带上 browserOpened 的那一轮出现）
       const browserContext = openedUrl
@@ -724,7 +956,8 @@ ${
           'x-accel-buffering': 'no',
           'access-control-allow-origin': req.headers.origin ?? '*',
         });
-        sse(r, 'meta', { conversationId: convId, userMessageId, agentId: agentCtx.agentId });
+        // 批次 J：meta 恒带 mention（没写 @ 时 kind='none'、hits=[]），桌面不用判空
+        sse(r, 'meta', { conversationId: convId, userMessageId, agentId: agentCtx.agentId, mention: mentionMeta });
         req.raw.on('close', onClose);
       };
 
@@ -737,7 +970,11 @@ ${
           [
             { role: 'system', content: systemParts.join('\n\n') },
             ...history,
-            { role: 'user', content: message },
+            /**
+             * R-C：交给模型的**永远是剥掉 @名字 之后**的正文。
+             * 库里存的是原文（气泡要显示用户真打了什么），这两件事分开做，谁也不迁就谁。
+             */
+            { role: 'user', content: mentionText },
           ],
           {
             tag: 'chat/stream',
@@ -807,9 +1044,15 @@ ${
          *   不落库的话，来源标注一切走会话就没了（只有刚答完那一刻能看到）。
          */
         const sources = collectSources(searches);
+        /**
+         * 批次 J：这一句是**谁说的**必须落库（speaker_agent_id）。
+         * 以 agentCtx.agentId 为准 —— 它就是这一轮真正拼进系统提示词的那个人设的主人：
+         * 换人轮 = 被点名者，其余轮 = 会话/路由定的那个。这里不再另算一遍「该是谁」，
+         * 只认实际发话的那一个（两处各算一遍才会对不上号）。
+         */
         const am = await pool.query<{ id: string }>(
-          "INSERT INTO messages (conversation_id, role, content_enc, sources) VALUES ($1, 'assistant', $2, $3) RETURNING id",
-          [convId, cipher.encryptText(full), sources.length > 0 ? JSON.stringify(sources) : null],
+          "INSERT INTO messages (conversation_id, role, content_enc, sources, speaker_agent_id) VALUES ($1, 'assistant', $2, $3, $4) RETURNING id",
+          [convId, cipher.encryptText(full), sources.length > 0 ? JSON.stringify(sources) : null, agentCtx.agentId ?? turnSpeakerId],
         );
         // 第 16 步：这轮是在让用户自己去网页里登录 → 记「已提醒过」，之后不再重复长篇提醒。
         await noteLoginReminder(pool, convId, full).catch(() => undefined);
@@ -875,18 +1118,38 @@ ${
        * 桌面的诉求是「刷新后还原最近聊的」，所以取**最新** 200 条，再按 id 升序回给前端
        * （前端按数组顺序渲染，顺序不能反）。
        */
+      /**
+       * 批次 J：多带一列 speaker_agent_id，并 LEFT JOIN 出名字。
+       * · LEFT JOIN（不是 JOIN）：老数据 / user 行 / 智能体已被删的行 speaker 都是 NULL，
+       *   这些行照样要回给前端，不能因为 join 不上就整条消失。
+       * · ON DELETE SET NULL 之后 id 也没了，所以「名字取不到」只可能是脏数据 → 回 null，界面按未知渲染。
+       * · 名字口径与「同事名单」（loadProjectRoster）一致：persona.name 优先、回落 agents.name。
+       *   两边口径不一样的话，@点名 用的是 persona 名、历史气泡显示 agents.name，用户会觉得换了个人。
+       * · 再套一层 projects.user_id 限定：会话本身已经验过归属，这里是第二道锁（不靠上游守规矩）。
+       */
       const rows = await pool.query<{
         id: string;
         role: string;
         content_enc: string;
         created_at: string;
         sources: ChatSource[] | null;
+        speaker_agent_id: string | null;
+        speaker_name: string | null;
+        speaker_persona: { name?: string } | null;
       }>(
-        `SELECT id, role, content_enc, created_at, sources FROM (
-           SELECT id, role, content_enc, created_at, sources FROM messages
-           WHERE conversation_id = $1 ORDER BY id DESC LIMIT 200
+        `SELECT id, role, content_enc, created_at, sources,
+                speaker_agent_id, speaker_name, speaker_persona FROM (
+           SELECT m.id, m.role, m.content_enc, m.created_at, m.sources,
+                  m.speaker_agent_id,
+                  a.name AS speaker_name,
+                  a.persona AS speaker_persona
+             FROM messages m
+             LEFT JOIN agents a
+               ON a.id = m.speaker_agent_id
+              AND a.project_id IN (SELECT id FROM projects WHERE user_id = $2)
+            WHERE m.conversation_id = $1 ORDER BY m.id DESC LIMIT 200
          ) AS recent ORDER BY id ASC`,
-        [conv.id],
+        [conv.id, claims.sub],
       );
       const out: ChatHistoryResult = {
         conversationId: conv.id,
@@ -899,6 +1162,20 @@ ${
            * JSONB 由 pg 直接反序列化成对象数组；NULL / 非数组（脏数据）一律当"没有来源"。
            */
           sources: Array.isArray(r.sources) ? r.sources : undefined,
+          /**
+           * 批次 J：这句话是谁说的。NULL（老数据 / user 行 / 智能体已删）→ undefined，
+           * **不回填、不猜、不拿会话当前智能体冒充**（冒充就等于把「换过人」这件事抹掉）。
+           */
+          speaker:
+            r.speaker_agent_id === null || r.speaker_agent_id === undefined
+              ? undefined
+              : {
+                  id: Number(r.speaker_agent_id),
+                  name:
+                    (typeof r.speaker_persona?.name === 'string' && r.speaker_persona.name.trim()
+                      ? r.speaker_persona.name.trim()
+                      : r.speaker_name) || null,
+                },
           created_at: r.created_at,
         })) satisfies ChatRow[],
       };
