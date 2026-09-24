@@ -242,6 +242,26 @@ async function main(): Promise<void> {
     await check('显示字段不超 80 字（title 当年就是这个长度，别把界面撑破）', () => {
       assert.ok(String(t.displayTitle).length <= 80, `长度 ${String(t.displayTitle).length}`);
     });
+    /**
+     * ★ 补丁断言（2026-09-24 用户报的 bug）：占位符的「N 字」必须是**被替换那一段**的长度。
+     *   bug 形状：card/idcard 两条正则无捕获组 → `replace` 回调的 `m[2]` 是**整个输入串**，
+     *   于是 16 位卡号与 18 位身份证都报成整句长度（·79字），而带捕获组的 password 报对了（·10字）。
+     *   上面那些「不含敏感词」的断言在字数全错时照样绿 —— 所以这里必须整串精确相等。
+     */
+    await check('★ 补丁：displayTitle 整串精确相等（字数 16 / 10 / 18，不是整句长度）', () => {
+      assert.equal(
+        String(t.displayTitle),
+        '帮我查一下 银行卡[已脱敏·card·16字] 的余额，登录用 密码[已脱敏·password·10字]，实名 身份证[已脱敏·card·18字]',
+      );
+      const lens = [...String(t.displayTitle).matchAll(/\[已脱敏·([A-Za-z]+)·(\d+)字\]/g)].map((m) => `${m[1]}·${m[2]}`);
+      assert.deepEqual(lens, ['card·16', 'password·10', 'card·18'], JSON.stringify(lens));
+      const goalLen = [...GOAL].length;
+      assert.ok(
+        !lens.some((x) => x.endsWith(`·${goalLen}`)),
+        `有占位符报了整句长度 ${goalLen}（那就是 bug 复发了）`,
+      );
+    });
+
     await check('tasks.title 这一列确实是 NULL（没偷偷存一份脱敏摘要冒充标题）', async () => {
       const row = await taskRow(taskId);
       assert.equal(row.title, null, `title=${JSON.stringify(row.title)}`);
@@ -450,6 +470,23 @@ async function main(): Promise<void> {
     const after = await taskRow(sid);
     const steps = Array.isArray(after.payload.steps) ? (after.payload.steps as string[]) : [];
     log(`      存进去的 steps（${steps.length} 条）：${JSON.stringify(steps)}`);
+    /**
+     * ★ 补丁断言：六条摘要的**整串**期望值。
+     *   bug 在的时候这三条分别报 ·25字 / ·26字 / ·29字（都是「整句长度」），修完是 ·19字 / ·18字 / ·16字。
+     *   带捕获组的 password / otp / cvv 三条一直是对的（·13字 / ·6字 / ·3字）—— 正是这个「一对一错」
+     *   的分布把根因指向了「回调实参形状随捕获组个数而变」，而不是正则贪婪。
+     */
+    await check('★ 补丁：六条摘要脱敏后**逐条整串相等**（占位符字数 = 被替换那段的实际长度）', () => {
+      assert.deepEqual(steps, [
+        '写入完成 密码是 [已脱敏·password·13字]',
+        '发送验证码 [已脱敏·otp·6字] 给用户',
+        '绑定银行卡 [已脱敏·card·19字]',
+        '身份证 [已脱敏·card·18字] 已登记',
+        'CVV [已脱敏·card·3字] 校验通过',
+        '老形状也要挡住：「银行卡[已脱敏·card·16字]」',
+      ]);
+    });
+
     await check('六条含敏感值的摘要，落进 payload.steps 后**一个敏感值都不剩**', () => {
       assert.equal(steps.length, evil.length, `steps 数量不对：${steps.length}`);
       const joined = steps.join('\n');

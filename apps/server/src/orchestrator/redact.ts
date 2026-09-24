@@ -84,10 +84,27 @@ export function redactForStorage(text: string): string {
   let out = String(text ?? '');
   for (const { re, tag } of VALUE_PATTERNS) {
     out = out.replace(re, (...m: unknown[]) => {
-      const groups = m as unknown[];
-      const whole = String(groups[0] ?? '');
-      const prefix = typeof groups[1] === 'string' ? groups[1] : '';
-      const value = typeof groups[2] === 'string' ? groups[2] : whole;
+      const whole = String(m[0] ?? '');
+      /**
+       * ★ 占位符里的「N 字」必须是**被替换掉那一段的实际长度**（2026-09-24 修的 bug）。
+       *
+       * `String.replace` 回调的实参形状随「正则有没有捕获组」而变：
+       *   · 有 n 个捕获组 → `(match, g1…gn, offset, string)`，实参 n+3 个；
+       *   · **没有**捕获组 → `(match, offset, string)`，实参 3 个；
+       *   · 有命名组时末尾还会再多一个 groups 对象。
+       * 第一版不看形状、直接取 `m[1]`/`m[2]`：
+       *   `password`/`otp`/`cvv` 三条带两个捕获组，`m[2]` 正好是值 → 字数对（`Zx9!secret` → ·10字）；
+       *   `card`/`idcard` 两条是 `(?:…)` **非捕获**的，`m[1]` 是 offset（数字）、
+       *   `m[2]` 是 **整个输入串** → 字数变成「整句话的长度」：
+       *   `银行卡6222021234567890`（16 位）报成 ·79字、`身份证110101199003071234`（18 位）也报成 ·79字。
+       * 那个 79 还是**上一轮 password 替换之后**的整串长度，所以看着像「贪婪吞了 79 个字符」，
+       * 其实正则一个字符都没多吞 —— 纯粹是长度取错了来源。
+       * 修法：按实参形状还原捕获组个数，无组时用 `match` 本身当被替换段。
+       */
+      const hasNamedGroups = typeof m[m.length - 1] === 'object' && m[m.length - 1] !== null ? 1 : 0;
+      const groupCount = m.length - 3 - hasNamedGroups; // 末两位恒为 offset 与 string
+      const prefix = groupCount >= 1 ? String(m[1] ?? '') : '';
+      const value = groupCount >= 2 ? String(m[2] ?? '') : whole;
       const len = [...value].length;
       return `${prefix}[已脱敏·${tag}·${len}字]`;
     });

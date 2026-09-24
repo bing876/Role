@@ -147,6 +147,13 @@ npm run dev                               # 桌面端（Vite + Electron）
 - **记忆 / 路由是模糊字面匹配，不是语义检索**：分词 + 加权 + Jaccard，零字面重叠的同义句（「爱喝拿铁」vs「喜欢喝咖啡」）照样检索不到。真语义要另接 embedding 模型（DeepSeek 没有 embedding API），调用点只有 `memories.ts` 的 `wordHits` 与 `chiefOfStaff.ts` 的 `routeByFuzzy`。
 - **模型路由目前只按任务类型选**：闲聊里「简单 / 复杂」的判断只写进日志，两者选的是同一个模型配置；不配 `DEEPSEEK_MODEL_*` 时所有任务都走 `DEEPSEEK_MODEL`。
 - **交接文件明文落盘**：`handoffs/*.md` 和 `board.md` 写的是任务原文，与数据库「内容全密文」的口径不一致（库里同一份任务 `agent_delegations.task` 是脱敏存的）。修法二选一：写盘前走 `redactForStorage`，或整体改为存库密文、文件只做导出视图。
+- **脱敏只认 13~20 位数字串与正好 18 位的身份证**：`redact.ts` 的 `VALUE_PATTERNS` 边界之外会漏 ——
+  21 位以上的流水号、两个卡号紧贴无分隔（34 位）这类输入**完全不脱敏**，明文会落进 `tasks.payload.steps`。
+  放宽上限会误伤长订单号/时间戳，且 `detectSensitive` 用同一组边界，要改得两处一起改；
+  `npm run verify:redact` 的 ③-7/③-8 两条断言把现状钉住了（改边界的人会先看到红）。
+  另：18 位纯数字身份证会被标成 `card` 而不是 `idcard`（`card` 那条排在前面先命中；标签不含内容）。
+  占位符里的「N 字」是**被替换掉那一段的实际长度**（含分组用的空格/横线），不是整句长度 —— 这条曾经错过，
+  修完的反证与断言见 `docs/acceptance/收尾6-goal加密-验收报告.md` 第 10 节。
 - **重启恢复的工具去重**只有逻辑模拟测试（`self-check-fixes.mjs`），还没有「执行后、结果落库前 kill 进程」的真进程测试。
 - 生产环境的 CSP 未加（避免打断 Vite HMR）。
 

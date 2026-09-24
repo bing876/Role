@@ -284,6 +284,27 @@ try {
   for (const sen of SENSITIVE) check(!dt.includes(sen), '★ 条件1：显示字段里读不到「' + sen + '」');
   check(dt.includes('[已脱敏'), '★ 条件1：显示字段留了脱敏占位（看得出被改过，不是悄悄截断）：' + dt);
   check(GOAL.startsWith(dt.slice(0, 6)), '★ 条件1：显示字段确实是那句目标的脱敏版（不是随便填的占位文字）');
+  /**
+   * ★ 补丁断言（2026-09-24 用户报的 bug）：占位符里的「N 字」必须是**被替换那一段**的长度。
+   *   bug 的形状是 `银行卡6222021234567890`（16 位）与 `身份证110101199003071234`（18 位）
+   *   都报成 `·79字`（整句在上一轮替换之后的长度），而 `密码Zx9!secret` 报 `·10字` 是对的 ——
+   *   因为 card/idcard 两条正则没有捕获组，`replace` 回调的 `m[2]` 是**整个输入串**而不是值。
+   *   所以这里必须**整串精确相等**：上面那些 `includes` 断言在字数错成 79 时照样全绿。
+   */
+  const DT_EXPECTED =
+    '帮我查一下 银行卡[已脱敏·card·16字] 的余额，登录用 密码[已脱敏·password·10字]，实名 身份证[已脱敏·card·18字]';
+  check(dt === DT_EXPECTED, '★ 补丁：displayTitle 整串精确相等（字数依次 16 / 10 / 18，各自对应自己那段）');
+  const dtLens = [...dt.matchAll(/\[已脱敏·([A-Za-z]+)·(\d+)字\]/g)].map((m) => `${m[1]}·${m[2]}`);
+  check(
+    dtLens.join(',') === 'card·16,password·10,card·18',
+    '★ 补丁：三个占位符的字数是 ' + JSON.stringify(dtLens) + '（不许出现整句长度 71/79 这种数）',
+  );
+  for (const bad of [[...GOAL].length, [...dt].length]) {
+    check(
+      !dtLens.some((x) => x.endsWith(`·${bad}`)),
+      `★ 补丁：没有占位符把「整句长度 ${bad}」当成被替换段的长度（那就是 bug 复发了）`,
+    );
+  }
   check(cur.task?.title === null || cur.task?.title === undefined, '★ 条件1：title 没有偷偷存一份脱敏摘要（实际 ' + JSON.stringify(cur.task?.title) + '）');
   check(cur.task?.goal === GOAL, '★ 条件1：功能字段 goal 仍是还原后的原文（脱敏只作用于显示副本，没把功能吃掉）');
 
