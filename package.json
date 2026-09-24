@@ -30,6 +30,7 @@
     "verify:websearch": "tsx scripts/verify/websearch-single-source.mts",
     "verify:db": "node scripts/verify/checkpoint-encryption-db.mjs && node scripts/verify/board-lock-db.mjs && node scripts/verify/task-encryption-db.mjs && tsx scripts/verify/task-encryption-pglite.mts",
     "verify:db:pglite": "tsx scripts/verify/task-encryption-pglite.mts",
+    "verify:db:mutate-nocipher": "node scripts/verify/task-encryption-nocipher.mjs",
     "verify": "npm run -s verify:tools && npm run -s verify:r4 && npm run -s verify:orch && npm run -s verify:websearch && npm run -s verify:memory && npm run -s verify:persona && npm run -s verify:collab && npm run -s verify:batches && npm run -s verify:db:pglite",
     "live": "node scripts/live.mjs",
     "clean": "node scripts/clean.mjs"

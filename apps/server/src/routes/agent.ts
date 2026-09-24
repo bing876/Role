@@ -25,6 +25,7 @@ import { isDbUnreachable } from '../db';
 import { llmFetch } from '../llm';
 import { notifyUser } from '../notify';
 import { buildMemoryBlock, triggerTaskExtract } from './memories';
+import { scrubTaskText, taskDisplayTitle } from '../orchestrator/redact';
 import { decideOnce } from '../toolLoop';
 import { currentProjectId } from '../projectScope';
 
@@ -132,15 +133,22 @@ function payloadWithoutGoal(payload: unknown): Record<string, unknown> {
 }
 
 /**
- * R2（2026-09-22）：步骤摘要入库前脱敏 —— 只认两种已知泄漏形状（新/旧客户端的 type 摘要），
- * 把引号里的输入原文换成字数，其余字节不动。新客户端修后本来就不发原文，
- * 这里是防旧版桌面与第三方客户端。注意：不用敏感词正则涂全文 —— secret 值本身通常
- * 不含敏感词（`Secret123` 命中不了"密码"），全文替换只会涂花账本还拦不住东西。
+ * R2（2026-09-22）：步骤摘要入库前脱敏。
+ *
+ * 收尾 6（2026-09-24 用户拍板）**加强**了这个函数：实现搬到 `orchestrator/redact.ts`
+ * 的 `scrubTaskText`（脱敏的单一来源），在 R2 原来那两种「引号里的输入原文」形状之外，
+ * 再加一层**值形态兜底**（银行卡 / 身份证 / 密码 / 验证码 / CVV）。
+ *
+ * R2 当年拒绝过第 2 层，理由是「secret 值本身通常不含敏感词（`Secret123` 命中不了"密码"），
+ * 全文替换只会涂花账本还拦不住东西」—— 那条理由只对「按敏感词表涂全文」成立；
+ * `redactForStorage` 抹的是**值形态**（12~19 位数字串、18 位身份证、`密码是X`），
+ * 正好是 `Secret123` 这类东西的载体。详见 redact.ts 里 `scrubTaskText` 的注释。
+ *
+ * ★ 为什么现在必须加强：用户拍板 `tasks.payload` **不整列加密**（步骤账本要能在 SQL 里直接查），
+ *   那这道脱敏就是明文 `payload.steps` 唯一的闸。
  */
 function scrubStepSummary(summary: string): string {
-  return summary
-    .replace(/输入「([^」]*)」/g, (_m: string, inner: string) => `输入「[已脱敏·${[...String(inner)].length}字]」`)
-    .replace(/写入「([^」]*)」/g, (_m: string, inner: string) => `写入「[已脱敏·${[...String(inner)].length}字]」`);
+  return scrubTaskText(summary);
 }
 
 /** 第 8 步：兜底文档——没配 Key 或模型乱答时，用已落库字段拼一份**不编造**的 Markdown */
@@ -455,13 +463,32 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
       if (r.rowCount !== 1) return { task: null };
       const row = r.rows[0];
       const payload = payloadWithoutGoal(row.payload) as { steps?: string[]; doc?: { summary?: string; title?: string; hint?: string; outline?: string[] } };
+      // 收尾 6：桌面刷新后还原任务卡靠 goal —— 解密优先，老行回退明文列，
+      // 用户看到的还是原来那句话（加密不能变成「任务卡上目标空了」）
+      const goal = taskGoalFromRow(row, cipher);
       return {
         task: {
           id: Number(row.id),
           status: row.status,
-          // 收尾 6：桌面刷新后还原任务卡靠这个字段 —— 解密优先，老行回退明文列，
-          // 用户看到的还是原来那句话（加密不能变成「任务卡上目标空了」）
-          goal: taskGoalFromRow(row, cipher),
+          goal,
+          /**
+           * ★ 收尾 6 条件1（2026-09-24）：**非敏感的显示字段**，给「不该带用户原话」的场景用
+           *   （任务列表行、系统通知、日志、将来的托盘提示）。
+           *
+           * 与 `goal` 的区别必须说清楚，两者都非空、但用途不同：
+           *   · `goal`         = 用户原话（解密后的完整目标）。任务卡详情要它，
+           *                      所以它**可能含敏感词** —— 那是用户自己写进去的，
+           *                      界面不显示原文就等于把功能吃掉；
+           *   · `displayTitle` = 同一句话过 `scrubTaskText` 脱敏后的前 80 字，
+           *                      **保证不含银行卡/身份证/密码/验证码/CVV 的值**，
+           *                      且永远非空（整句都是敏感值时回落到「任务」）。
+           *
+           * 为什么现算不入库：`tasks.title` 已经停用（它当年存 `goal.slice(0,80)`，
+           * 是同一份明文的第二个副本）。再存一份脱敏摘要就是第三个副本，
+           * 而且脱敏规则一改，库里那份立刻变成「看起来脱敏了其实是旧规则」的陈迹。
+           * 现算的代价只是每次请求跑几条正则。
+           */
+          displayTitle: taskDisplayTitle(goal),
           steps: payload.steps ?? [],
           unread: Boolean(row.unread),
           summary: payload.doc?.summary ?? '',

@@ -96,6 +96,50 @@ export function redactForStorage(text: string): string {
 }
 
 /**
+ * 收尾 6（2026-09-24 用户拍板）| **要给人看的短文本**的脱敏：步骤摘要、任务显示标题。
+ *
+ * 两层，缺一不可：
+ *   1. R2 的两种已知泄漏形状 —— `输入「原文」` / `写入「原文」` → 换成字数
+ *      （新客户端修后本来就不发原文，这层是防旧版桌面与第三方客户端）；
+ *   2. **值形态兜底** —— 走上面同一张 `VALUE_PATTERNS`（银行卡 / 身份证 / 密码 / 验证码 / CVV）。
+ *
+ * ★ 为什么第 2 层现在要加（R2 当年明确拒绝过，理由要正面回答）：
+ *   R2 的原话是「不用敏感词正则涂全文 —— secret 值本身通常不含敏感词
+ *   （`Secret123` 命中不了"密码"），全文替换只会涂花账本还拦不住东西」。
+ *   那条理由**只对「按敏感词表涂全文」成立**（`SENSITIVE_TARGET_RE` 那种）。
+ *   `redactForStorage` 抹的不是「敏感词」而是**值形态**：12~19 位数字串、18 位身份证、
+ *   `密码是X` / `pwd: X` 这种「字段名+值」组合 —— 正好是 `Secret123` 这类
+ *   「命中不了敏感词」的东西的**载体**。所以两层不冲突，是「形状」与「值」各管一半。
+ *
+ * ★ 拍板背景：收尾 6 把 `tasks.goal_enc` 加密后，同一行 JSONB 里的 `payload.steps`
+ *   仍是明文（用户决定**不整列加密 payload**，因为步骤账本要能在 SQL 里直接查）。
+ *   既然不加密，那这道脱敏就是明文步骤唯一的闸 —— 必须让敏感值夹带不进去。
+ *
+ * 返回的文本里保留「有几个字符」这类**非内容**信息，与 driver/loop 的口径一致。
+ */
+export function scrubTaskText(text: string): string {
+  const shaped = String(text ?? '')
+    .replace(/输入「([^」]*)」/g, (_m: string, inner: string) => `输入「[已脱敏·${[...String(inner)].length}字]」`)
+    .replace(/写入「([^」]*)」/g, (_m: string, inner: string) => `写入「[已脱敏·${[...String(inner)].length}字]」`);
+  return redactForStorage(shaped);
+}
+
+/**
+ * 任务列表 / 任务卡的**非敏感显示字段**：脱敏后的目标前 80 字。
+ *
+ * 为什么要有它：收尾 6 之后 `tasks.title` 不再存 goal 原文（那是同一份明文的第二个副本），
+ * 而库里唯一的目标副本是密文 `goal_enc`。接口层解密后返回的 `goal` 是**用户原话**
+ * （含敏感词，因为任务卡必须显示用户自己说的那句），所以另外给一个
+ * 「非空、且保证不含敏感值」的显示候选，给列表/通知这类**不该带原文**的场景用。
+ *
+ * 永远非空：脱敏后万一只剩空白（整句都是敏感值），回落到 `'任务'`。
+ */
+export function taskDisplayTitle(goal: string, max = 80): string {
+  const t = scrubTaskText(goal).replace(/\s+/g, ' ').trim().slice(0, max);
+  return t || '任务';
+}
+
+/**
  * 结构化 payload 的脱敏：只保留「非内容」字段。
  *
  * 频道里的 payload 是给界面画卡片用的（状态/计数/来源网址/耗时），

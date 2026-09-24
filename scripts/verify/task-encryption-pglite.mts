@@ -30,6 +30,7 @@ import Fastify from 'fastify';
 import { ORCH_DEFAULTS, type ServerEnv } from '../../apps/server/src/env';
 import { makeCipher, signToken, type JsonCipher } from '../../apps/server/src/crypto';
 import { makePool, migrate, migrateTaskGoalEncryption } from '../../apps/server/src/db';
+import type { TaskGoalMigrationResult } from '../../apps/server/src/db';
 import { registerAgentRoutes } from '../../apps/server/src/routes/agent';
 import { registerLoopRoutes } from '../../apps/server/src/routes/loop';
 import type { Pool } from 'pg';
@@ -48,6 +49,38 @@ const check = (name: string, fn: () => void | Promise<void>) =>
       fails += 1;
       log(`  ★FAIL ${name}  —— ${(err as Error)?.message ?? String(err)}`);
     });
+
+/**
+ * 临时接管 console.warn，把生产代码打的警告**原文**抓出来（同时也照旧打印，便于取证）。
+ * 条件3 要求「启动日志打 warn 列出受影响行 id」—— 那是可观测行为，必须真去读日志，
+ * 不能只看函数返回值（返回值对，日志没打，运维照样看不见）。
+ */
+async function captureWarns(fn: () => Promise<unknown> | unknown): Promise<string[]> {
+  const orig = console.warn;
+  const out: string[] = [];
+  console.warn = (...a: unknown[]) => {
+    const line = a.map(String).join(' ');
+    out.push(line);
+    orig(`      [warn] ${line}`);
+  };
+  try {
+    await fn();
+  } finally {
+    console.warn = orig;
+  }
+  return out;
+}
+
+/**
+ * 判断「显示字段」是不是「原目标」的脱敏前缀版。
+ * 脱敏会把敏感段整块换成 `[已脱敏:xx]`，长度与内容都变了，所以不能直接 startsWith；
+ * 只比**第一个敏感词之前**的那段原文 —— 那段一定原样保留。
+ */
+function dt_prefix_ok(displayTitle: string, goal: string): boolean {
+  const cut = goal.indexOf('银行卡');
+  const head = cut > 0 ? goal.slice(0, cut).trim() : goal.slice(0, 6);
+  return head.length > 0 && displayTitle.startsWith(head);
+}
 
 const DATA_KEY = 'a'.repeat(64);
 const SENSITIVE = ['银行卡6222021234567890', '密码Zx9!secret', '身份证110101199003071234'];
@@ -182,6 +215,36 @@ async function main(): Promise<void> {
       const t = (cur.json() as { task: { id: number; goal: string } }).task;
       assert.equal(t.id, taskId);
       assert.equal(t.goal, GOAL);
+    });
+  }
+
+  // ------------------------------------- ②-B ★ 条件1：title 停用后，界面「显示什么」必须被验收盯住
+  log('');
+  log('--- ②-B ★ 条件1：显示字段非空 + 不含敏感词（tasks.title 已停用，界面靠 goal/displayTitle） ---');
+  {
+    const r = await app.inject({ method: 'GET', url: '/agent/task/current', headers: auth });
+    const t = (r.json() as { task: Record<string, unknown> }).task;
+    log(`      /agent/task/current → ${JSON.stringify({ id: t.id, title: t.title, goal: t.goal, displayTitle: t.displayTitle })}`);
+    await check('★ 条件1：显示字段 displayTitle **非空**（界面不会出现空白标题）', () => {
+      assert.equal(r.statusCode, 200, `${r.statusCode} ${r.body}`);
+      assert.equal(typeof t.displayTitle, 'string', `displayTitle=${JSON.stringify(t.displayTitle)}`);
+      assert.ok(String(t.displayTitle).trim().length > 0, '显示字段是空的');
+    });
+    await check('★ 条件1：displayTitle **不含任何敏感词**（这份是要给人看、会进日志与截图的）', () => {
+      const dt = String(t.displayTitle);
+      for (const bad of SENSITIVE) assert.ok(!dt.includes(bad), `显示字段里读到「${bad}」`);
+      assert.ok(dt.includes('[已脱敏'), `没留脱敏占位，看不出被改过：${dt}`);
+    });
+    await check('★ 条件1：功能字段 goal 仍是**还原后的原文**（脱敏只作用于显示副本，没把功能吃掉）', () => {
+      assert.equal(t.goal, GOAL, 'goal 不是原文');
+      assert.ok(dt_prefix_ok(String(t.displayTitle), GOAL), '显示字段与目标毫无关系（不是同一句话的脱敏版）');
+    });
+    await check('显示字段不超 80 字（title 当年就是这个长度，别把界面撑破）', () => {
+      assert.ok(String(t.displayTitle).length <= 80, `长度 ${String(t.displayTitle).length}`);
+    });
+    await check('tasks.title 这一列确实是 NULL（没偷偷存一份脱敏摘要冒充标题）', async () => {
+      const row = await taskRow(taskId);
+      assert.equal(row.title, null, `title=${JSON.stringify(row.title)}`);
     });
   }
 
@@ -355,6 +418,52 @@ async function main(): Promise<void> {
     });
   }
 
+  // --------------------------- ⑤-B ★ 拍板：不加密 payload 整列，改成把步骤摘要脱敏做到「值形状」级
+  log('');
+  log('--- ⑤-B 拍板：敏感值不能搭 task/step 摘要的车进 payload.steps ---');
+  {
+    // 收尾 6 第一版的 scrubStepSummary 只认两种「」形状，R2 评审当时就指出「挡不住其它形状的敏感数据」。
+    // 2026-09-24 拍板：不加密 payload 整列（每次读都要解密、代价大且 payload 里还有 steps/doc 等结构），
+    // 改成复用 redactForStorage 的 VALUE_PATTERNS（密码/验证码/卡号/身份证/CVV）按**值形状**脱敏。
+    const row0 = await pool.query(
+      `INSERT INTO tasks (project_id, status, title, payload) VALUES (10,'running',NULL,$1::jsonb) RETURNING id`,
+      [JSON.stringify({ steps: [] })],
+    );
+    const sid = Number((row0.rows[0] as { id: string }).id);
+    const evil = [
+      `写入完成 密码是 hunter2secret`,
+      `发送验证码 839201 给用户`,
+      `绑定银行卡 6222021234567890123`,
+      `身份证 110101199003078888 已登记`,
+      `CVV 739 校验通过`,
+      `老形状也要挡住：「${SENSITIVE[0]}」`,
+    ];
+    for (let i = 0; i < evil.length; i += 1) {
+      const rp = await app.inject({
+        method: 'POST',
+        url: '/agent/task/step',
+        headers: auth,
+        payload: { taskId: sid, summary: evil[i], ok: true },
+      });
+      assert.equal(rp.statusCode, 200, `第 ${i} 条步骤上报失败：${rp.statusCode} ${rp.body}`);
+    }
+    const after = await taskRow(sid);
+    const steps = Array.isArray(after.payload.steps) ? (after.payload.steps as string[]) : [];
+    log(`      存进去的 steps（${steps.length} 条）：${JSON.stringify(steps)}`);
+    await check('六条含敏感值的摘要，落进 payload.steps 后**一个敏感值都不剩**', () => {
+      assert.equal(steps.length, evil.length, `steps 数量不对：${steps.length}`);
+      const joined = steps.join('\n');
+      for (const raw of ['hunter2secret', '839201', '6222021234567890123', '110101199003078888', '739', SENSITIVE[0]]) {
+        assert.ok(!joined.includes(raw), `steps 里残留敏感值「${raw}」`);
+      }
+    });
+    await check('脱敏后仍然**可读**（留了占位，不是整条摘要被抹成空串）', () => {
+      assert.ok(steps[0].includes('[已脱敏'), `没留占位：${JSON.stringify(steps[0])}`);
+      assert.ok(steps[0].includes('写入完成'), `把正常文字也删了：${JSON.stringify(steps[0])}`);
+      assert.ok(steps.every((x) => typeof x === 'string' && x.length > 0), '有摘要被抹成空串');
+    });
+  }
+
   // ------------------------------------------- ⑥ 残行：密文与明文同时存在（真库抓出来的形状）
   log('');
   log('--- ⑥ 残行：goal_enc 已有值 + 明文也还在（灰度/回滚形状）必须被清干净 ---');
@@ -397,19 +506,39 @@ async function main(): Promise<void> {
     );
     const cId = Number((c.rows[0] as { id: string }).id);
 
-    // 残行 D：密文能解但**内容不同**（人工改过库）→ 保留密文、清明文、如实计入 mismatched
+    /**
+     * 残行 D：密文能解但**内容不同**（人工改过库 / 灰度期两边各写一次）。
+     * ★ 条件3（2026-09-24 用户拍板）：这种行**两份都留、一行不动**，只在启动日志 warn 出 id 交人判断。
+     *   自动清明文会丢掉「唯一一份能读的内容」，自动覆盖密文会丢掉「另一份可能更新的内容」，
+     *   机器没资格替人做不可逆的取舍。
+     */
     const d = await pool.query(
       `INSERT INTO task_pauses (user_id, loop_id, goal, goal_enc, paused_by, resumed_at)
        VALUES (1,'residue-d',$1,$2,'user',now()) RETURNING id`,
       ['明文写的另一个目标', cipher.encryptText('密文里的目标')],
     );
     const dId = Number((d.rows[0] as { id: string }).id);
+    const dEncBefore = String((await pool.query(`SELECT goal_enc FROM task_pauses WHERE id=$1`, [dId])).rows[0].goal_enc);
+    // 残行 D2：同上，但明文里带敏感词 —— 用来**如实**验「两份都留」的代价：
+    // 在人工处理掉之前，这行明文会继续躺在库里，补偿控制是那条 warn（不是假装它干净）。
+    const d2 = await pool.query(
+      `INSERT INTO tasks (project_id, status, title, payload, goal_enc)
+       VALUES (10,'done',NULL,$1::jsonb,$2) RETURNING id`,
+      [JSON.stringify({ goal: `不一致的明文目标，里面还有 ${SENSITIVE[1]}`, steps: [] }), cipher.encryptText('密文里的另一个目标')],
+    );
+    const d2Id = Number((d2.rows[0] as { id: string }).id);
 
-    const r = await migrateTaskGoalEncryption(pool, cipher);
+    let warns: string[] = [];
+    let r: TaskGoalMigrationResult = {
+      skipped: true, pauses: 0, tasks: 0, encrypted: 0, mismatched: 0, mismatchedIds: [], failed: 0,
+    };
+    warns = await captureWarns(async () => {
+      r = await migrateTaskGoalEncryption(pool, cipher);
+    });
     log(`      残行回填：${JSON.stringify(r)}`);
-    await check('四条残行都被处理了（pauses 3 条 + tasks 1 条），没有一条因为「已有密文」被跳过', () => {
-      assert.equal(r.pauses, 3, `pauses=${r.pauses}`);
-      assert.equal(r.tasks, 1, `tasks=${r.tasks}`);
+    await check('该动的都动了（pauses 2 条 = A/C、tasks 1 条 = B），不一致的 D/D2 一行没动', () => {
+      assert.equal(r.pauses, 2, `pauses=${r.pauses}（A 清明文 + C 重加密）`);
+      assert.equal(r.tasks, 1, `tasks=${r.tasks}（B 清 title）`);
       assert.equal(r.failed, 0, `failed=${r.failed}`);
     });
 
@@ -448,15 +577,50 @@ async function main(): Promise<void> {
       goal: string | null;
       goal_enc: string | null;
     };
-    await check('残行 D：密文与明文不一致 → 保留密文、清明文、mismatched 计数 +1', () => {
-      assert.equal(r.mismatched, 1, `mismatched=${r.mismatched}`);
-      assert.equal(dAfter.goal, null, '明文没被清掉');
-      assert.equal(cipher.decryptText(String(dAfter.goal_enc)), '密文里的目标', '密文被明文覆盖了');
+    await check('★ 条件3：残行 D 不一致 → **两份都留**（明文没被清、密文逐字节没变）', () => {
+      assert.equal(r.mismatched, 2, `mismatched=${r.mismatched}（D + D2）`);
+      assert.equal(dAfter.goal, '明文写的另一个目标', `明文被清掉了：${JSON.stringify(dAfter.goal)}`);
+      assert.equal(dAfter.goal_enc, dEncBefore, '密文被改写了');
+      assert.equal(cipher.decryptText(String(dAfter.goal_enc)), '密文里的目标', '密文内容变了');
+    });
+    await check('★ 条件3：warn 日志**列出了受影响行 id**（且不含目标内容）', () => {
+      const w = warns.filter((x) => x.includes('不一致')).join('\n');
+      assert.ok(w, `没有 warn：${JSON.stringify(warns)}`);
+      assert.ok(w.includes(`task_pauses#${dId}`), `warn 里没有 task_pauses#${dId}：${w}`);
+      assert.ok(w.includes(`tasks#${d2Id}`), `warn 里没有 tasks#${d2Id}：${w}`);
+      assert.ok(!w.includes('明文写的另一个目标'), 'warn 里带了明文内容（日志不该出现目标原文）');
+      assert.ok(!w.includes(SENSITIVE[1]), 'warn 里带了敏感词');
+      log(`      warn 原文：${w}`);
+    });
+    await check('返回值里也带了 mismatchedIds（调用方/验收能定位，不用去抠日志）', () => {
+      assert.deepEqual(
+        r.mismatchedIds.slice().sort(),
+        [`task_pauses#${dId}`, `tasks#${d2Id}`].slice().sort(),
+        JSON.stringify(r.mismatchedIds),
+      );
+    });
+    const d2After = (await pool.query(`SELECT payload, goal_enc FROM tasks WHERE id=$1`, [d2Id])).rows[0] as {
+      payload: Record<string, unknown>;
+      goal_enc: string | null;
+    };
+    await check('残行 D2（明文含敏感词）也照留不误 —— 如实反映「交人判断」的代价，不假装干净', () => {
+      assert.equal(d2After.payload.goal, `不一致的明文目标，里面还有 ${SENSITIVE[1]}`, '明文被清掉了');
+      assert.equal(cipher.decryptText(String(d2After.goal_enc)), '密文里的另一个目标');
+      log('      ↑ 这行明文会一直留到人工处理为止；补偿控制是启动日志那条 warn（条件3 的取舍）');
+    });
+    await check('幂等：不一致的行每次启动都会被重新报一次（不会被「已处理」吃掉）', async () => {
+      warns = await captureWarns(async () => {
+        r = await migrateTaskGoalEncryption(pool, cipher);
+      });
+      assert.equal(r.mismatched, 2, `第二次 mismatched=${r.mismatched}`);
+      assert.equal(r.pauses, 0, `第二次 pauses=${r.pauses}`);
+      assert.equal(r.tasks, 0, `第二次 tasks=${r.tasks}`);
+      assert.ok(warns.some((x) => x.includes('不一致') && x.includes(`task_pauses#${dId}`)), '第二次没有再 warn');
     });
     await check('encrypted 只算了真需要新加密的那 1 条（残行 C）', () => {
-      assert.equal(r.encrypted, 1, `encrypted=${r.encrypted}`);
+      assert.equal(r.encrypted, 0, `第二次不该再加密任何行：encrypted=${r.encrypted}`);
     });
-    await check('四条残行整行里都搜不到敏感词了', async () => {
+    await check('能被自动清理的残行（A/B/C/D）整行里都搜不到敏感词了', async () => {
       const pats = SENSITIVE.map((x) => `%${x}%`);
       const n1 = (
         await pool.query(
@@ -474,6 +638,9 @@ async function main(): Promise<void> {
       assert.equal(n1.n, 0);
       assert.equal(n2.n, 0);
     });
+    // 收尾：把故意留着的不一致行清掉，别影响后面的兜底扫（它验的是「正常路径零明文」）
+    await pool.query(`DELETE FROM task_pauses WHERE id=$1`, [dId]);
+    await pool.query(`DELETE FROM tasks WHERE id=$1`, [d2Id]);
   }
 
   // ------------------------------------------------------- ⑦ fail-closed
@@ -503,6 +670,114 @@ async function main(): Promise<void> {
     });
     // 收尾：把这条明文行清掉，免得影响别的断言（本脚本用的是内存库，仅保持整洁）
     await pool.query(`DELETE FROM task_pauses WHERE id=$1`, [legacyId]);
+  }
+
+  // ----------------------------------- ⑧ ★ 条件2 自动化 M9：路由层拿不到 cipher 就一行都不落
+  log('');
+  log('--- ⑧ ★ 条件2/M9：路由层拿不到 cipher → 500 + tasks/task_pauses 一行都不落（常驻自动化） ---');
+  {
+    /**
+     * 手工反证 M9 靠临时把 index.ts 的 cipher 改成 null，跑完要还原、容易忘（而且改的是启动装配，
+     * 不是路由本体）。这里把同一件事做成**常驻断言**：再起一个 app，路由依赖里 cipher 就是 null。
+     * 打的是同一份生产路由代码（registerAgentRoutes / registerLoopRoutes），不是副本。
+     */
+    const nullApp = Fastify({ logger: false });
+    registerAgentRoutes(nullApp, { pool, env: ENV, cipher: null as unknown as JsonCipher });
+    registerLoopRoutes(nullApp, { pool, env: ENV, cipher: null as unknown as JsonCipher });
+    await nullApp.ready();
+
+    const counts = async () => {
+      const a = (await pool.query(`SELECT count(*)::int AS n FROM tasks`)).rows[0] as { n: number };
+      const b = (await pool.query(`SELECT count(*)::int AS n FROM task_pauses`)).rows[0] as { n: number };
+      return { tasks: a.n, pauses: b.n };
+    };
+    const before = await counts();
+    log(`      打之前：tasks=${before.tasks} task_pauses=${before.pauses}`);
+
+    const NOKEY_GOAL = `没钥匙也必须拦下的目标 ${SENSITIVE[0]}`;
+
+    // ---- (a) POST /agent/task/start ----
+    const r1 = await nullApp.inject({
+      method: 'POST',
+      url: '/agent/task/start',
+      headers: auth,
+      payload: { goal: NOKEY_GOAL },
+    });
+    log(`      task/start → ${r1.statusCode} ${r1.body.slice(0, 160)}`);
+    await check('★ M9-1 task/start：拿不到 cipher → **500**（不是 200 悄悄写明文）', () => {
+      assert.equal(r1.statusCode, 500, `${r1.statusCode} ${r1.body}`);
+      assert.ok(r1.body.includes('goal_encrypt_failed'), `错误码不是 goal_encrypt_failed：${r1.body}`);
+    });
+
+    // ---- (b) POST /agent/loop/pause ----
+    // 循环本身用**有钥匙的 app** 建（loop/start 不落 goal 密文，建得起来），
+    // 再用没钥匙的 app 打 pause —— 精确模拟「热路径拿不到 cipher」那一个瞬间。
+    const s2 = await app.inject({
+      method: 'POST',
+      url: '/agent/loop/start',
+      headers: auth,
+      payload: { agentId: 101, goal: NOKEY_GOAL, pageUrl: 'https://bank.example/', wcId: 902 },
+    });
+    assert.equal(s2.statusCode, 200, `建循环失败：${s2.statusCode} ${s2.body}`);
+    const loopId2 = String((s2.json() as { loopId: string }).loopId);
+    const stBefore = (await app.inject({ method: 'GET', url: `/agent/loop/info?loopId=${loopId2}`, headers: auth })).json() as {
+      status: string;
+      step: number;
+    };
+    const r2 = await nullApp.inject({
+      method: 'POST',
+      url: '/agent/loop/pause',
+      headers: auth,
+      payload: { loopId: loopId2, pausedBy: 'user', result: { ok: true, callId: 'c1', text: '回执' } },
+    });
+    log(`      loop/pause → ${r2.statusCode} ${r2.body.slice(0, 160)}`);
+    await check('★ M9-2 loop/pause：拿不到 cipher → **500**（收尾6 条件2：不许「行照写、goal_enc 置空」）', () => {
+      assert.equal(r2.statusCode, 500, `${r2.statusCode} ${r2.body}`);
+      assert.ok(r2.body.includes('goal_encrypt_failed'), `错误码不是 goal_encrypt_failed：${r2.body}`);
+    });
+
+    const after = await counts();
+    log(`      打之后：tasks=${after.tasks} task_pauses=${after.pauses}`);
+    await check('★ M9-3 两张表**一行都没多**（对齐收尾1「库里一行都不落」）', () => {
+      assert.equal(after.tasks, before.tasks + 0, `tasks 从 ${before.tasks} 变成 ${after.tasks}（落了行）`);
+      assert.equal(after.pauses, before.pauses + 0, `task_pauses 从 ${before.pauses} 变成 ${after.pauses}（落了行）`);
+    });
+
+    const stAfter = (await app.inject({ method: 'GET', url: `/agent/loop/info?loopId=${loopId2}`, headers: auth })).json() as {
+      status: string;
+      step: number;
+    };
+    await check('★ M9-4 内存会话状态也没被改（不许留「内存挂着、库里没台账」的半成品）', () => {
+      assert.equal(stAfter.status, stBefore.status, `状态从 ${stBefore.status} 变成 ${stAfter.status}`);
+      assert.notEqual(stAfter.status, 'paused', '没落库却把循环标成 paused 了（账实不一致）');
+    });
+
+    await check('★ M9-5 那个目标串在整个库里搜不到（明文没有从任何侧门落进去）', async () => {
+      const pats = [`%${NOKEY_GOAL}%`, `%${SENSITIVE[0]}%`];
+      const n1 = (
+        await pool.query(`SELECT count(*)::int AS n FROM tasks t WHERE row_to_json(t)::text LIKE ANY($1)`, [pats])
+      ).rows[0] as { n: number };
+      const n2 = (
+        await pool.query(`SELECT count(*)::int AS n FROM task_pauses t WHERE row_to_json(t)::text LIKE ANY($1)`, [pats])
+      ).rows[0] as { n: number };
+      log(`      全库扫 → tasks=${n1.n} task_pauses=${n2.n}`);
+      assert.equal(n1.n, 0);
+      assert.equal(n2.n, 0);
+    });
+
+    // ---- (c) 对照组：同一时刻用**有钥匙**的 app 打同一个 pause → 200 且落密文 ----
+    const r3 = await app.inject({ method: 'POST', url: '/agent/loop/pause', headers: auth, payload: { loopId: loopId2 } });
+    await check('对照组：有钥匙的 app 打同一个 pause → 200 并落密文（证明上面的 500 是「没钥匙」导致，不是路由坏了）', async () => {
+      assert.equal(r3.statusCode, 200, `${r3.statusCode} ${r3.body}`);
+      const row = await pauseRow(loopId2);
+      assert.equal(row.goal, null);
+      assert.ok(String(row.goal_enc).startsWith('gcm$'), String(row.goal_enc));
+      assert.equal(cipher.decryptText(String(row.goal_enc)), NOKEY_GOAL);
+      const after2 = await counts();
+      assert.equal(after2.pauses, before.pauses + 1, `task_pauses=${after2.pauses}`);
+    });
+
+    await nullApp.close();
   }
 
   await app.close();

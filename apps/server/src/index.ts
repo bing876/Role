@@ -259,6 +259,17 @@ async function migrateTaskEncryptionWithRetry(pool: Pool, cipher: JsonCipher): P
             (i > 1 ? `；在第 ${i} 次尝试成功` : ''),
         );
       }
+      /**
+       * ★ 收尾 6 条件3：密文与明文不一致的行**两份都留着**，必须吵出来让人判断。
+       *   只报数量与 id（migrateTaskGoalEncryption 自己那条 warn 里有完整 id 列表），
+       *   绝不报内容 —— 内容正是我们要防的敏感目标。
+       */
+      if (r.mismatched > 0) {
+        console.warn(
+          `[server] goal 回填有 ${r.mismatched} 行「密文与明文不一致」，已保留两份、未自动清理；` +
+            `请按上面 [db] 那条 warn 里的行 id 人工核对（收尾6 条件3：机器不替人做不可逆的取舍）`,
+        );
+      }
       return;
     } catch (err) {
       const msg = (err as Error).message;

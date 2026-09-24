@@ -823,43 +823,59 @@ async function migrateMemoriesMerge(pool: Pool): Promise<void> {
 }
 
 /** 收尾 6 回填结果（给启动日志与验收脚本用；数字都是「这次真改了几行」） */
+/** 收尾 6 回填结果（给启动日志与验收脚本用；数字都是「这次真改了几行」） */
 export interface TaskGoalMigrationResult {
   /** 没拿到 cipher → 一行没动，下次启动再试（fail-closed，不是「悄悄跳过当成功」） */
   skipped: boolean;
-  /** task_pauses 里这次清掉明文的行数 */
+  /** task_pauses 里这次**真改了**的行数（加密或清明文） */
   pauses: number;
-  /** tasks 里这次清掉明文的行数 */
+  /** tasks 里这次**真改了**的行数（加密或清明文） */
   tasks: number;
-  /** 其中「本来没有可用密文、这次真加密出来」的行数（其余是密文已在、只清明文） */
+  /** 其中「明文有值、密文缺失或解不开」→ 这次真加密出来的行数 */
   encrypted: number;
-  /** 密文解出来与明文**不一致**的行数（保留密文、清明文，只报数不报内容） */
+  /**
+   * 密文解出来与明文**不一致**的行数。
+   * ★ 收尾 6 条件3（2026-09-24 用户拍板）：这种行**两份都留**，一行不动，
+   *   只在启动日志里 warn 出 id 交人判断 —— 自动清明文会丢掉「唯一一份能读的内容」，
+   *   自动覆盖密文会丢掉「另一份可能是更新的内容」，机器没有资格替人选。
+   */
   mismatched: number;
+  /** 不一致行的定位符（`tasks#12` / `task_pauses#7`），最多 {@link MISMATCH_IDS_MAX} 条；只含 id 不含内容 */
+  mismatchedIds: string[];
   /** 单行失败的行数（该行明文**原样留着**，下次启动再试；不是丢了） */
   failed: number;
 }
 
+/** 不一致行 id 的日志/返回上限（几百行以上时只列前 N 条 + 总数，别把日志刷爆） */
+export const MISMATCH_IDS_MAX = 50;
+
 /**
  * 收尾 6 | 把历史明文 goal 清成密文 —— **幂等**，每次启动都可以跑。
  *
- * 两张表两种形状，口径一致：密文进 `goal_enc`，明文列/明文键就地清掉。
- *   · `task_pauses.goal`（TEXT）      → `goal_enc`，并把 `goal` 置 NULL；
- *   · `tasks.payload->>'goal'`（JSONB）→ `goal_enc`，payload 里**删掉 goal 键**；
- *     顺带把 `tasks.title` 也置 NULL —— title 存的是 `goal.slice(0,80)`，
- *     是同一个明文目标的第二份副本。不清它的话，「加密了 goal」对绝大多数
- *     （不到 80 字的）目标来说等于没加密。title 在服务端只被当作 goal 的
- *     兜底读，没有任何界面直接展示它，所以置 NULL 不影响用户能看到的东西。
+ * 两张表两种形状：`task_pauses.goal`（TEXT）与 `tasks.payload->>'goal'` / `tasks.title`（JSONB + TEXT）。
+ *
+ * ★ 三种行、三种处置（**逐行判定，别记成一句「回填」**）：
+ *
+ *   1. **明文有值、密文缺失或解不开** → 自动加密：明文进 `goal_enc`，明文位置清掉。
+ *      这是唯一允许「自动写密文」的情况（`encrypted` 计这个数）。
+ *      `tasks` 取明文时 `payload.goal` **优先于** `title` —— title 是 `goal.slice(0,80)` 的截断值，
+ *      拿它加密会把完整目标砍成 80 字。
+ *
+ *   2. **密文可解、且与明文一致** → 明文只是冗余副本，清掉它（不丢任何内容）。
+ *      `tasks.title` 的「一致」按**前缀**判：`have.startsWith(title)` —— 因为 title 生来就是截断的。
+ *      title 不是密文的前缀时（人工设过的标题等）**不动它**：拿不准的东西不自动删。
+ *
+ *   3. **密文可解、但与明文不一致** → ★ 条件3：**整行不动，两份都留**，
+ *      计入 `mismatched` 并在启动日志 warn 出行 id，交人判断。
+ *      为什么不自动清：明文那份可能是唯一还能读的内容（密文可能是旧 DATA_KEY 封的、内容已过时），
+ *      密文那份可能是更完整的原文（明文是截断/脱敏过的）。机器没有资格替人选，
+ *      选错任何一边都是**不可逆的数据丢失**。宁可留着 + 吵一句，让人来看。
  *
  * ★ 扫描条件是「**明文还在不在**」，不是「goal_enc 有没有值」—— 这条是真库验收抓出来的：
  *   第一版写的是 `WHERE goal_enc IS NULL AND ...`，看着幂等又省事，但库里真实存在
- *   第三种形状：**goal_enc 已经有值、明文列也还有值**（灰度/回滚期间新旧代码各写一半、
- *   或人工改过库）。那种行永远满足不了 `goal_enc IS NULL`，于是明文**永远清不掉**，
- *   而验收脚本如果只造「纯老行」，还照样全绿。反证记录见
- *   docs/acceptance/收尾6-goal加密-验收报告.md（残行取证那一段）。
- *
- * ★ 两边都有值时以谁为准：**保留已有密文**，只清明文。
- *   因为明文那份可能是 `title` —— 它是 `goal.slice(0,80)` 的**截断值**，
- *   拿它覆盖密文等于把完整目标砍成 80 字。只有密文缺失或解不开（DATA_KEY 换过）
- *   才用明文重新加密；两者内容不一致时如实计入 `mismatched`（日志里只报数、不报内容）。
+ *   「goal_enc 已有值、明文列也还有值」的残行（灰度/回滚期间新旧代码各写一半、人工改过库）。
+ *   那种行永远满足不了 `goal_enc IS NULL` → 明文**永远清不掉**，而只造「纯老行」的验收照样全绿。
+ *   反证 M8 记录见 docs/acceptance/收尾6-goal加密-验收报告.md。
  *
  * ★ fail-closed（照抄 loop_checkpoints 的口径）：
  *   · **拿不到 cipher → 一行都不动**，打 warn 返回 `skipped:true`，下次启动再试。
@@ -874,7 +890,15 @@ export async function migrateTaskGoalEncryption(
   pool: Pool,
   cipher?: JsonCipher | null,
 ): Promise<TaskGoalMigrationResult> {
-  const empty = { skipped: true, pauses: 0, tasks: 0, encrypted: 0, mismatched: 0, failed: 0 };
+  const empty: TaskGoalMigrationResult = {
+    skipped: true,
+    pauses: 0,
+    tasks: 0,
+    encrypted: 0,
+    mismatched: 0,
+    mismatchedIds: [],
+    failed: 0,
+  };
   if (!cipher) {
     console.warn(
       '[db] 收尾6 goal 密文回填**跳过**：没拿到 cipher（DATA_KEY）——' +
@@ -888,6 +912,7 @@ export async function migrateTaskGoalEncryption(
   let encrypted = 0;
   let mismatched = 0;
   let failed = 0;
+  const mismatchedIds: string[] = [];
   const structural: string[] = [];
 
   /** 已有密文解不解得开：解得开就返回明文（可比对），解不开/没有就返回 null（需要重加密） */
@@ -900,6 +925,10 @@ export async function migrateTaskGoalEncryption(
       return null;
     }
   };
+  const flagMismatch = (where: string): void => {
+    mismatched += 1;
+    if (mismatchedIds.length < MISMATCH_IDS_MAX) mismatchedIds.push(where);
+  };
 
   // ---- task_pauses：明文列还在的行（不管 goal_enc 有没有值）-------------------------
   try {
@@ -909,20 +938,24 @@ export async function migrateTaskGoalEncryption(
     for (const row of r.rows) {
       try {
         const have = readable(row.goal_enc);
-        let enc = row.goal_enc;
         if (have === null) {
-          enc = cipher.encryptText(row.goal);
+          // 情形 1：明文有值、密文缺失或解不开 → 自动加密
+          const enc = cipher.encryptText(row.goal);
+          // `AND goal IS NOT NULL` 是并发兜底：两个进程同时回填也不会互相覆盖
+          await pool.query(`UPDATE task_pauses SET goal_enc = $2, goal = NULL WHERE id = $1 AND goal IS NOT NULL`, [
+            row.id,
+            enc,
+          ]);
+          pauses += 1;
           encrypted += 1;
-        } else if (have !== row.goal) {
-          // 密文能解但与明文不一致：保留密文（它是完整值），只清明文，如实报数
-          mismatched += 1;
+        } else if (have === row.goal) {
+          // 情形 2：密文与明文一致 → 明文是冗余副本，清掉
+          await pool.query(`UPDATE task_pauses SET goal = NULL WHERE id = $1 AND goal IS NOT NULL`, [row.id]);
+          pauses += 1;
+        } else {
+          // 情形 3：不一致 → 两份都留，交人判断
+          flagMismatch(`task_pauses#${row.id}`);
         }
-        // `AND goal IS NOT NULL` 是并发兜底：两个进程同时回填也不会互相覆盖
-        await pool.query(`UPDATE task_pauses SET goal_enc = $2, goal = NULL WHERE id = $1 AND goal IS NOT NULL`, [
-          row.id,
-          enc,
-        ]);
-        pauses += 1;
       } catch (err) {
         failed += 1;
         console.warn(`[db] task_pauses#${row.id} goal 加密失败（该行保留原样，下次再试）：`, (err as Error).message);
@@ -942,23 +975,42 @@ export async function migrateTaskGoalEncryption(
     for (const row of r.rows) {
       try {
         const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as Record<string, unknown>;
-        // payload.goal 是**全长**明文；title 只有前 80 字（截断值），只能当重加密的兜底
+        // payload.goal 是**全长**明文；title 只有前 80 字（截断值）
         const plainFull = typeof payload.goal === 'string' ? payload.goal : null;
-        const plainAny = plainFull ?? (row.title ?? '');
+        const title = row.title ?? null;
         const have = readable(row.goal_enc);
-        let enc = row.goal_enc;
+
         if (have === null) {
-          enc = cipher.encryptText(plainAny);
+          // 情形 1：自动加密（payload.goal 优先，title 是截断值只能当兜底）
+          const enc = cipher.encryptText(plainFull ?? title ?? '');
+          const rest: Record<string, unknown> = { ...payload };
+          delete rest.goal;
+          await pool.query(
+            `UPDATE tasks SET goal_enc = $2, payload = $3::jsonb, title = NULL
+              WHERE id = $1 AND ((payload->>'goal') IS NOT NULL OR title IS NOT NULL)`,
+            [row.id, enc, JSON.stringify(rest)],
+          );
+          tasks += 1;
           encrypted += 1;
-        } else if (plainFull !== null && have !== plainFull) {
-          mismatched += 1;
+          continue;
         }
+
+        if (plainFull !== null && have !== plainFull) {
+          // 情形 3：密文与明文不一致 → **整行不动**，两份都留
+          flagMismatch(`tasks#${row.id}`);
+          continue;
+        }
+
+        // 情形 2：一致（或 payload 里根本没有 goal）→ 清掉明文副本
+        // title 只在「是密文的前缀」时才认定为当年抄的那份原文；其它情况不动
+        const titleIsRawCopy = title !== null && have.startsWith(title);
+        if (plainFull === null && !titleIsRawCopy) continue; // 无事可做（例如新式脱敏标题）
         const rest: Record<string, unknown> = { ...payload };
         delete rest.goal;
         await pool.query(
-          `UPDATE tasks SET goal_enc = $2, payload = $3::jsonb, title = NULL
+          `UPDATE tasks SET payload = $2::jsonb, title = $3
             WHERE id = $1 AND ((payload->>'goal') IS NOT NULL OR title IS NOT NULL)`,
-          [row.id, enc, JSON.stringify(rest)],
+          [row.id, JSON.stringify(rest), titleIsRawCopy ? null : title],
         );
         tasks += 1;
       } catch (err) {
@@ -973,14 +1025,22 @@ export async function migrateTaskGoalEncryption(
   if (pauses || tasks || failed) {
     console.log(
       `[db] 收尾6 goal 密文回填：task_pauses ${pauses} 条、tasks ${tasks} 条` +
-        `（新加密 ${encrypted} 条、密文与明文不一致 ${mismatched} 条、失败 ${failed} 条留待下次）`,
+        `（新加密 ${encrypted} 条、失败 ${failed} 条留待下次）`,
+    );
+  }
+  if (mismatched > 0) {
+    // ★ 条件3：只报 id、绝不报内容（内容就是我们要防的敏感目标）
+    console.warn(
+      `[db] 收尾6 ★ 密文与明文**不一致** ${mismatched} 行：两份都留着、一行没动，请人工判断 —— ` +
+        mismatchedIds.join('、') +
+        (mismatched > mismatchedIds.length ? ` …（共 ${mismatched} 行，只列前 ${mismatchedIds.length}）` : ''),
     );
   }
   if (structural.length > 0) {
     // 抛给调用方重试：多半是「表还没建 / 库还在崩溃恢复」，不是数据问题
     throw new Error(`goal 密文回填未完成（可重试）：${structural.join('；')}`);
   }
-  return { skipped: false, pauses, tasks, encrypted, mismatched, failed };
+  return { skipped: false, pauses, tasks, encrypted, mismatched, mismatchedIds, failed };
 }
 
 export async function migrate(pool: Pool): Promise<void> {

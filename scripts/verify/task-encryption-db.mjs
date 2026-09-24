@@ -264,6 +264,29 @@ try {
   check(cur.task && Number(cur.task.id) === taskId, `GET /agent/task/current 回到任务 #${cur.task?.id}`);
   check(cur.task?.goal === GOAL, 'GET /agent/task/current 的 goal 是解密后的原文（桌面刷新后还原任务卡靠它）');
 
+  /**
+   * ★ 收尾 6 条件1（2026-09-24 用户要求）：`tasks.title` 停用之后，「界面到底显示什么」必须被验收盯住。
+   *   查清的事实：服务端**没有**任何任务列表接口（grep 全仓只有 `/agent/task/current` 一个读单条的口子），
+   *   桌面 apps/desktop/src/App.tsx 那行渲染读的是 curTask.goal：
+   *       {curTask.goal ? ' · 目标：' + curTask.goal : ''}
+   *   tasks.title 从来没有被返回给任何客户端 → 停用它**不会**让界面出现空白标题，
+   *   所以用户给的条件（「如果列表标题会空白才改存脱敏摘要」）不触发，title 保持 NULL。
+   *   但「显示字段非空 + 不含敏感词」仍然要有断言，所以服务端多回一个 displayTitle：
+   *   同一句 goal 过 scrubTaskText 脱敏、截 80 字，专门给「要落日志/截图/列表」的场景用。
+   */
+  const dt = cur.task?.displayTitle;
+  console.log(
+    '--- GET /agent/task/current 的显示字段 ---\n' +
+      JSON.stringify({ id: cur.task?.id, title: cur.task?.title, displayTitle: dt, goal: cur.task?.goal }) + '\n',
+  );
+  check(typeof dt === 'string' && dt.trim().length > 0, '★ 条件1：显示字段 displayTitle 非空（实际 ' + JSON.stringify(dt) + '）');
+  check(dt.length <= 80, '★ 条件1：显示字段不超 80 字（实际 ' + dt.length + ' 字，跟当年 title 一个量级，不撑破界面）');
+  for (const sen of SENSITIVE) check(!dt.includes(sen), '★ 条件1：显示字段里读不到「' + sen + '」');
+  check(dt.includes('[已脱敏'), '★ 条件1：显示字段留了脱敏占位（看得出被改过，不是悄悄截断）：' + dt);
+  check(GOAL.startsWith(dt.slice(0, 6)), '★ 条件1：显示字段确实是那句目标的脱敏版（不是随便填的占位文字）');
+  check(cur.task?.title === null || cur.task?.title === undefined, '★ 条件1：title 没有偷偷存一份脱敏摘要（实际 ' + JSON.stringify(cur.task?.title) + '）');
+  check(cur.task?.goal === GOAL, '★ 条件1：功能字段 goal 仍是还原后的原文（脱敏只作用于显示副本，没把功能吃掉）');
+
   const afterFinish = (
     await q(`SELECT title, payload, result_enc, row_to_json(t)::text AS whole FROM tasks t WHERE id = $1`, [taskId])
   ).rows[0];
@@ -314,9 +337,34 @@ try {
   const residueTaskId = Number(residueTask.rows[0].id);
   const residuePauseEncBefore = (await q(`SELECT goal_enc FROM task_pauses WHERE id=$1`, [residuePauseId])).rows[0].goal_enc;
   const residueTaskEncBefore = (await q(`SELECT goal_enc FROM tasks WHERE id=$1`, [residueTaskId])).rows[0].goal_enc;
+  /**
+   * ★ 收尾 6 条件3（2026-09-24 用户拍板）：**密文与明文不一致**的行不许自动清明文。
+   *   这里造两条「人工改过库」形状的行：goal_enc 能解、但解出来跟明文不是一句话。
+   *   期望：重启（回填真跑）之后**两份都还在、一个字节没动**，且启动日志 warn 出这两行的 id。
+   *   明文里故意带敏感词 —— 如实反映这个取舍的代价：人工处理掉之前它确实会躺在库里，
+   *   补偿控制是那条 warn（所以第 ⑤ 段的兜底扫按 id 排除这两行，并断言排除数正好是 2）。
+   */
+  const MISMATCH_PAUSE_GOAL = `不一致的明文暂停目标，里面还有 ${SENSITIVE[1]}`;
+  const MISMATCH_TASK_GOAL = `不一致的明文任务目标，里面还有 ${SENSITIVE[0]}`;
+  const mismatchPause = await q(
+    `INSERT INTO task_pauses (user_id, loop_id, goal, goal_enc, paused_by, resumed_at)
+     VALUES ($1,'mismatch-loop-verify6',$2,$3,'user',now()) RETURNING id`,
+    [userId, MISMATCH_PAUSE_GOAL, sealGcm('密文里是完全不同的另一句话', DATA_KEY)],
+  );
+  const mismatchPauseId = Number(mismatchPause.rows[0].id);
+  const mismatchTask = await q(
+    `INSERT INTO tasks (project_id, status, title, payload, goal_enc)
+     VALUES ($1,'done',NULL,$2::jsonb,$3) RETURNING id`,
+    [projectId, JSON.stringify({ goal: MISMATCH_TASK_GOAL, steps: ['不一致行的步骤'] }), sealGcm('密文里的另一句目标', DATA_KEY)],
+  );
+  const mismatchTaskId = Number(mismatchTask.rows[0].id);
+  const mismatchPauseEncBefore = (await q(`SELECT goal_enc FROM task_pauses WHERE id=$1`, [mismatchPauseId])).rows[0].goal_enc;
+  const mismatchTaskEncBefore = (await q(`SELECT goal_enc FROM tasks WHERE id=$1`, [mismatchTaskId])).rows[0].goal_enc;
+
   console.log(
     `      造历史明文行：task_pauses#${legacyPauseId}、tasks#${legacyTaskId}；` +
-      `造残行：task_pauses#${residuePauseId}、tasks#${residueTaskId}（密文与明文同时有值）`,
+      `造残行：task_pauses#${residuePauseId}、tasks#${residueTaskId}（密文与明文同时有值）；` +
+      `造不一致行：task_pauses#${mismatchPauseId}、tasks#${mismatchTaskId}（密文能解但与明文不同）`,
   );
   const beforeRestart = (await q(`SELECT goal, goal_enc FROM task_pauses WHERE id=$1`, [legacyPauseId])).rows[0];
   check(
@@ -417,31 +465,83 @@ try {
     '残行 payload 其余内容原样、且没有 goal 键',
   );
 
+  /**
+   * ★ 条件3 的正题：**跨真重启**之后，不一致行的两份内容都还在，且日志 warn 出了行 id。
+   *   必须放在重启之后 —— 回填是启动时跑的，只有在真启动里没被清掉才算数。
+   */
+  const mmPauseAfter = (
+    await q(`SELECT goal, goal_enc, row_to_json(t)::text AS whole FROM task_pauses t WHERE id=$1`, [mismatchPauseId])
+  ).rows[0];
+  const mmTaskAfter = (
+    await q(`SELECT title, payload, goal_enc, row_to_json(t)::text AS whole FROM tasks t WHERE id=$1`, [mismatchTaskId])
+  ).rows[0];
+  console.log(
+    `--- SELECT goal, goal_enc FROM task_pauses WHERE id = ${mismatchPauseId}（不一致行）---\n` +
+      JSON.stringify({ goal: mmPauseAfter.goal, goal_enc: String(mmPauseAfter.goal_enc).slice(0, 32) + '…' }) + '\n',
+  );
+  console.log(
+    `--- SELECT title, payload, goal_enc FROM tasks WHERE id = ${mismatchTaskId}（不一致行）---\n` +
+      JSON.stringify({ title: mmTaskAfter.title, payload: mmTaskAfter.payload, goal_enc: String(mmTaskAfter.goal_enc).slice(0, 32) + '…' }) + '\n',
+  );
+  check(mmPauseAfter.goal === MISMATCH_PAUSE_GOAL, '★ 条件3：不一致的 task_pauses 行**明文还在**（没被自动清掉）');
+  check(mmPauseAfter.goal_enc === mismatchPauseEncBefore, '★ 条件3：不一致的 task_pauses 行**密文逐字节没变**（没被明文覆盖）');
+  check(openGcm(mmPauseAfter.goal_enc, DATA_KEY) === '密文里是完全不同的另一句话', '★ 条件3：那份密文仍能解出它自己的内容（两份都可读，人才有的判）');
+  check(mmTaskAfter.payload?.goal === MISMATCH_TASK_GOAL, '★ 条件3：不一致的 tasks 行 payload.goal **还在**');
+  check(mmTaskAfter.goal_enc === mismatchTaskEncBefore, '★ 条件3：不一致的 tasks 行密文逐字节没变');
+  check(
+    JSON.stringify(mmTaskAfter.payload?.steps) === JSON.stringify(['不一致行的步骤']),
+    '★ 条件3：不一致行的 payload 其余内容也没被动过（整行原样，不是只留一半）',
+  );
+  const mismatchWarn = srv
+    .getLog()
+    .split('\n')
+    .filter((l) => l.includes('不一致'))
+    .join('\n');
+  console.log(`--- 重启后的服务端日志（不一致行 warn 原文）---\n${mismatchWarn}\n`);
+  check(mismatchWarn.length > 0, '★ 条件3：启动日志**打了 warn**（不是只在返回值里记个数）');
+  check(mismatchWarn.includes(`task_pauses#${mismatchPauseId}`), `★ 条件3：warn 里列出了受影响行 id task_pauses#${mismatchPauseId}`);
+  check(mismatchWarn.includes(`tasks#${mismatchTaskId}`), `★ 条件3：warn 里列出了受影响行 id tasks#${mismatchTaskId}`);
+  check(mismatchWarn.includes('人工'), '★ 条件3：warn 说清了「交人判断」，不是含糊的一句「有异常」');
+  check(
+    !mismatchWarn.includes(MISMATCH_PAUSE_GOAL) && !mismatchWarn.includes(MISMATCH_TASK_GOAL),
+    '★ 条件3：warn 里**不含目标内容**（只报 id，日志不该变成第二个明文出口）',
+  );
+  for (const sen of SENSITIVE) check(!mismatchWarn.includes(sen), `★ 条件3：warn 里读不到敏感词「${sen}」`);
+  const srvWarnLine = srv.getLog().split('\n').find((l) => l.includes('[server] goal 回填有'));
+  check(!!srvWarnLine && srvWarnLine.includes('2 行'), `★ 条件3：index.ts 那层也如实报了不一致行数（实际：${srvWarnLine ?? '（没有）'}）`);
+
   // ------------------------------------------------- ⑤ 全表兜底扫（按本次用户收口）
   console.log('\n--- ⑤ 兜底扫：本次用户名下两张表不许有任何明文目标 ---');
   const pats = SENSITIVE.map((s) => `%${s}%`);
+  /**
+   * 排除口径说清楚：mismatchPauseId / mismatchTaskId 是条件3**故意留着**的不一致行
+   * （两份都在、等人判断），它们的明文按设计就还在库里。兜底扫要验的是「正常路径零明文」，
+   * 所以按 id 排掉这两行，并且**断言排除数正好是 2** —— 免得将来「排除名单」悄悄变长。
+   */
+  const EXCLUDED_PAUSE = mismatchPauseId;
+  const EXCLUDED_TASK = mismatchTaskId;
   const leakTasks = (
     await q(
       `SELECT count(*)::int AS n FROM tasks t JOIN projects p ON p.id = t.project_id
-        WHERE p.user_id = $1 AND row_to_json(t)::text LIKE ANY($2)`,
-      [userId, pats],
+        WHERE p.user_id = $1 AND t.id <> $3 AND row_to_json(t)::text LIKE ANY($2)`,
+      [userId, pats, EXCLUDED_TASK],
     )
   ).rows[0].n;
   const leakPauses = (
     await q(
-      `SELECT count(*)::int AS n FROM task_pauses t WHERE t.user_id = $1 AND row_to_json(t)::text LIKE ANY($2)`,
-      [userId, pats],
+      `SELECT count(*)::int AS n FROM task_pauses t WHERE t.user_id = $1 AND t.id <> $3 AND row_to_json(t)::text LIKE ANY($2)`,
+      [userId, pats, EXCLUDED_PAUSE],
     )
   ).rows[0].n;
   const plainTasks = (
     await q(
       `SELECT count(*)::int AS n FROM tasks t JOIN projects p ON p.id = t.project_id
-        WHERE p.user_id = $1 AND ((t.payload->>'goal') IS NOT NULL OR t.title IS NOT NULL)`,
-      [userId],
+        WHERE p.user_id = $1 AND t.id <> $2 AND ((t.payload->>'goal') IS NOT NULL OR t.title IS NOT NULL)`,
+      [userId, EXCLUDED_TASK],
     )
   ).rows[0].n;
   const plainPauses = (
-    await q(`SELECT count(*)::int AS n FROM task_pauses WHERE user_id = $1 AND goal IS NOT NULL`, [userId])
+    await q(`SELECT count(*)::int AS n FROM task_pauses WHERE user_id = $1 AND id <> $2 AND goal IS NOT NULL`, [userId, EXCLUDED_PAUSE])
   ).rows[0].n;
   console.log(
     `      row_to_json 含敏感词：tasks=${leakTasks} task_pauses=${leakPauses}；` +
@@ -451,6 +551,15 @@ try {
   check(leakPauses === 0, `task_pauses 里含敏感词的行数 = ${leakPauses}`);
   check(plainTasks === 0, `tasks 里明文位置（payload.goal / title）有值的行数 = ${plainTasks}`);
   check(plainPauses === 0, `task_pauses 里明文 goal 有值的行数 = ${plainPauses}`);
+  const excludedNow = (
+    await q(
+      `SELECT (SELECT count(*)::int FROM task_pauses WHERE id = $1 AND goal IS NOT NULL)
+            + (SELECT count(*)::int FROM tasks WHERE id = $2 AND (payload->>'goal') IS NOT NULL) AS n`,
+      [EXCLUDED_PAUSE, EXCLUDED_TASK],
+    )
+  ).rows[0].n;
+  console.log(`      兜底扫排除的「故意留着的不一致行」= ${excludedNow} 行（条件3 的取舍，上面已单独断言两份都在）`);
+  check(excludedNow === 2, `排除名单只该有那 2 行（实际 ${excludedNow}）—— 多了说明别的行也在留明文，得查`);
 
   // 幂等：回填已经跑过一次，重启第二次不该再改任何行（用日志里没有「回填完成」证明）
   console.log('\n--- ⑥ 幂等：再重启一次，不该重复回填 ---');
@@ -462,6 +571,12 @@ try {
   await new Promise((r) => setTimeout(r, 2500));
   const thirdLog = srv.getLog();
   check(!thirdLog.includes('goal 密文回填完成'), '第三次启动没有再报回填（0 行可改 = 幂等，不是又加密了一遍）');
+  check(
+    thirdLog.split('\n').some((l) => l.includes('不一致') && l.includes(`task_pauses#${mismatchPauseId}`)),
+    '★ 条件3：第三次启动**仍然**报这两行不一致（不会被「已处理过」吃掉 —— 人不来看它就一直吵）',
+  );
+  const mmStill = (await q(`SELECT goal FROM task_pauses WHERE id=$1`, [mismatchPauseId])).rows[0];
+  check(mmStill.goal === MISMATCH_PAUSE_GOAL, '★ 条件3：第三次启动后明文依旧原样（多次重启也不会被清）');
   const stillOk = (await q(`SELECT goal_enc FROM task_pauses WHERE id=$1`, [legacyPauseId])).rows[0];
   check(openGcm(stillOk.goal_enc, DATA_KEY) === LEGACY_PAUSE_GOAL, '多次重启后密文仍能解回原目标（没被二次加密）');
 } catch (err) {

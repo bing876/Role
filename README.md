@@ -38,9 +38,22 @@
 
 - **数据库里的内容列是密文**（AES-256-GCM，格式 `gcm$iv$tag$ct`，密钥 `DATA_KEY`）：消息、记忆、交接频道、技能各字段、白板、知识库分块、`loop_checkpoints.goal_enc / messages_enc`、**`tasks.goal_enc`、`task_pauses.goal_enc`**（收尾 6）、手机号等；`agent_delegations.task` 存的是脱敏文本。
   `loop_checkpoints` **fail-closed**：拿不到 cipher 就不写，绝不回退明文（`npm run verify:db` 用真库 + 变异测试验证过）。
-- **任务目标（goal）不留任何明文副本**（收尾 6）：`tasks` 只写 `goal_enc`，`payload` 里没有 `goal` 键、`title` 恒为 NULL（它当年存的是 `goal.slice(0,80)`，是同一份明文的第二个副本 —— 留着它，对不到 80 字的目标等于没加密）；`task_pauses` 同理，明文列 `goal` 恒写 NULL。
-  建任务时加密失败 → **直接 500，任务不建**（不退回明文）；暂停时加密失败 → 挂起台账照写、`goal_enc` 置空（少一个目标文本可以，写明文不行）。读取一律**解密优先、回退旧列**，所以没回填到的历史行也不会读成空白。
-  历史明文行由启动时的 `migrateTaskGoalEncryption` 幂等回填（`WHERE goal_enc IS NULL`，带重试）；拿不到 `DATA_KEY` 就跳过并打 warn，下次启动再试，绝不写明文兜底。
+- **任务目标（goal）不留任何明文副本**（收尾 6）：`tasks` 只写 `goal_enc`，`payload` 里没有 `goal` 键、`title` 恒为 NULL（它当年存的是 `goal.slice(0,80)`，是同一份明文的第二个副本 —— 留着它，对不到 80 字的目标等于没加密）；`task_pauses` 同理，明文列 `goal` 恒写 NULL。读取一律**解密优先、回退旧列**，所以没回填到的历史行也不会读成空白。
+  **两条热路径都是 fail-closed：加密失败 → 500，库里一行都不落**（对齐 `loop_checkpoints` 的口径）。
+  · `POST /agent/task/start` 加密失败 → 500 `goal_encrypt_failed`，任务不建；
+  · `POST /agent/loop/pause` 加密失败 → 500 `goal_encrypt_failed`，**先加密再动任何状态**：不认领回执、不把循环标成 paused、不写 `task_pauses`。
+  暂停这条路以前是「台账照写、`goal_enc` 置空」，收尾 6 条件2（2026-09-24）改成了现在这样：留一个「内存里挂着、库里没台账」的半成品比这次暂停失败更糟（用户重启后看不见这一路，服务端却以为它挂着）。代价是这种时候点「暂停」没反应、循环继续跑 —— 而 `DATA_KEY` 缺失时 `env.ts` 本来就拒绝启动服务，所以这是纵深防御的最后一道，不是日常分支。
+  反证：`npm run verify:db:mutate-nocipher`（真服务端 + 真 Postgres，把路由层的 cipher 注入临时改成 null，断言 500 + 两张表零新增 + 明文全库搜不到；跑完逐字节还原 index.ts）。pglite 那份常驻回归闸在 `verify:db:pglite` 第 ⑧ 段。
+  历史明文行由启动时的 `migrateTaskGoalEncryption` 幂等回填（带重试）；拿不到 `DATA_KEY` 就跳过并打 warn，下次启动再试，绝不写明文兜底。
+  **扫描条件是「明文还在不在」，不是「`goal_enc` 有没有值」** —— 库里真实存在「密文已有值、明文列也还有值」的残行（灰度/回滚期间新旧代码各写一半、人工改过库），只按 `goal_enc IS NULL` 扫的话这种行永远轮不到、明文永远清不掉。
+  **密文与明文不一致的行不自动清理**（条件3）：那种行两份都留着、一行不动，只在启动日志 warn 出行 id 交人判断。自动清明文会丢掉「唯一一份还能读的内容」，自动覆盖密文会丢掉「另一份可能更完整的内容」，机器没资格替人做不可逆的取舍。只有「明文有值、且密文缺失或解不开」才自动加密。
+  `tasks.title` 停用后界面显示什么：服务端没有任务列表接口，桌面读的是 `GET /agent/task/current` 的 `goal`（解密后的原文）；该接口另回一个 `displayTitle` —— 同一句话过 `scrubTaskText` 脱敏、截 80 字，给「要落日志/截图/列表」的场景用，验收断言它非空且不含敏感词。
+- **★ goal 加密防的是什么、不防什么（威胁模型，别高估它）**：这一层只防**数据库文件/备份被偷走**（`pgdata` 目录、`pg_dump` 出来的 SQL、云盘上的备份、被顺手拷走的容器卷）—— 那种情况下拿到文件的人没有 `DATA_KEY`，读不出目标原文。
+  它**不**防、也从来不是为了防下面这些，因为它们都在信任边界**之内**：
+  · **任务目标仍以明文发给模型**。服务端要拼提示词让模型知道该干什么，goal 原文必然出现在发往 `DEEPSEEK_BASE_URL` 的请求体里（传输靠 HTTPS，但对模型服务商是明文）。想要「模型也看不到」是另一个量级的工程（本地模型 / 端到端加密），不在收尾 6 范围。
+  · **任务目标仍以明文返回给桌面显示**。`/agent/task/current`、`/agent/task/doc`、`/agent/loop/pauses` 都由服务端解密后回明文 —— 用户得看得见自己在干什么，这是功能要求不是漏洞。桌面端内存里因此也持有明文 goal。
+  · **持有 `DATA_KEY` 的人（本机进程、运维、能读 `apps/server/.env` 的任何程序）**可以解开全部密文。钥匙与库同机时，「偷库」和「偷机器」是同一件事。
+  一句话：**goal 加密 = 静态数据（at-rest）保护，不是端到端加密。**
 - **例外：交接文件是明文落盘**。`apps/server/data/handoffs/<项目>/<委派>.md` 与 `board.md` 直接写任务原文，既不加密也不脱敏（目录已 gitignore，但在服务器磁盘上可读）。见「已知缺口」。
 - 手机号只存 `HMAC(PHONE_PEPPER, phone)` + 密文副本；`PHONE_PEPPER` 与 `DATA_KEY` 必须是两把不同的钥匙，缺任何一个服务拒绝启动。
 - 模型 key 只在 `apps/server/.env`（不入库）；桌面安装包**不含**服务端、数据库或任何 key。
