@@ -16,6 +16,7 @@
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { JSDOM } from 'jsdom';
+import { sameNode } from './lib/dom-assert.mts';
 
 const REPO = process.env.SMOKE_REPO ?? process.cwd();
 
@@ -598,8 +599,8 @@ await check('★ 切项目绝不碰浏览器：那一层与那一个 <webview> �
   assert.ok(layer, '切项目把浏览器层弄没了（第 20 步的规矩：所有页一直挂着）');
   assert.ok(wv, '切项目把 <webview> 卸载了（这条是硬规则）');
   // 节点身份：还是**切换前那个元素对象**（不是"又渲染出一个一样的"）
-  assert.ok(heldLayer === null || heldLayer === layer, '浏览器层不是原来那个节点（被重建了）');
-  assert.ok(heldWebview === null || heldWebview === wv, '<webview> 不是原来那个节点（被重建了）');
+  sameNode(layer, heldLayer, '浏览器层不是原来那个节点（被重建了）');
+  sameNode(wv, heldWebview, '<webview> 不是原来那个节点（被重建了）');
 });
 
 await check('新建项目 → POST /projects（body 带名字）→ 进入新项目（顺带钉住 F1：提示会被刷新清掉）', async () => {

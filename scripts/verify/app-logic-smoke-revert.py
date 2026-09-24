@@ -33,6 +33,7 @@ MUTATIONS = [
     {
         'file': KNOWLEDGE,
         'id': 'K1',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'load 里删掉「切号后晚到的响应不许覆盖列表」这条守卫',
         'anchor': "      // 切号期间晚到的 A 号响应不能覆盖 B 号列表。\n      if (sessionRef.current?.token !== sess.token) return;\n",
         'replace': "",
@@ -41,6 +42,7 @@ MUTATIONS = [
     {
         'file': KNOWLEDGE,
         'id': 'K2',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': '扩展名白名单放宽（把 .exe 也放进来）',
         'anchor': r"const supported = /\.(txt|md|pdf)$/i.test(file.name);",
         'replace': r"const supported = /\.(txt|md|pdf|exe)$/i.test(file.name);",
@@ -49,6 +51,7 @@ MUTATIONS = [
     {
         'file': KNOWLEDGE,
         'id': 'K3',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'remove 不再本地过滤（等服务端重拉 —— 借机验证"列表立刻少一条"不是空话）',
         'anchor': "      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));\n",
         'replace': "",
@@ -57,6 +60,7 @@ MUTATIONS = [
     {
         'file': KNOWLEDGE,
         'id': 'K4',
+        'visible': False,   # 红了之后用户能直接看见的输出变了？
         'name': "DELETE 不送 body（空 body 会被 Fastify 判 400）",
         'anchor': "        // 空 body 会被 fastify 判 400，这里明确送一个 JSON 空对象。\n        body: '{}',\n",
         'replace': "",
@@ -66,6 +70,7 @@ MUTATIONS = [
     {
         'file': MEMORY,
         'id': 'M1',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'loadProject 里删掉「切走后晚到的响应不许覆盖」这条守卫',
         'anchor': "      // 切走之后晚到的响应不能覆盖当前智能体的那份\n      if (curAgentRef.current !== agentId) return;\n",
         'replace': "",
@@ -74,6 +79,7 @@ MUTATIONS = [
     {
         'file': MEMORY,
         'id': 'M2',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'confirm 去掉本地过滤（等服务端重拉 —— 界面会闪一下）',
         'anchor': "      setPending((prev) => prev.filter((m) => m.id !== id));\n      void loadUser();",
         'replace': "      void loadUser();",
@@ -82,6 +88,7 @@ MUTATIONS = [
     {
         'file': MEMORY,
         'id': 'M3',
+        'visible': False,   # 红了之后用户能直接看见的输出变了？
         'name': 'forget 的 body 少送 id（服务端就不知道该忘哪条）',
         'anchor': "        body: JSON.stringify({ layer, id }),",
         'replace': "        body: JSON.stringify({ layer }),",
@@ -91,6 +98,7 @@ MUTATIONS = [
     {
         'file': GLUE,
         'id': 'G1',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'clearHelp 收不掉卡片（AI 求助解除后卡还在）',
         'anchor': "      if (!(agentId in prev)) return prev; // ★ 没有就别造新对象（引用稳定，少一次无谓渲染）\n      const next = { ...prev };\n      delete next[agentId];\n      return next;",
         'replace': "      return prev;",
@@ -99,6 +107,7 @@ MUTATIONS = [
     {
         'file': GLUE,
         'id': 'G2',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'answerLoopGone 点完不清卡（留一张点不动的卡）',
         'anchor': "    const cur = loopGone;\n    setLoopGone(null);",
         'replace': "    const cur = loopGone;",
@@ -107,6 +116,7 @@ MUTATIONS = [
     {
         'file': GLUE,
         'id': 'G3',
+        'visible': False,   # 红了之后用户能直接看见的输出变了？
         'name': '切智能体时不再恒调 exitEmbed（就是那条真机时序破口）',
         'anchor': "    browser.exitEmbed();\n    // browser 的方法是稳定引用",
         'replace': "    // browser 的方法是稳定引用",
@@ -115,6 +125,7 @@ MUTATIONS = [
     {
         'file': GLUE,
         'id': 'G4',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': '求助卡不按智能体分桶（挂到当前对话上）',
         'anchor': "    setHelpCards((prev) => ({ ...prev, [card.agentId]: card }));",
         'replace': "    setHelpCards((prev) => ({ ...prev, [curAgentId ?? 0]: card }));",
@@ -123,6 +134,7 @@ MUTATIONS = [
     {
         'file': GLUE,
         'id': 'G5',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'curHelp 跨对话泄漏（拿别人对话的卡来显示）',
         'anchor': "  const curHelp = curAgentId !== null ? helpCards[curAgentId] ?? null : null;",
         'replace': "  const curHelp = Object.values(helpCards)[0] ?? null;",
@@ -132,6 +144,7 @@ MUTATIONS = [
     {
         'file': PROJECTS,
         'id': 'P1',
+        'visible': False,   # 红了之后用户能直接看见的输出变了？
         'name': 'switchProject 跳过服务端 activate（界面先切、后端没落地）',
         'anchor': "      await authFetchJson<ProjectUpdateResult>(`/projects/${id}/activate`, {\n        method: 'POST',\n        body: '{}',\n        headers: { authorization: `Bearer ${sess.token}` },\n      });\n      if (sessionRef.current?.token !== sess.token) return;\n",
         'replace': "",
@@ -140,6 +153,7 @@ MUTATIONS = [
     {
         'file': PROJECTS,
         'id': 'P2',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？
         'name': 'loadProjects 不把列表写进界面 state（拉回来了但不显示）',
         'anchor': "      setProjects(r.projects);\n",
         'replace': "",
@@ -148,6 +162,7 @@ MUTATIONS = [
     {
         'file': PROJECTS,
         'id': 'P3',
+        'visible': False,   # 红了之后用户能直接看见的输出变了？
         'name': 'createProject 的 body 少送名字',
         'anchor': "        body: JSON.stringify({ name }),",
         'replace': "        body: JSON.stringify({}),",
