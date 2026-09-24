@@ -50,6 +50,10 @@ for (const k of ['HTMLElement', 'Element', 'Node', 'Event', 'MouseEvent', 'Custo
   const v = (dom.window as unknown as Record<string, unknown>)[k];
   if (v !== undefined) g[k] = typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(dom.window) : v;
 }
+/** jsdom 没有实现 scrollIntoView；HelpCard 量完窗口会滚一下，缺了它会抛 TypeError */
+if (!(dom.window.Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView) {
+  (dom.window.Element.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = () => {};
+}
 if (!g.ResizeObserver) {
   g.ResizeObserver = class { observe(): void {} unobserve(): void {} disconnect(): void {} };
 }
@@ -63,6 +67,21 @@ if (!(dom.window as unknown as { matchMedia?: unknown }).matchMedia) {
 // 桥桩（与冒烟网同一套：被直接 await 的方法必须给真值）
 // ---------------------------------------------------------------------------
 const handlers = new Map<string, (payload?: unknown) => void>();
+/** 主进程侧的调用轨迹（求助卡/确认卡点按钮后应该走既有通道） */
+const bridgeCalls: string[] = [];
+/** 送一个**桥事件**（非 agent 通道，例如主进程要求开页）：返回是否有人接住 */
+const emitBridge = (channel: string, payload?: unknown): number => {
+  const h = handlers.get(channel);
+  if (!h) return 0;
+  h(payload);
+  return 1;
+};
+/** 把一个主进程事件真的送进 App 的订阅回调（payload 是 JSON 字符串，与真桥一致） */
+const emitAgent = (p: Record<string, unknown>): void => {
+  const h = handlers.get('agent');
+  assert.ok(h, 'App 没有订阅 agent 事件');
+  h!(JSON.stringify(p));
+};
 const bridge = new Proxy(
   {
     isElectron: false,
@@ -86,6 +105,16 @@ const bridge = new Proxy(
     on: (channel: string, handler: (payload?: unknown) => void) => {
       handlers.set(channel, handler);
       return () => handlers.delete(channel);
+    },
+    /** 胶水那节要看「决定有没有送回主进程」——记录调用参数 */
+    loopGoneChoice: async (wcId: number, choice: string) => {
+      bridgeCalls.push(`loopGoneChoice(${wcId}, ${choice})`);
+    },
+    resumeTask: async (wcId: number) => {
+      bridgeCalls.push(`resumeTask(${wcId})`);
+    },
+    agentDrop: async (wcId: number) => {
+      bridgeCalls.push(`agentDrop(${wcId})`);
     },
   } as Record<string, unknown>,
   {
@@ -172,6 +201,7 @@ const React = (await import('react')).default;
 const App = (await import('../../apps/desktop/src/App')).default;
 const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge');
 const { useMemory } = await import('../../apps/desktop/src/features/memory');
+const { useBrowserGlue } = await import('../../apps/desktop/src/app/browserGlue');
 
 async function flush(rounds = 10): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
@@ -364,11 +394,142 @@ await act(async () => rootMem.unmount());
 log(`  （记忆这节发出 ${memRequestCount} 条请求）`);
 
 // ---------------------------------------------------------------------------
-// ② 直接挂真实 hook：会话切换期间「晚到的旧响应不许覆盖新列表」
+// ③ app/browserGlue（片 3）—— 求助卡 / 确认卡 / 跨 chat×browser 的视图同步
+// ---------------------------------------------------------------------------
+log('');
+log('--- ③ 胶水：求助卡与「上下文没了」确认卡 ---');
+
+/**
+ * ★ 这一节要「主进程真的送事件进来」，所以必须有一次**当前还在挂着**的 App：
+ *   上一节最后 `rootMem.unmount()` 时 App 的订阅会退订（handlers 里就没有 'agent' 了）。
+ *   于是这里挂第三遍（登录态同样要先放回 localStorage）。
+ */
+dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+const rootGlue = createRoot(doc.getElementById('root') as HTMLElement);
+await act(async () => {
+  rootGlue.render(React.createElement(App));
+});
+await flush(4);
+await waitFor('第三个 App 起来（侧栏在）', () => !!q('aside.sidebar'));
+
+await check('主进程说「AI 求助」→ 聊天区长出求助卡（文案与类型都对）', async () => {
+  emitAgent({ kind: 'help', wcId: 4242, helpKind: 'captcha', question: '这个滑块我过不去', hint: '请帮她拖一下' });
+  await flush(3);
+  const card = q('.helpCard');
+  assert.ok(card, '求助卡没渲染出来（helpCards 分桶或 showHelp 抽坏了）');
+  assert.match(card!.textContent ?? '', /这个滑块我过不去/, '问题文案没渲染');
+  assert.match(card!.textContent ?? '', /请帮她拖一下/, '提示文案没渲染');
+  assert.match(card!.className, /helpCard--captcha/, `求助类型不对：${card!.className}`);
+});
+
+await check('点「我处理好了，继续」→ 走既有通道 resumeTask(wcId)，卡片立刻收起', async () => {
+  bridgeCalls.length = 0;
+  click(q('.helpCard__done'), '我处理好了，继续');
+  await waitFor('resumeTask 被调用', () => bridgeCalls.some((c) => c.startsWith('resumeTask(')));
+  await flush(3);
+  assert.deepEqual(bridgeCalls, ['resumeTask(4242)'], `通道调用不对：${JSON.stringify(bridgeCalls)}`);
+  // ★ DOM 元素**不许**进断言库（失败时 Node 会去 inspect jsdom 环形巨图 → OOM 137）
+  assert.ok(q('.helpCard') === null, '点了按钮卡片还留着（点不动的卡）');
+});
+
+await check('「AI 求助已解除」事件 → 卡片收起（收卡片这条路也要真的通）', async () => {
+  emitAgent({ kind: 'help', wcId: 4243, helpKind: 'login', question: '要你登录一下', hint: '你自己登录' });
+  await flush(3);
+  assert.ok(q('.helpCard'), '前提不成立：卡片没长出来');
+  emitAgent({ kind: 'help-clear', wcId: 4243 });
+  await flush(3);
+  assert.ok(q('.helpCard') === null, 'clear 事件之后卡片还留着');
+});
+
+await check('主进程说「这一轮的上下文没了」→ 弹出确认卡，点「重新开始」回主进程并收卡', async () => {
+  /**
+   * ★ 这张卡画在**浏览器层里面**（`{browser.allTabs.length > 0 && (… {loopGone && …} …)}`），
+   *   所以先走真实路径开一张页（主进程 open 事件 → browser.openFromMain → openUrl），
+   *   否则 `.loopGone` 永远查不到 —— 那不是抽错，是前置条件不成立。
+   */
+  await act(async () => {
+    assert.equal(emitBridge('open', 'https://example.com/'), 1, 'bridge.on("open") 没注册处理函数');
+  });
+  await waitFor('浏览器层出现', () => q('.browserLayer') !== null);
+
+  bridgeCalls.length = 0;
+  emitAgent({ kind: 'loop-gone', wcId: 4244, question: '这一轮的上下文没了，要重新开始吗？' });
+  await flush(3);
+  const card = q('.loopGone');
+  assert.ok(card, '确认卡没渲染出来（loopGone 抽坏了）');
+  assert.match(card!.textContent ?? '', /这一轮的上下文没了/, '问话没渲染');
+
+  click(q('.loopGone__warn'), '重新开始');
+  await waitFor('loopGoneChoice 被调用', () => bridgeCalls.length > 0);
+  await flush(2);
+  assert.deepEqual(bridgeCalls, ['loopGoneChoice(4244, restart)'], `通道调用不对：${JSON.stringify(bridgeCalls)}`);
+  assert.ok(q('.loopGone') === null, '点完还留着卡 —— 会是一张点不动的卡');
+});
+
+await check('useBrowserGlue：切智能体时视图跟着切（有卡进 embed / 没卡也恒调 exitEmbed）', async () => {
+  const calls: string[] = [];
+  const fakeBrowser = {
+    enterEmbed: (wcId: number) => calls.push(`enterEmbed(${wcId})`),
+    exitEmbed: () => calls.push('exitEmbed()'),
+    refreshDriving: () => calls.push('refreshDriving()'),
+  };
+  let api: { showHelp: (c: unknown) => void } | null = null;
+  /**
+   * ★ Host 把 `curHelp` **渲染出来**：只断言 browser 调用的话，
+   *   「curHelp 拿别人对话的卡」这种抽错看不见（effect 读的是 helpCards 本身，不是 curHelp）——
+   *   那就是假绿。这里把「聊天区该画哪张卡」这个可观察结果也摆上台面。
+   */
+  function Host({ agentId }: { agentId: number }) {
+    api = useBrowserGlue({ browser: fakeBrowser, curAgentId: agentId, onNote: () => {} });
+    const help = (api as unknown as { curHelp: { wcId: number } | null }).curHelp;
+    return React.createElement('span', { id: 'curHelpView' }, help ? `卡:${help.wcId}` : '没卡');
+  }
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const hostRoot = createRoot(host);
+  await act(async () => {
+    hostRoot.render(React.createElement(Host, { agentId: 97 }));
+  });
+  await flush(2);
+  calls.length = 0;
+
+  // 97 号还没有卡 → 仍然必须恒调 exitEmbed（就是那条「时序破口」的正解）
+  await act(async () => {
+    hostRoot.render(React.createElement(Host, { agentId: 98 }));
+  });
+  await flush(2);
+  assert.deepEqual(calls, ['exitEmbed()'], `没卡时应当只调一次 exitEmbed：${JSON.stringify(calls)}`);
+
+  // 给 97 号挂一张卡，再切回它 → enterEmbed 那张页
+  calls.length = 0;
+  await act(async () => {
+    api!.showHelp({ wcId: 4242, agentId: 97, helpKind: 'captcha', question: 'q', hint: 'h' });
+  });
+  await flush(2);
+  // 卡片桶变了 → 这个 effect 会重跑；当前对话（98）没卡 ⇒ 按语义仍然恒调 exitEmbed（安全 no-op）
+  assert.deepEqual(calls, ['exitEmbed()'], `挂别的对话的卡时不该进 embed：${JSON.stringify(calls)}`);
+  // ★ 「不做跨对话提醒」：97 号的卡绝不许画在 98 号的对话里
+  assert.equal(host.textContent, '没卡', `97 号的求助卡漏到 98 号对话里了：${host.textContent}`);
+  calls.length = 0;
+  await act(async () => {
+    hostRoot.render(React.createElement(Host, { agentId: 97 }));
+  });
+  await flush(2);
+  assert.deepEqual(calls, ['enterEmbed(4242)'], `切回有卡的对话应进 embed：${JSON.stringify(calls)}`);
+  assert.equal(host.textContent, '卡:4242', `切回自己的对话反而看不到卡：${host.textContent}`);
+
+  await act(async () => hostRoot.unmount());
+  host.remove();
+});
+
+await act(async () => rootGlue.unmount());
+
+// ---------------------------------------------------------------------------
+// ④ 直接挂真实 hook：会话切换期间「晚到的旧响应不许覆盖新列表」（真 hook，不是副本）
 //    （这条守卫写在 useKnowledge.load 里，App 级别很难稳定触发，所以在真实 hook 上验）
 // ---------------------------------------------------------------------------
 log('');
-log('--- ③ 挂在真实 hook 上的两条守卫（不是副本）---');
+log('--- ④ 挂在真实 hook 上的守卫（不是副本）---');
 
 await check('A 号请求晚到时不许覆盖 B 号列表', async () => {
   const sessionRef = { current: { token: 'tok-A' } } as unknown as { current: { token: string } | null };

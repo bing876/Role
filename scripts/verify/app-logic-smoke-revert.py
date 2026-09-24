@@ -26,6 +26,7 @@ REPO = Path(__file__).resolve().parents[2]
 FEATURES = REPO / 'apps' / 'desktop' / 'src' / 'features'
 KNOWLEDGE = FEATURES / 'knowledge' / 'useKnowledge.ts'
 MEMORY = FEATURES / 'memory' / 'useMemory.ts'
+GLUE = FEATURES.parent / 'app' / 'browserGlue.ts'
 
 MUTATIONS = [
     {
@@ -84,6 +85,47 @@ MUTATIONS = [
         'anchor': "        body: JSON.stringify({ layer, id }),",
         'replace': "        body: JSON.stringify({ layer }),",
         'expect': '忘掉',
+    },
+    # ---- 片 3：app/browserGlue ----
+    {
+        'file': GLUE,
+        'id': 'G1',
+        'name': 'clearHelp 收不掉卡片（AI 求助解除后卡还在）',
+        'anchor': "      if (!(agentId in prev)) return prev; // ★ 没有就别造新对象（引用稳定，少一次无谓渲染）\n      const next = { ...prev };\n      delete next[agentId];\n      return next;",
+        'replace': "      return prev;",
+        'expect': '卡片收起',
+    },
+    {
+        'file': GLUE,
+        'id': 'G2',
+        'name': 'answerLoopGone 点完不清卡（留一张点不动的卡）',
+        'anchor': "    const cur = loopGone;\n    setLoopGone(null);",
+        'replace': "    const cur = loopGone;",
+        'expect': '点完还留着卡',
+    },
+    {
+        'file': GLUE,
+        'id': 'G3',
+        'name': '切智能体时不再恒调 exitEmbed（就是那条真机时序破口）',
+        'anchor': "    browser.exitEmbed();\n    // browser 的方法是稳定引用",
+        'replace': "    // browser 的方法是稳定引用",
+        'expect': '恒调 exitEmbed',
+    },
+    {
+        'file': GLUE,
+        'id': 'G4',
+        'name': '求助卡不按智能体分桶（挂到当前对话上）',
+        'anchor': "    setHelpCards((prev) => ({ ...prev, [card.agentId]: card }));",
+        'replace': "    setHelpCards((prev) => ({ ...prev, [curAgentId ?? 0]: card }));",
+        'expect': '求求助卡没渲染出来'.replace('求求', ''),
+    },
+    {
+        'file': GLUE,
+        'id': 'G5',
+        'name': 'curHelp 跨对话泄漏（拿别人对话的卡来显示）',
+        'anchor': "  const curHelp = curAgentId !== null ? helpCards[curAgentId] ?? null : null;",
+        'replace': "  const curHelp = Object.values(helpCards)[0] ?? null;",
+        'expect': '漏到 98 号对话里',
     },
 ]
 

@@ -65,6 +65,7 @@ import {
 } from './browser';
 import type { ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
+import { useBrowserGlue } from './app/browserGlue';
 
 /**
  * 第 2 步（内嵌版）「脸和门」：
@@ -191,20 +192,6 @@ type Message = {
 };
 /** 第 15 步：一个智能体 = 一份聊天（自己的消息列表 + 自己的会话号） */
 type AgentChat = { messages: Message[]; convId: number | null };
-/**
- * 第 27 步：一张**人工介入求助卡**（AI 主动求助）。
- *
- * ★ 这里刻意**只有文案与 id，没有任何输入字段** —— 卡片不承载输入能力，
- *   用户必须在上面那块**真实页面**里自己操作（安全红线，见 HelpCard.tsx 顶部注释）。
- */
-type HelpCardView = {
-  /** 触发求助的那张内嵌页（guest webContents id）—— 恢复时要点名它 */
-  wcId: number;
-  agentId: number;
-  helpKind: 'captcha' | 'login';
-  question: string;
-  hint: string;
-};
 /** 空列表用同一个常量：切智能体时引用稳定，不会每次渲染都造新数组 */
 const EMPTY_MESSAGES: Message[] = [];
 
@@ -1619,6 +1606,24 @@ export default function App() {
   });
 
   /**
+   * 批次 M · 逻辑抽离第 3 片：跨 chat × browser 的胶水（求助卡 / 上下文没了确认卡 / 窗口几何）
+   * 搬进 `app/browserGlue.ts`。★ 仍然**只换来源、不改名字** → 下面 4 处 JSX 一个字都不用改。
+   */
+  const {
+    loopGone,
+    answerLoopGone,
+    helpCards,
+    curHelp,
+    embedRect,
+    onEmbedRect,
+    helpCardAct,
+    showHelp,
+    clearHelp,
+    clearEmbed,
+    askLoopGone,
+  } = useBrowserGlue({ browser, curAgentId, onNote: setChatNote });
+
+  /**
    * 收尾 7 | 读回这个智能体自己存的可见度档位（切换智能体 / 登录态变化时各读一次）。
    *
    * ★ 读不到（未登录、网络、老后端没这条路由）就**保持当前档位不动**，绝不回落成 `status` 再写回去 ——
@@ -1858,30 +1863,20 @@ export default function App() {
          *   用户自己在那块真实页面上操作，AI 只负责"把页面递到眼前 + 说明白"。
          */
         if (typeof p.wcId === 'number' && ownerAgent !== null && ownerAgent !== undefined) {
-          setHelpCards((prev) => ({
-            ...prev,
-            [ownerAgent]: {
-              wcId: p.wcId as number,
-              agentId: ownerAgent,
-              helpKind: p.helpKind,
-              question: p.question,
-              hint: p.hint,
-            },
-          }));
+          showHelp({
+            wcId: p.wcId as number,
+            agentId: ownerAgent,
+            helpKind: p.helpKind,
+            question: p.question,
+            hint: p.hint,
+          });
           browser.enterEmbed(p.wcId);
         }
         void browser.refreshDriving();
       } else if (p.kind === 'help-clear') {
         // 求助已解除（自动感知到页面变化 / 用户点了按钮 / 任务收尾）→ 收卡片 + 退出该视图
-        if (ownerAgent !== null && ownerAgent !== undefined) {
-          setHelpCards((prev) => {
-            if (!(ownerAgent in prev)) return prev;
-            const next = { ...prev };
-            delete next[ownerAgent];
-            return next;
-          });
-        }
-        setEmbedRect(null);
+        clearHelp(ownerAgent);
+        clearEmbed();
         browser.exitEmbed();
         void browser.refreshDriving();
       } else if (p.kind === 'loop-gone') {
@@ -1897,26 +1892,15 @@ export default function App() {
          *
          * ★ 这里同样**不碰页面**：不聚焦、不代点，与求助卡同一条安全红线。
          */
-        setLoopGone(
-          typeof p.wcId === 'number'
-            ? { wcId: p.wcId as number, question: p.question }
-            : null,
-        );
+        askLoopGone(p.wcId, p.question);
         void browser.refreshDriving();
       } else if (p.kind === 'done') {
         setAgentAwaitInfo(false);
         setAgentAwaitAgent(null);
         setAgentAwaitWcId(null);
         // 第 27 步：任务收尾了，求助卡就没有存在意义了（留着会是一张点不动的卡）
-        if (ownerAgent !== null && ownerAgent !== undefined) {
-          setHelpCards((prev) => {
-            if (!(ownerAgent in prev)) return prev;
-            const next = { ...prev };
-            delete next[ownerAgent];
-            return next;
-          });
-        }
-        setEmbedRect(null);
+        clearHelp(ownerAgent);
+        clearEmbed();
         browser.exitEmbed();
         // 任务已经收尾：不再等「继续」（否则下一条「继续」会去 resume 一条已经 done 的循环）
         setAwaitResume(false);
@@ -2509,113 +2493,10 @@ export default function App() {
 
   // 批次 E：砍掉一切仪表盘，临时测试条已移除（暂停/继续走浏览器原生控制或输入「停」）
 
-  // ---- ★ P0 止血（2026-09-21）·「这一轮的上下文没了」确认卡 ------------------
   /**
-   * 主进程在 `/agent/loop/resume` 拿到 `code:'loop_gone'` 时**不会**自动重开，
-   * 只把一句问话送过来；这里那张卡就是用户拍板的唯一入口。
-   *
-   * ★ 一次只可能有一张（按 wcId 记），点完就清空 —— 绝不留一张点不动的卡。
+   * 上面这块（「这一轮的上下文没了」确认卡 / 求助卡分桶 / 窗口几何 / 切智能体同步视图 / 卡片两个按钮）
+   * 已整体搬进 `app/browserGlue.ts`，见上面的 useBrowserGlue 解构。
    */
-  const [loopGone, setLoopGone] = useState<{ wcId: number; question: string } | null>(null);
-  /** 点两颗按钮中的任意一颗：把决定送回主进程，然后收卡 */
-  const answerLoopGone = (choice: 'restart' | 'giveup'): void => {
-    const cur = loopGone;
-    setLoopGone(null);
-    if (!cur) return;
-    void window.workbench?.loopGoneChoice(cur.wcId, choice).then(() => {
-      void browser.refreshDriving();
-    });
-  };
-
-  // ---- 第 27 步 · 人工介入求助卡片 ------------------------------------------
-  /**
-   * 每个智能体当前有没有一张待处理的求助卡（key = agentId）。
-   *
-   * 为什么按**智能体**分桶（不是按页、也不是全局一张）：
-   *   聊天区本来就只显示当前智能体的内容，卡片必须落在"触发它的那个对话"里 ——
-   *   这正是本步的要求（**不做跨对话提醒**，只在当前对话显示）。
-   */
-  const [helpCards, setHelpCards] = useState<Record<number, HelpCardView>>({});
-  /**
-   * 求助卡里那块"窗口"的几何（相对浏览器舞台左上角）。
-   *
-   * ★ 它**不是**状态机的一部分，也不进任何持久化：纯粹是"这一帧卡片在哪"的临时量。
-   *   由 HelpCard 每帧量一次、变了才上报，交给 BrowserPanel 写进那个**一直挂着的**
-   *   webview 的内联样式 —— 元素本身从头到尾没动过位置（影子层方案）。
-   */
-  const [embedRect, setEmbedRect] = useState<EmbedRect | null>(null);
-  const onEmbedRect = useCallback((r: EmbedRect | null) => setEmbedRect(r), []);
-  /** 当前这个对话有没有求助卡（聊天区只画当前智能体的那张） */
-  const curHelp = curAgentId !== null ? helpCards[curAgentId] ?? null : null;
-
-  /**
-   * 第 27 步：求助卡的两个按钮。
-   *
-   * ★ 两个动作**都走主进程既有的通道**，不新开机制：
-   *   · 「我处理好了，继续」= `resumeTask`（就是「继续」按钮那条路：
-   *     读当前真实页面 → 服务端算 delta → 同一条历史原地接上）；
-   *   · 「不用了，停手」= `agentDrop`（就是「停」那条路）。
-   */
-  /**
-   * 第 27 步：**切智能体时跟着切换求助卡视图**。
-   *
-   * 为什么必须显式管：卡片是按智能体分桶的，而 `browser.view` 是全局的。
-   * 不做这一步会出现两种错位：
-   *   · 切到另一个对话 → 浏览器层还停在 embed 态，那一层是透明的，
-   *     用户会看到"聊天正常，但屏幕上多出一块别人的网页"；
-   *   · 切回有求助卡的那个对话 → 卡片回来了，但页没跟着回来（白框）。
-   */
-  useEffect(() => {
-    const h = curAgentId !== null ? helpCards[curAgentId] : null;
-    if (h) {
-      browser.enterEmbed(h.wcId);
-      return;
-    }
-    /*
-     * ★★ 这里**不要**写 `else if (browser.view === 'embed')`（2026-09-21 真机踩出来的问题）。
-     *
-     * `browser.view` 是**这一次渲染的闭包快照**，而这个 effect 的依赖只有
-     * `[curAgentId, helpCards]` —— 不包含 `view`。于是有一条时序破口：
-     *   ① 求助卡刚弹出 → `setView('embed')`；
-     *   ② 用户紧接着切到别的对话 → `curAgentId` 变 → 本 effect 重跑；
-     *   ③ 若此刻 React 还没把「view='embed'」那次渲染提交完，
-     *      闭包里的 `browser.view` 仍是 `'fullscreen'` ⇒ 那道 `if` 为假
-     *      ⇒ **exitEmbed() 根本没被调用** ⇒ 浏览器层停在 embed，
-     *      聊天旁边露出一块**别人的网页**（真机上实测到的现象：
-     *      `切到别的对话` 后 20 秒仍停在 `browserLayer--embed`）。
-     *
-     * 正解：**恒调 `exitEmbed()`** —— 它内部用的是函数式更新
-     * （`setView(v => v === 'embed' ? … : v)`），永远读到最新值；
-     * 不在 embed 态时它本来就是个安全的 no-op（顺手把 `embedWcId` 清成 null 也对）。
-     * 换句话说：**判断该由"知道最新值的那一层"做，而不是由拿着快照的调用方做。**
-     */
-    browser.exitEmbed();
-    // browser 的方法是稳定引用（只读 ref + setState），无需进依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curAgentId, helpCards]);
-
-  const helpCardAct = async (kind: 'done' | 'stop', wcId: number) => {
-    try {
-      if (kind === 'done') {
-        await window.workbench?.resumeTask?.(wcId);
-      } else {
-        await window.workbench?.agentDrop?.(wcId);
-      }
-    } catch (e) {
-      setChatNote(`没成功：${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      // 本地先收卡片，别等主进程的事件回来（事件会再收一次，幂等）
-      if (curAgentId !== null) {
-        setHelpCards((prev) => {
-          const next = { ...prev };
-          delete next[curAgentId];
-          return next;
-        });
-      }
-      setEmbedRect(null);
-      browser.exitEmbed();
-    }
-  };
   // 批次 E：activeTabId 轮询已移除（仪表盘砍掉）
 
   // 批次 E：driveBarAct 已移除（仪表盘砍掉，暂停/继续走 detectStopIntent 或浏览器控制）
