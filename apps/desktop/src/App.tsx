@@ -38,6 +38,7 @@ import { shouldFallbackLaunch } from './mentionGate';
  */
 import { API_BASE, TOKEN_KEY, authFetchJson, dbHint } from './shared/api';
 import { useKnowledge } from './features/knowledge';
+import { useMemory } from './features/memory';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -724,6 +725,15 @@ export default function App() {
   const [pwNew, setPwNew] = useState('');
   const [pwMsg, setPwMsg] = useState('');
 
+  /**
+   * ★ 批次 M · 逻辑抽离时**上移**：`sessionRef` 原先声明在下面（第 8 步任务快照那段），
+   *   那时它只在函数体里被延迟引用（`memHeaders()` 之类），声明顺序无所谓；
+   *   现在 memory feature 的 hook 调用要在**渲染期**读到它，必须声明在使用之前。
+   *   移动 `useRef` 的位置不改变 hook 的**稳定性**（仍然无条件、每次渲染同一顺序）。
+   */
+  const sessionRef = useRef<AuthSession | null>(null);
+  sessionRef.current = session;
+
   /** 带已存 token 调 /auth/me：能换回 profile 就静默登录，换不回来就清 token 回登录页 */
   useEffect(() => {
     const saved = localStorage.getItem(TOKEN_KEY);
@@ -838,14 +848,8 @@ export default function App() {
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectNote, setProjectNote] = useState('');
   /** 第 15 步 · 第一层：用户记忆库（账号级，所有智能体都能读，界面上也列出来） */
-  const [userMem, setUserMem] = useState<MemoryEntry[]>([]);
-  const [userMemOpen, setUserMemOpen] = useState(false);
   /** 第 15 步 · 第二层：**当前智能体**的项目记忆（智能体级，切智能体就整块换掉） */
-  const [projMem, setProjMem] = useState<MemoryEntry[]>([]);
-  const [projMemOpen, setProjMemOpen] = useState(false);
   /** 记忆合并第四批：待确认记忆（decision/fact 需用户确认才生效） */
-  const [pendingMem, setPendingMem] = useState<MemoryItem[]>([]);
-  const [pendingMemOpen, setPendingMemOpen] = useState(false);
   /**
    * 第 16 步：每个智能体的**会话状态**（服务端现有 Postgres 的 conversations 表为准）。
    * current_task / browser_confirmed / keepalive 都从这里来；进程重启后靠它恢复「当前任务」。
@@ -917,44 +921,36 @@ export default function App() {
   };
 
   // ---- 第 15 步：两层记忆 + 智能体列表（一切以服务端为准，界面只做展示） ----
-  const memHeaders = () => ({ authorization: `Bearer ${sessionRef.current?.token ?? ''}` });
-
-  /** 第一层：用户记忆库（账号级）——任何智能体都读得到，界面也一样列出来 */
-  const loadUserMemory = async () => {
-    if (!sessionRef.current) return;
-    try {
-      const r = await authFetchJson<MemoryLayerList>('/memory/user', { headers: memHeaders() });
-      setUserMem(r.items);
-    } catch {
-      /* 后端/库没起就不打扰 */
-    }
-  };
-  /** 第二层：某个智能体的项目记忆（智能体级）——切智能体就整块换成它自己的 */
-  const loadProjectMemory = async (agentId: number) => {
-    if (!sessionRef.current) return;
-    try {
-      const r = await authFetchJson<MemoryLayerList>(`/agents/${agentId}/memory`, { headers: memHeaders() });
-      // 切走之后晚到的响应不能覆盖当前智能体的那份
-      if (curAgentRef.current !== agentId) return;
-      setProjMem(r.items);
-    } catch {
-      /* 同上 */
-    }
-  };
-  /** 记忆合并第四批：待确认记忆（账号级+智能体级+会话级，三级合并） */
-  const loadPendingMemory = async (agentId?: number | null, conversationId?: number | null) => {
-    if (!sessionRef.current) return;
-    try {
-      const params = new URLSearchParams();
-      if (agentId) params.set('agentId', String(agentId));
-      if (conversationId) params.set('conversationId', String(conversationId));
-      const qs = params.toString() ? `?${params.toString()}` : '';
-      const r = await authFetchJson<MemoryListResult>(`/memories${qs}`, { headers: memHeaders() });
-      setPendingMem(r.pending);
-    } catch {
-      /* 后端/库没起就不打扰 */
-    }
-  };
+  /**
+   * 批次 M · 逻辑抽离第 2 片：两层记忆 + 待确认记忆的逻辑搬进 `features/memory`。
+   *
+   * ★ 同样**只换来源、不改名字**（下面解构出来的名字与原变量完全一致），
+   *   所以 JSX 与后面那些调用点（loadAgents / selectAgent / tidyCurrentAgent …）一个字都不用改。
+   * ★ `sessionRef` / `curAgentRef` 是**注入**的：这两个"最新值镜像"ref 原样留在 App 里。
+   * ★ `onNote` 传的是 `setChatNote`：提示文案仍写在聊天流里，但 memory feature 不依赖 chat 的 state。
+   */
+  const {
+    user: userMem,
+    setUser: setUserMem,
+    userOpen: userMemOpen,
+    setUserOpen: setUserMemOpen,
+    project: projMem,
+    setProject: setProjMem,
+    projectOpen: projMemOpen,
+    setProjectOpen: setProjMemOpen,
+    pending: pendingMem,
+    setPending: setPendingMem,
+    pendingOpen: pendingMemOpen,
+    setPendingOpen: setPendingMemOpen,
+    loadUser: loadUserMemory,
+    loadProject: loadProjectMemory,
+    loadPending: loadPendingMemory,
+    forget: forgetEntry,
+    confirm: confirmMemory,
+    reject: rejectMemory,
+    confirmAll: confirmAllPending,
+    rejectAll: rejectAllPending,
+  } = useMemory({ sessionRef, curAgentRef, onNote: setChatNote });
 
   /**
    * 第 16 步：拉某个智能体的会话状态（当前任务 / 是否已同意用浏览器 / 是否保活）。
@@ -1409,93 +1405,10 @@ export default function App() {
     }
   };
 
-  /** 忘掉一条：user = 账号级用户记忆库；agent = 当前智能体的项目记忆 */
-  const forgetEntry = async (layer: 'user' | 'agent', id: number) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      await authFetchJson('/memory/forget', {
-        method: 'POST',
-        body: JSON.stringify({ layer, id }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (layer === 'user') void loadUserMemory();
-      else if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
-    } catch (e) {
-      setChatNote(`忘掉失败：${(e as Error).message}`);
-    }
-  };
-
-  /** 记忆合并第四批：确认/拒绝待确认记忆 */
-  const confirmMemory = async (id: number) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      await authFetchJson('/memories/confirm', {
-        method: 'POST',
-        body: JSON.stringify({ ids: [id] }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem((prev) => prev.filter((m) => m.id !== id));
-      void loadUserMemory();
-      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
-      setChatNote('已确认一条记忆，今后会按它执行。');
-    } catch (e) {
-      setChatNote(`确认失败：${(e as Error).message}`);
-    }
-  };
-  const rejectMemory = async (id: number) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      await authFetchJson('/memories/reject', {
-        method: 'POST',
-        body: JSON.stringify({ ids: [id] }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem((prev) => prev.filter((m) => m.id !== id));
-      setChatNote('已忽略一条记忆。');
-    } catch (e) {
-      setChatNote(`忽略失败：${(e as Error).message}`);
-    }
-  };
-  const confirmAllPending = async () => {
-    const sess = sessionRef.current;
-    if (!sess || pendingMem.length === 0) return;
-    try {
-      await authFetchJson('/memories/confirm', {
-        method: 'POST',
-        body: JSON.stringify({ all: true }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem([]);
-      void loadUserMemory();
-      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
-      setChatNote(`已确认全部 ${pendingMem.length} 条记忆。`);
-    } catch (e) {
-      setChatNote(`批量确认失败：${(e as Error).message}`);
-    }
-  };
-  const rejectAllPending = async () => {
-    const sess = sessionRef.current;
-    if (!sess || pendingMem.length === 0) return;
-    try {
-      await authFetchJson('/memories/reject', {
-        method: 'POST',
-        body: JSON.stringify({ all: true }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem([]);
-      setChatNote(`已忽略全部 ${pendingMem.length} 条待确认记忆。`);
-    } catch (e) {
-      setChatNote(`批量忽略失败：${(e as Error).message}`);
-    }
-  };
-
-  /** 第 8 步：任务快照（状态/未读/结果）——红点的唯一事实源。
-   *  用 ref 拿会话：agent 订阅 effect 是挂载时建的闭包，直接引用 session 会拿到旧的 null。 */
-  const sessionRef = useRef<AuthSession | null>(null);
-  sessionRef.current = session;
+  /**
+   * 记忆的 5 个写操作（忘掉 / 确认 / 拒绝 / 批量确认 / 批量拒绝）也搬进 `features/memory`，
+   * 见上面的 useMemory 解构 —— 本文件只留调用点。
+   */
 
   /**
    * 批次 M · 逻辑抽离第 1 片：资料（知识库）的逻辑搬进 `features/knowledge`。

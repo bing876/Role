@@ -116,6 +116,16 @@ const STATE = {
   conversationId: 501, current_task: '', latest_user_intent: '', browser_confirmed: false,
   login_required: false, sensitive_action: false, last_page_summary: '', already_told_user_login_themselves: false, keepalive: false,
 };
+/** 记忆的假数据（用来验两层记忆 + 待确认） */
+const USER_MEM = [
+  { id: 301, content: '用户偏好：回答用中文', updatedAt: '2026-09-24T00:00:00.000Z' },
+  { id: 302, content: '用户是产品经理', updatedAt: '2026-09-24T00:00:00.000Z' },
+];
+const PROJ_MEM = [{ id: 311, content: '本项目用 pnpm', updatedAt: '2026-09-24T00:00:00.000Z' }];
+let PENDING_MEM = [
+  { id: 321, type: 'decision' as const, content: '决定用 A 方案', updatedAt: '2026-09-24T00:00:00.000Z' },
+  { id: 322, type: 'fact' as const, content: '项目代号是猎户座', updatedAt: '2026-09-24T00:00:00.000Z' },
+];
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -131,8 +141,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/agents') return json({ agents: AGENTS });
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
   if (path === '/chat/history') return json({ conversationId: 501, messages: [] });
-  if (path === '/memory/user' || (path.startsWith('/agents/') && path.endsWith('/memory'))) return json({ items: [] });
-  if (path === '/memories') return json({ items: [], pending: [] });
+  if (path === '/memory/user') return json({ items: USER_MEM });
+  const pm = /^\/agents\/(\d+)\/memory$/.exec(path);
+  if (pm) return json({ items: Number(pm[1]) === 97 ? PROJ_MEM : [] });
+  if (path === '/memories') return json({ active: [], pending: [...PENDING_MEM] });
+  if (path === '/memory/forget') return json({ ok: true });
+  if (path === '/memories/confirm' || path === '/memories/reject') return json({ ok: true });
   if (path === '/knowledge') return json({ documents: DOCS });
   if (path === '/agent/task/current') return json({ task: null });
   if (path === '/settings') return json({});
@@ -157,6 +171,7 @@ const { createRoot } = await import('react-dom/client');
 const React = (await import('react')).default;
 const App = (await import('../../apps/desktop/src/App')).default;
 const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge');
+const { useMemory } = await import('../../apps/desktop/src/features/memory');
 
 async function flush(rounds = 10): Promise<void> {
   for (let i = 0; i < rounds; i += 1) {
@@ -285,11 +300,75 @@ await check('登出把这套状态清干净（列表清空 + 面板收起）', a
 await act(async () => root.unmount());
 
 // ---------------------------------------------------------------------------
+// ③ features/memory（片 2）—— 两层记忆 + 待确认，走真实 UI 路径
+// ---------------------------------------------------------------------------
+log('');
+log('--- ② 记忆：两层列表 / 忘掉 / 确认待办 ---');
+
+/**
+ * ★ 上一节的登出会 `localStorage.removeItem('workbench.token')`（那是它的断言之一），
+ *   所以要挂第二遍 App 之前必须把登录态放回去 —— 否则会停在登录页，
+ *   而记忆入口（以及设置块）整个在 `{curAgent && (…)}` 里，条件永远不成立。
+ */
+dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+const rootMem = createRoot(doc.getElementById('root') as HTMLElement);
+await act(async () => {
+  rootMem.render(React.createElement(App));
+});
+await flush();
+
+await check('三个入口显示服务端返回的条数（用户 2 / 项目 1 / 待确认 2）', async () => {
+  await waitFor('记忆入口出现', () => doc.body.textContent!.includes('用户记忆（2）'));
+  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|项目记忆|待确认/.test(t));
+  assert.ok(labels.some((t) => t.includes('用户记忆（2）')), `用户记忆条数不对：${labels.join(' | ')}`);
+  assert.ok(labels.some((t) => t.includes('项目记忆（1）')), `项目记忆条数不对：${labels.join(' | ')}`);
+  assert.ok(labels.some((t) => t.includes('待确认（2）')), `待确认条数不对：${labels.join(' | ')}`);
+});
+
+await check('展开用户记忆：列出两条，且「忘掉」走 POST /memory/forget（带 layer 与 id）', async () => {
+  const btn = qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('用户记忆'));
+  click(btn ?? null, '用户记忆入口');
+  await flush(3);
+  const rows = qa('.memList__row');
+  assert.equal(rows.length, 2, `用户记忆行数不对：${rows.length}`);
+  assert.match(q('.memList')?.textContent ?? '', /用户偏好：回答用中文/, '内容没渲染出来');
+
+  click(qa('.memList__forget')[0], '忘掉第一条');
+  await waitFor('发出 /memory/forget', () => requests.some((r) => r.path === '/memory/forget'));
+  const req = requests.filter((r) => r.path === '/memory/forget').pop()!;
+  assert.equal(req.method, 'POST', `方法不对：${req.method}`);
+  const body = JSON.parse(String(req.body)) as { layer: string; id: number };
+  assert.deepEqual(body, { layer: 'user', id: 301 }, `body 不对：${JSON.stringify(body)}`);
+});
+
+await check('待确认：点「确认」走 POST /memories/confirm（{ids:[id]}），该条立刻消失，并回一句人话', async () => {
+  const btn = qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('待确认'));
+  click(btn ?? null, '待确认入口');
+  await flush(3);
+  const before = qa('.memList__row--pending').length;
+  assert.equal(before, 2, `待确认行数不对：${before}`);
+
+  click(qa('.memList__confirm')[0], '确认第一条');
+  await waitFor('发出 /memories/confirm', () => requests.some((r) => r.path === '/memories/confirm'));
+  await flush(3);
+  const after = qa('.memList__row--pending').length;
+  assert.equal(after, before - 1, `确认后没有立刻少一条（${before} → ${after}）`);
+  const req = requests.filter((r) => r.path === '/memories/confirm').pop()!;
+  const body = JSON.parse(String(req.body)) as { ids?: number[] };
+  assert.deepEqual(body, { ids: [321] }, `body 不对：${JSON.stringify(body)}`);
+  assert.match(doc.body.textContent ?? '', /已确认一条记忆，今后会按它执行。/, '聊天流里没有人话提示');
+});
+
+const memRequestCount = requests.length;
+await act(async () => rootMem.unmount());
+log(`  （记忆这节发出 ${memRequestCount} 条请求）`);
+
+// ---------------------------------------------------------------------------
 // ② 直接挂真实 hook：会话切换期间「晚到的旧响应不许覆盖新列表」
 //    （这条守卫写在 useKnowledge.load 里，App 级别很难稳定触发，所以在真实 hook 上验）
 // ---------------------------------------------------------------------------
 log('');
-log('--- ② useKnowledge 的切换账号守卫（挂真实 hook，不是副本）---');
+log('--- ③ 挂在真实 hook 上的两条守卫（不是副本）---');
 
 await check('A 号请求晚到时不许覆盖 B 号列表', async () => {
   const sessionRef = { current: { token: 'tok-A' } } as unknown as { current: { token: string } | null };
@@ -338,6 +417,53 @@ await check('A 号请求晚到时不许覆盖 B 号列表', async () => {
   host.remove();
 });
 
+
+await check('useMemory：切走智能体后，A 号的慢响应不许覆盖项目记忆', async () => {
+  const sessionRef = { current: { token: 'tok-A' } } as unknown as { current: { token: string } | null };
+  const curAgentRef = { current: 97 as number | null };
+  const notes: string[] = [];
+  let api: { project: { id: number }[]; loadProject: (id: number) => Promise<void> } | null = null;
+
+  const realFetch = globalThis.fetch;
+  let release: (() => void) | null = null;
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const raw = typeof input === 'string' ? input : (input as Request).url;
+    const path = raw.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
+    const m = /^\/agents\/(\d+)\/memory$/.exec(path);
+    if (!m) return realFetch(input as RequestInfo);
+    await new Promise<void>((resolve) => { release = resolve; });
+    return json({ items: [{ id: 999, content: '97 号的旧项目记忆', updatedAt: '' }] });
+  }) as typeof fetch;
+
+  function Host() {
+    api = useMemory({ sessionRef: sessionRef as never, curAgentRef: curAgentRef as never, onNote: (t) => notes.push(t) });
+    return null;
+  }
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const hostRoot = createRoot(host);
+  await act(async () => {
+    hostRoot.render(React.createElement(Host));
+  });
+  await flush(2);
+
+  const pending = api!.loadProject(97);   // 97 号发起，响应被挂住
+  await flush(2);
+  curAgentRef.current = 98;               // 期间切到了 98 号
+  release?.();
+  await pending;
+  await flush(2);
+
+  assert.deepEqual(
+    (api as unknown as { project: { content: string }[] }).project.map((x) => x.content),
+    [],
+    '切走后 97 号的慢响应把项目记忆写进去了（守卫被删/被改坏）',
+  );
+
+  globalThis.fetch = realFetch;
+  await act(async () => hostRoot.unmount());
+  host.remove();
+});
 log('');
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
