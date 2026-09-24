@@ -1,5 +1,9 @@
 # 本地嵌入式数据库文件
-data/
+# ★ 必须写成 `/data/`（锚定仓库根）：写成 `data/` 是**全局通配**，
+#   会把任何层级的 data/ 目录都吞掉 —— 2026-09-24 发现它已吞掉
+#   `workbench-ui/src/data/contacts.ts`（设计原型的联系人数据，一直提交不上来，
+#   导致仓库里的 workbench-ui 编译不起来）。详见 批次M 侦查报告 §12。
+/data/
 apps/server/data/
 
 # 依赖
