@@ -623,21 +623,31 @@ function isPortOpen(port: number, timeoutMs: number): Promise<boolean> {
 }
 
 /**
- * 某个 PID 是否真的活着。
+ * 取某个 PID 的**映像名**（如 `postgres.exe`）；进程不存在或取不到时返回 null。
  *
- * ★ 必须**按纯数字比对**：本机 `tasklist` 读不到非 ASCII 进程名
+ * ★ 必须**按纯数字定位**：本机 `tasklist` 读不到非 ASCII 进程名
  *   （实测全表 394 行里含非 ASCII 的是 0 行，而「AI 工作台.exe」明明在跑），
- *   所以绝不能按进程名找进程。
+ *   所以绝不能按进程名找进程。但**取出来的映像名仍可用于判断身份** ——
+ *   要认的是 postgres.exe，它的名字是纯 ASCII。
+ *
+ * ★ 为什么不能只判「PID 还活着」：Windows 会**回收 PID**。postgres 被硬杀后，
+ *   它占用的 PID 可能很快被分配给一个完全无关的进程（2026-09-24 实测撞到
+ *   `svchost.exe`），于是 `postmaster.pid` 看起来"还活着"，PG 却早已不在 ——
+ *   见 clearStalePid。
  */
-function isPidAlive(pid: number): boolean {
+function pidImageName(pid: number): string | null {
   try {
     const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'], {
       encoding: 'utf8',
       windowsHide: true,
     });
-    return (r.stdout ?? '').includes(`"${pid}"`);
+    const out = r.stdout ?? '';
+    // 先确认这一行确实是我们问的那个 PID，免得把别的行误当成它
+    if (!out.includes(`"${pid}"`)) return null;
+    const m = out.match(/^"([^"]+)"/m);
+    return m ? m[1] : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -648,8 +658,13 @@ function isPidAlive(pid: number): boolean {
  *   下次启动 PG 看到它以为「实例已在运行」，于是**直接退出**，
  *   而且 `pg.log` 里连一行新日志都没有 —— 表现成"起了但没反应"，极难排查。
  *
- * 只有在 pid 里的进程**确实不存在**时才删；还活着就原样不动（那可能是
- * 一个正在启动中的 PG，删它的 pid 文件会真的搞坏它）。
+ * ★ 判据是「那个 PID 现在**是不是 postgres**」，不是「那个 PID 还活不活」：
+ *   PID 会被 Windows 回收，只看"活着"会把无关进程误认成 PG，于是既不清 pid、
+ *   也不起库 —— 5432 永远起不来，界面只报「连不上后端」（2026-09-24 实撞）。
+ *
+ * 只有确认该 PID 的映像名是 postgres 时才原样不动（那可能是正在启动中的 PG，
+ * 删它的 pid 文件会真的搞坏它）；其余情况（进程没了 / PID 被回收给别的进程）
+ * 一律判为陈旧 pid 并清掉。
  */
 function clearStalePid(dataDir: string, log: (msg: string) => void): void {
   const pidFile = path.join(dataDir, 'postmaster.pid');
@@ -662,15 +677,22 @@ function clearStalePid(dataDir: string, log: (msg: string) => void): void {
     /* 读不出来就当没有 */
   }
 
-  if (Number.isInteger(pid) && pid > 0 && isPidAlive(pid)) {
-    log(`[pg-supervisor] postmaster.pid 里的进程 ${pid} 还活着 —— 不动它。`);
-    return;
+  let staleReason = 'PID 已不存在';
+  if (Number.isInteger(pid) && pid > 0) {
+    const image = pidImageName(pid);
+    if (image && /^postgres(\.exe)?$/i.test(image)) {
+      log(`[pg-supervisor] postmaster.pid 里的进程 ${pid}（${image}）确实在跑 —— 不动它。`);
+      return;
+    }
+    if (image) {
+      staleReason = `PID ${pid} 已被回收给「${image}」，不是 postgres`;
+    }
   }
 
   try {
     rmSync(pidFile, { force: true });
     log(
-      `[pg-supervisor] 清掉陈旧 postmaster.pid（PID ${pid > 0 ? pid : '?'} 已不存在）——` +
+      `[pg-supervisor] 清掉陈旧 postmaster.pid（${staleReason}）——` +
         ` 否则 PostgreSQL 会静默拒绝启动。`,
     );
   } catch (err) {
