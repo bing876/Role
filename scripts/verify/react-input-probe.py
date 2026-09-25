@@ -143,12 +143,12 @@ for i in range(60):
     time.sleep(1)
 log("渲染完成，input 数 =", c.js("document.querySelectorAll('input').length"))
 
-# ★ 有两种页面状态：未登录（只有手机号/验证码两个 input）和已登录（有 .inputBar）。
+# ★ 有两种页面状态：未登录（只有手机号/验证码两个 input）和已登录（有 .inputbar）。
 #   探针要能区分，否则会得出"输入框不存在"这种与真实原因无关的结论。
 state = c.js("""
 (()=>{return JSON.stringify({
   hasToken: !!localStorage.getItem('workbench.token'),
-  hasInputBar: !!document.querySelector('.inputBar input'),
+  hasInputBar: !!document.querySelector('.inputbar input'),
   inputs: Array.from(document.querySelectorAll('input')).map(e=>e.placeholder||''),
   bodyHead: (document.body.innerText||'').slice(0,120)
 });})()
@@ -156,12 +156,12 @@ state = c.js("""
 log("页面状态:", state)
 
 if "NO_EL" in str(c.js("""
-(()=>{return document.querySelector('.inputBar input')?'OK':'NO_EL'})()
+(()=>{return document.querySelector('.inputbar input')?'OK':'NO_EL'})()
 """)):
     log("")
     log("★ 当前是登录页，不是主界面 —— 先不做输入探针。")
     log("  这说明 _e2e-profile 里的登录态**丢了**（E2E 脚本走的是「已有登录态，跳过」，")
-    log("  但那次能读到 inputBar，说明当时是登录的；这次不是）。")
+    log("  但那次能读到 inputbar，说明当时是登录的；这次不是）。")
     log("  → 需要在探针里**自己登录一次**，不能依赖残留登录态。")
     for p in procs.values():
         try:
@@ -176,7 +176,7 @@ if "NO_EL" in str(c.js("""
 
 # React 内部 props 的读法：元素上挂 __reactProps$<random>
 READ = """
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  if(!el) return JSON.stringify({err:'NO_EL'});
  const k=Object.keys(el).find(k=>k.startsWith('__reactProps$'));
  if(!k) return JSON.stringify({err:'NO_REACT_PROPS', keys:Object.keys(el).slice(0,20)});
@@ -192,14 +192,14 @@ TASK = "打开 example.com，然后告诉我页面标题是什么"
 # ── 方式 A：原生 setter + input 事件（脚本当前用法）
 log("")
 log("=== 方式 A：原生 value setter + dispatchEvent('input') ===")
-c.js("document.querySelector('.inputBar input').focus()")
+c.js("document.querySelector('.inputbar input').focus()")
 c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,''); el.dispatchEvent(new Event('input',{bubbles:true})); return 'OK';})()
 """)
 c.js(f"""
-(()=>{{const el=document.querySelector('.inputBar input');
+(()=>{{const el=document.querySelector('.inputbar input');
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,{json.dumps(TASK)}); el.dispatchEvent(new Event('input',{{bubbles:true}})); return 'SET';}})()
 """)
@@ -210,7 +210,7 @@ log(" ", c.js(READ))
 log("")
 log("=== 方式 B：清空后用 CDP Input.insertText ===")
 c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,''); el.dispatchEvent(new Event('input',{bubbles:true})); return 'CLEARED';})()
 """)
@@ -223,7 +223,7 @@ log(" ", c.js(READ))
 log("")
 log("=== 方式 C：CDP Input.dispatchKeyEvent 逐字符 ===")
 c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,''); el.dispatchEvent(new Event('input',{bubbles:true})); return 'CLEARED';})()
 """)

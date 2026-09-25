@@ -1319,8 +1319,8 @@ log('--- ⑦ 发送：上屏 / 打字机 / 步骤 / 任务卡（片 7b）---');
 
 /** 往输入框打字（React 受控组件：必须走原生 setter + input 事件，否则 state 不动） */
 async function typeIntoInput(text: string): Promise<void> {
-  const el = q('.inputBar input');
-  assert.ok(el, '输入框不见了（.inputBar input）');
+  const el = q('.inputbar input');
+  assert.ok(el, '输入框不见了（.inputbar input）');
   const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
   await act(async () => {
     setter.call(el, text);
@@ -1331,7 +1331,7 @@ async function typeIntoInput(text: string): Promise<void> {
 
 /** 点「发送」（文案有 发送 / 发送补充 / 打字中… 三种） */
 const clickSend = (): void =>
-  click(qa('.inputBar button').find((b) => /发送/.test(b.textContent ?? '')) ?? null, '发送');
+  click(qa('.inputbar button').find((b) => /发送/.test(b.textContent ?? '')) ?? null, '发送');
 
 /**
  * 聊天区里那条**正在打字**的助手气泡（`.caret` 是它的标志）。
@@ -1559,7 +1559,7 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
    *   jsdom 的环形巨图会 OOM 137，连哪条红了都看不到）。`?.textContent` 这种可选链
    *   不在门禁的值取值白名单里，所以这里先落到局部变量，别跟门禁绕。
    */
-  const preBtnText = q('.inputBar button')?.textContent ?? '';
+  const preBtnText = q('.inputbar button')?.textContent ?? '';
   assert.equal(preBtnText, '发送补充', '前置不成立：输入框没进「发送补充」');
 
   // 流还开着就登出
@@ -1591,9 +1591,9 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
     !(q('.chat')?.textContent ?? '').includes('AI 任务执行中'),
     '上一轮的「AI 任务执行中」卡片露出来了（F5 复发：登出没清循环号）',
   );
-  const btnText = q('.inputBar button')?.textContent ?? '';
+  const btnText = q('.inputbar button')?.textContent ?? '';
   assert.equal(btnText, '发送', `输入框按钮还停在上一轮（F5 复发：登出没清流式态）：${btnText}`);
-  assert.ok(!(q('.inputBar input') as HTMLInputElement | null)?.disabled, '输入框是禁用的（上一轮的「打字中」把用户锁在外面了）');
+  assert.ok(!(q('.inputbar input') as HTMLInputElement | null)?.disabled, '输入框是禁用的（上一轮的「打字中」把用户锁在外面了）');
   const hintLine = q('.searchHint') === null ? '（没有）' : (q('.searchHint')?.textContent ?? '');
   assert.equal(hintLine, '（没有）', `上一轮的「正在搜索：…」那行露出来了（F5 复发：登出没清搜索提示）：${hintLine}`);
 });

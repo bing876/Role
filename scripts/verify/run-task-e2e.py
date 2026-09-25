@@ -252,7 +252,7 @@ if not tbl_out.startswith("TABLES=") or int(tbl_out.split("=")[1]) < 5:
 # 为什么必须清干净（本轮最大的坑，反复让结果"看起来是坏的"）：
 #   profile 里残留的 localStorage token 指向**上一轮那个手机号建的账号**。
 #   服务端重启后 token 可能不被认（/auth/me 401），App 会**先把 token 清掉再退回登录页**。
-#   这个"退登录页"的过渡期间，`.inputBar` 可能**短暂出现**——脚本的
+#   这个"退登录页"的过渡期间，`.inputbar` 可能**短暂出现**——脚本的
 #   `main_ui_ready()` 恰好看到它 → 判定"已有登录态" → 跳过登录 →
 #   但此时**没有任何智能体被绑定**（curAgentRef.current === null）→
 #   sendChat() 第一句 `if (!agent) return` **静默返回**，
@@ -357,13 +357,13 @@ log("=== 第 5 步：登录 ===")
 #   坑：App 启动时会拿 token 调 /auth/me，**一旦失败（服务端刚重启/库没就绪 → 503）
 #   就会主动把 token 清掉并退回登录页**。于是会出现：
 #     · 脚本读到 token 还在（那一刻）→ 报「已有登录态，跳过」
-#     · 但界面其实已经/将要变成登录页 → .inputBar 不存在 → 发送静默失败
-#   正确做法：等**主界面真的渲染出来**（.inputBar 出现）才算登录成功；
+#     · 但界面其实已经/将要变成登录页 → .inputbar 不存在 → 发送静默失败
+#   正确做法：等**主界面真的渲染出来**（.inputbar 出现）才算登录成功；
 #   没出现就老老实实走一遍验证码登录。
 def main_ui_ready(timeout=20):
     end = time.time() + timeout
     while time.time() < end:
-        if c.js("!!document.querySelector('.inputBar input')"):
+        if c.js("!!document.querySelector('.inputbar input')"):
             return True
         time.sleep(1)
     return False
@@ -474,10 +474,10 @@ else:
     log("  已有可用登录态（主界面已渲染）")
 
 # ★ 无论走哪条路，**发任务之前必须确认主界面真的在**。
-#   否则后面所有 c.js('.inputBar ...') 都会静默失败（`?.` / 异常被吞），
+#   否则后面所有 c.js('.inputbar ...') 都会静默失败（`?.` / 异常被吞），
 #   最后表现成"点了发送但任务没动"，而日志看上去一切正常。
-if not c.js("!!document.querySelector('.inputBar input')"):
-    log("  ★ 发任务前主界面仍不存在（.inputBar input 找不到）—— 中止，不能继续")
+if not c.js("!!document.querySelector('.inputbar input')"):
+    log("  ★ 发任务前主界面仍不存在（.inputbar input 找不到）—— 中止，不能继续")
     log("    当前界面:", str(c.js("document.body.innerText.slice(0,200)")))
     sys.exit(1)
 
@@ -495,7 +495,7 @@ base_llm = int((re.search(r'"llmCalls":(\d+)', h0) or ["", "0"])[1])
 base_loop = int((re.search(r'"liveLoops":(\d+)', h0) or ["", "0"])[1])
 log(f"  基线：llmCalls={base_llm} liveLoops={base_loop}")
 
-c.js("document.querySelector('.inputBar input')?.focus()")
+c.js("document.querySelector('.inputbar input')?.focus()")
 # ★★ 往 React 受控 input 里塞值，**只有一种方式真的有效**（A/B 实测）：
 #
 #   | 方式                                   | React props.value | 结果     |
@@ -509,7 +509,7 @@ c.js("document.querySelector('.inputBar input')?.focus()")
 #   界面上点发送毫无反应，日志里却看起来一切正常（典型的静默假 PASS）。
 #   所以这里必须**把值直接写进 React 认的那个 setter**，不能靠模拟输入法事件。
 c.js(f"""
-(()=>{{const el=document.querySelector('.inputBar input');
+(()=>{{const el=document.querySelector('.inputbar input');
  if(!el) return 'NO_EL';
  // 先清空（走原生 setter），再写目标值 —— 两步都要派发 input 事件
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
@@ -521,7 +521,7 @@ c.js(f"""
 # ★ 不只看 DOM value —— 要直接读 **React 自己的 props.value**，
 #   否则"DOM 里有、React 里没有"这种情况会漏过去（本轮踩的就是这个坑）。
 inp_state = c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  if(!el) return JSON.stringify({err:'NO_EL'});
  const k=Object.keys(el).find(k=>k.startsWith('__reactProps$'));
  if(!k) return JSON.stringify({err:'NO_REACT_PROPS'});
@@ -538,10 +538,10 @@ if val.strip() != TASK:
     sys.exit(1)
 log("  ✓ 输入已进 React state")
 
-# ★ 发送按钮要按**文案**挑，不能取 `.inputBar button` 的第一个 ——
-#   inputBar 里还有「结束」等其它按钮，取第一个会点到别的、静默不发送。
+# ★ 发送按钮要按**文案**挑，不能取 `.inputbar button` 的第一个 ——
+#   inputbar 里还有「结束」等其它按钮，取第一个会点到别的、静默不发送。
 send_res = c.js("""
-(()=>{const bs=Array.from(document.querySelectorAll('.inputBar button'));
+(()=>{const bs=Array.from(document.querySelectorAll('.inputbar button'));
  const b=bs.find(x=>/发送|发\\s*送/.test(x.innerText||''));
  if(!b) return 'NO_SEND_BTN:'+bs.map(x=>x.innerText).join('/');
  b.click(); return 'CLICKED';})()

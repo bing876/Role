@@ -2814,8 +2814,17 @@ export default function App() {
           )}
         </div>
 
-        <div className="inputBar">
+        {/* 底部输入栏 —— 批次 M-4'：视觉搬入 design/04-inputbar.css（设计基准
+             workbench-ui 的 pill 式输入栏）。真数据接线原样保留：
+             input / onSend（useChat → /chat/stream SSE）/ tidyCurrentAgent。
+             data-state 由真状态推导（empty / typing / thinking=streaming）。
+             基准的假功能（CL 额度环 / 模型弹层 / 附件弹层 / 语音）不搬。 */}
+        <div
+          className="inputbar"
+          data-state={streaming ? 'thinking' : input ? 'typing' : 'empty'}
+        >
           <input
+            className="inputbar-field"
             placeholder={
               runningLoopId && streaming
                 ? '任务进行中：输入补充指令/追问注入上下文，或输入「停」暂停任务…'
@@ -2830,13 +2839,15 @@ export default function App() {
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
             disabled={streaming && !runningLoopId}
           />
-          <button type="button" onClick={onSend} disabled={streaming && !runningLoopId}>
+          {/* 真文案（不是基准的 sparkle 图标）：桌面没有真「停止」按钮
+               （停 = 输入「停」走 detectStopIntent），文字态永远要保留 */}
+          <button type="button" className="inputbar-btn send" onClick={onSend} disabled={streaming && !runningLoopId}>
             {runningLoopId && streaming ? '发送补充' : streaming ? '打字中…' : '发送'}
           </button>
           {/* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */}
           <button
             type="button"
-            className="inputBar__end"
+            className="inputbar-btn end"
             title="结束这轮聊天，把这段总结进两层记忆"
             onClick={() => void tidyCurrentAgent()}
           >

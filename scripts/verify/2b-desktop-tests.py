@@ -751,8 +751,8 @@ def main():
         goal = '打开 %s 把整页读完，最后给我一份 %s 结论' % (PAGE_URL, MARK)
         h_before = http_json('/health')[1]
         t_send = now_ms()
-        type_into('.inputBar input', goal)
-        click('.inputBar button', settle=1.2)
+        type_into('.inputbar input', goal)
+        click('.inputbar button', settle=1.2)
         evidence['task'] = {'goal': goal, 'sentAt': t_send,
                             'llmCallsBefore': h_before.get('llmCalls'), 'liveLoopsBefore': h_before.get('liveLoops')}
         ok, _, _ = wait_until(lambda: any((x.get('url') or '').startswith(PAGE_URL) for x in webviews()),

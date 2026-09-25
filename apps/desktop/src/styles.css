@@ -164,12 +164,11 @@ body {
 
 /*
  * 第 25 步 · 中栏分两层（左侧图标栏 / 智能体列表完全不受影响）：
- *   ① 会话层（.chat + .inputBar）—— 正常流，z-index 10；
+ *   ① 会话层（.chat + .inputbar）—— 正常流，z-index 10；
  *   ② 浏览器层（.browserLayer）—— 绝对定位铺满，z-index 20。
  * 全屏时 ② 压过 ①；退出全屏后 ② 降为 z-index 0 + 不可见，会话层自然露出来。
  */
-.chat,
-.inputBar {
+.chat {
   position: relative;
   z-index: 10;
 }
@@ -329,44 +328,9 @@ body {
   border: 1px solid #cde8fb;
 }
 
-.inputBar {
-  display: flex;
-  gap: 8px;
-  padding: 10px;
-  border-top: 1px solid var(--border);
-  background: #fff;
-}
-
-.inputBar input {
-  flex: 1;
-  padding: 8px 10px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
-  outline: none;
-  font: inherit;
-  color: var(--text);
-}
-
-.inputBar input:focus {
-  border-color: var(--accent);
-}
-
-.inputBar button {
-  padding: 8px 12px;
-  border: 1px solid #ccc;
-  background: #fff;
-  border-radius: 8px;
-  cursor: pointer;
-  font: inherit;
-  color: var(--text);
-}
-
-/* 第 10 步：输入行右侧的小「结束」钮——只是小一号，不改动三栏布局 */
-.inputBar .inputBar__end {
-  padding: 6px 8px;
-  font-size: 12px;
-  color: #6b7280;
-}
+/* .inputBar 旧规则 —— 批次 M-4' 删除：输入栏搬进 design/04-inputbar.css
+   （.inputbar pill 式；.inputBar input / .inputBar button / .inputBar__end
+   四个后代选择器随组件一并消失，见 04-inputbar.css 头注释）。 */
 
 /* ---------- 右栏：只在有任务结果时出现（第 13 步：驾驶台/调试区/浏览器全撤） ---------- */
 .right {

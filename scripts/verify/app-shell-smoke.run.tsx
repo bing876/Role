@@ -188,6 +188,24 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ agent: { id: nid, name: agentCreateCount === 1 ? '新员' : '新员乙', kind: 'worker', deletable: true, canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null, conversationId: 500 + nid, status: 'idle' } });
   }
   if (path === '/agents') return json({ agents: AGENTS });
+  // 批次 M-4' ⑪-2:真发送走 useChat 的 /chat/stream（SSE；帧格式与服务端一字不差）
+  if (path === '/chat/stream') {
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode('data: {"delta":"收到你的招呼，我待命中。"}\n\n'));
+          c.enqueue(enc.encode('event: done\ndata: {"sources": []}\n\n'));
+          c.close();
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  }
+  // 批次 M-4' ⑪-3:「结束」钮的真处理（把这段聊天总结进两层记忆）
+  if (/^\/agents\/\d+\/tidy$/.test(path) && init?.method === 'POST') {
+    return json({ userAdded: 0, projectAdded: 0 });
+  }
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
   // 批次 M-2:第四列触发①需要会话内链接 → 给当前智能体的历史一条带 sources 的助手消息
   if (path === '/chat/history') return json({ conversationId: 501, messages: [
@@ -302,14 +320,14 @@ await check('左侧栏（aside.sidebar）在', () => {
 await check('中列（main.middle）在，且它不是整页唯一内容', () => {
   assert.ok(q('main.middle'), 'main.middle 不见了');
 });
-await check('右列聊天区（.chat）+ 输入条（.inputBar）都在，且都属于 main.middle', () => {
+await check('右列聊天区（.chat）+ 输入条（.inputbar）都在，且都属于 main.middle', () => {
   const chat = q('.chat');
-  const bar = q('.inputBar');
+  const bar = q('.inputbar');
   assert.ok(chat, '.chat 不见了');
-  assert.ok(bar, '.inputBar 不见了');
+  assert.ok(bar, '.inputbar 不见了');
   const middle = q('main.middle') as Element;
   assert.ok(middle.contains(chat as Node), '.chat 不在 main.middle 里');
-  assert.ok(middle.contains(bar as Node), '.inputBar 不在 main.middle 里');
+  assert.ok(middle.contains(bar as Node), '.inputbar 不在 main.middle 里');
 });
 await check('已经越过登录页（不是停在 AuthScreen）', () => {
   assert.ok(!q('.authWrap'), '还停在登录页 —— 说明 /auth/me 没走通');
@@ -771,6 +789,87 @@ await check('⑩-5 样式红线:第一列常驻(无 display:none),选中态真 c
   assert.ok(/\.agent-chip\.selected\s*\{/.test(railAgent), '选中态 .agent-chip.selected 规则缺失');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./07-rail.css') && idx.includes('./12-rail-agent.css'), 'rail CSS 没挂进设计入口');
+});
+
+log('');
+log(`--- ⑪ 输入栏（批次 M-4'）：pill 式输入栏接真会话数据 ---`);
+await check('⑪-1 输入栏:placeholder 由真会话推导,data-state 随真输入迁移', async () => {
+  const bar = q('.inputbar');
+  assert.ok(bar, '缺 .inputbar 输入栏（还是旧 .inputBar?）');
+  assert.ok(!q('.inputBar'), '旧 .inputBar 元素还留在 DOM');
+  assert.equal(bar.getAttribute('data-state'), 'empty', '空输入时 data-state 应为 empty');
+  const field = bar.querySelector('input.inputbar-field');
+  assert.ok(field, '缺 .inputbar-field 输入框');
+  // ⑩-4 快捷新建后当前智能体 = 刚建出来的「新员乙」→ placeholder 必须含
+  // **此刻真当前智能体**的名字（写死「小助」会挂 —— 这正是真数据不是假数据）
+  const ph = field.getAttribute('placeholder') ?? '';
+  assert.ok(ph.includes('新员乙'), `placeholder 没反映当前智能体真名: ${ph}`);
+  await act(async () => {
+    await setTextInput(field, '打个招呼', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const barTyping = q('.inputbar');
+  assert.ok(barTyping, '输入后输入栏不见了');
+  assert.equal(barTyping.getAttribute('data-state'), 'typing', '输入了字 data-state 没到 typing（状态是假的）');
+  assert.equal(field.value, '打个招呼', '输入框没留住打进去的字');
+  await act(async () => {
+    await setTextInput(field, '', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const barEmpty = q('.inputbar');
+  assert.equal(barEmpty?.getAttribute('data-state'), 'empty', '清空后没回到 empty');
+});
+await check('⑪-2 Enter 真发送:走 /chat/stream,助手气泡是流帧回出来的', async () => {
+  const field = q('.inputbar-field');
+  assert.ok(field, '缺输入框');
+  await act(async () => {
+    await setTextInput(field, '打个招呼', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('输入被消费', () => (q('.inputbar-field')?.value ?? '') === '', 60);
+  assert.ok(requestedPaths.includes('/chat/stream'), '没请求 /chat/stream（发送是假的?）');
+  await waitFor('用户气泡', () =>
+    [...document.body.querySelectorAll('.msg')].some((m) => (m.textContent ?? '').includes('打个招呼')),
+    60,
+  );
+  // 助手回复 = SSE 桩推的流帧（真打字机路径,不是渲染时写死）
+  await waitFor('助手流式回复', () =>
+    [...document.body.querySelectorAll('.msg.assistant')].some((m) => (m.textContent ?? '').includes('待命中')),
+    60,
+  );
+});
+await check('⑪-3 结束钮真 tidy:POST /agents/:id/tidy,回执进 chatNote', async () => {
+  const endBtn = q('.inputbar-btn.end');
+  assert.ok(endBtn, '缺「结束」钮');
+  assert.ok((endBtn.getAttribute('title') ?? '').includes('两层记忆'), '结束钮 title 丢失（真功能说明）');
+  // 当前智能体 = 第二列 active 行的 data-agent-id（⑩-4 之后是新建的「新员乙」）
+  const curId = q('.contact-item.active')?.getAttribute('data-agent-id') ?? null;
+  assert.ok(curId, '找不到当前智能体（第二列 active 行缺失）');
+  await act(async () => {
+    click(endBtn, '结束');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('tidy 请求', () => requestedPaths.includes(`/agents/${curId}/tidy`), 60);
+  await waitFor('回执', () => (document.body.textContent ?? '').includes('整理完了'), 60);
+});
+await check('⑪-4 样式红线:规则在 design/ 且已挂入口;旧 .inputBar 规则随组件消失', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '04-inputbar.css'), 'utf8');
+  assert.ok(/\.inputbar\s*\{/.test(css) && /\.inputbar-btn\.send\s*\{/.test(css), '04-inputbar.css 缺 .inputbar / .send 规则');
+  // 常驻件:壳规则不许 display:none（同 ⑩-5 对 .rail 的红线）
+  const barRule = css.match(/\.inputbar\s*\{([^}]*)\}/);
+  assert.ok(barRule, '04-inputbar.css 里找不到 .inputbar 壳规则');
+  assert.ok(!/display\s*:\s*none/.test(barRule[1]), '.inputbar 壳规则里有 display:none（输入栏被藏掉了）');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./04-inputbar.css'), '输入栏 CSS 没挂进设计入口');
+  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+  assert.ok(!/\.inputBar\s*\{/.test(styles), '旧 .inputBar 壳规则还留在 styles.css');
+  assert.ok(!/\.inputBar\s+input\s*\{/.test(styles), '旧后代选择器 .inputBar input 还留在 styles.css（组件已搬走）');
+  assert.ok(!/\.inputBar\s+button\s*\{/.test(styles), '旧后代选择器 .inputBar button 还留在 styles.css（组件已搬走）');
+  assert.ok(!/\.inputBar__end\s*\{/.test(styles), '旧 .inputBar__end 规则还留在 styles.css');
 });
 
 log('');

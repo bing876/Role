@@ -1,0 +1,69 @@
+/* 04-inputbar —— 批次 M-4'：底部输入栏搬入设计基准 workbench-ui。
+   来源：workbench-ui/src/styles/04-inputbar.css（.inputbar 壳 / .inputbar-field /
+   .inputbar-btn.send / data-state 机制），原规则照搬、原注释保留。
+   桌面端适配（基准里的假功能不搬，见用户铁律：假 useState 一律不搬）：
+   ① 基准 absolute 定位（right:183 给 CL 额度环让位）—— 桌面没有 CL 环
+      （CL 额度/模型切换是基准的假数据）→ 输入栏留在 .chat 的 flex 流里
+      （与旧 .inputBar 同一位置），只换视觉；
+   ②  附件钮 + attach-popup（5 个 alert 占位）、语音钮 + voice-bar（无真录音）
+      不搬 —— 不做死按钮；
+   ③ 发送钮：基准是纯图标（sparkle/stop 方块，thinking 态切 stop）——
+      桌面没有真「停止任务」按钮（停 = 输入「停」走 detectStopIntent，
+      是输入内容不是按钮）→ 保留**真文案**（发送 / 发送补充 / 打字中…），
+      data-state 机制照搬（empty/typing/thinking 由真状态推导）;
+   ④ .inputbar-btn.end「结束」钮 = 桌面真功能（结束这轮 → 把聊天总结进
+      两层记忆，POST /agents/:id/tidy），基准没有 → 桌面新增，样式随系统。 */
+
+.inputbar {
+  display: flex; align-items: center;
+  padding: 0 8px;                     /* pill 缘→左端 8px，右端→圆 8px */
+  background: rgba(0, 0, 0, 0.2);
+  box-shadow: 0 2px 2px rgba(255, 255, 255, 0.25);
+  border-radius: 50px;
+  margin: 12px;                       /* 三边统一 12px（基准的 15px 底边是补偿 Figma 白边外发光,流布局不需要） */
+  min-height: 47px;
+  z-index: 2;
+}
+
+/* 输入框（基准 Dictation 字号；margin-left 原是「＋圆到文字 7px」,
+   桌面没有左 ＋ 圆 → 归 0） */
+.inputbar-field {
+  flex: 1 1 auto; min-width: 0; height: 31px;
+  background: transparent; border: 0; outline: none; padding: 0;
+  font-family: inherit;
+  font-style: normal; font-weight: var(--fw-medium); font-size: 17px; line-height: 31px;
+  text-align: left;
+  color: rgba(255, 255, 255, 0.9);
+  -webkit-user-select: text; user-select: text;   /* 输入框显式放行（继承 frame 的 none 会选不中） */
+}
+.inputbar-field::placeholder { color: rgba(255, 255, 255, 0.6); transition: color .15s ease; }
+.inputbar-field:focus::placeholder { color: transparent; }   /* 点击聚焦时占位立刻消失 */
+.inputbar-field:disabled { opacity: 0.6; }
+
+/* 发送钮（基准：36×36 white 0.3 圆；桌面内容是真文案不是 sparkle 图标
+   → min-width 36 胶囊，「发送补充」四字态不挤不折行，记适配） */
+.inputbar-btn.send {
+  flex: 0 0 auto; min-width: 36px; height: 36px; margin-left: auto;
+  background: rgba(255, 255, 255, 0.3); border-radius: 18px;
+  border: 0; cursor: pointer; padding: 0 10px;
+  display: grid; place-items: center; position: relative;
+  color: #fff; font-family: inherit; font-size: 12px; font-weight: var(--fw-medium);
+  line-height: 1.1; text-align: center; white-space: nowrap;
+  transition: background .15s ease, transform .15s ease;
+}
+.inputbar-btn.send:hover { background: rgba(255, 255, 255, 0.4); }
+.inputbar-btn.send:active { transform: scale(0.94); }
+.inputbar-btn.send:disabled { cursor: default; opacity: 0.75; }
+/* thinking（= 桌面真 streaming）：底色提亮（基准同款 0.42） */
+.inputbar[data-state="thinking"] .inputbar-btn.send { background: rgba(255, 255, 255, 0.42); }
+
+/* 「结束」钮（桌面新增：结束这轮 → 总结进两层记忆,真 POST /agents/:id/tidy） */
+.inputbar-btn.end {
+  flex: 0 0 auto; margin-left: 6px;
+  padding: 5px 10px; border: 0; border-radius: 14px;
+  background: transparent; cursor: pointer;
+  color: rgba(255, 255, 255, 0.7); font-family: inherit; font-size: 12px;
+  transition: background .15s ease, transform .12s ease;
+}
+.inputbar-btn.end:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+.inputbar-btn.end:active { transform: scale(0.94); }

@@ -63,7 +63,8 @@
     "verify:build-agent:revert": "python3 scripts/verify/build-agent-revert-proof.py",
     "verify:column:revert": "python3 scripts/verify/browser-column-revert.py",
     "verify:sidebar:revert": "python3 scripts/verify/sidebar-revert-proof.py",
-    "verify:rail:revert": "python3 scripts/verify/rail-revert-proof.py"
+    "verify:rail:revert": "python3 scripts/verify/rail-revert-proof.py",
+    "verify:inputbar:revert": "python3 scripts/verify/inputbar-revert-proof.py"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

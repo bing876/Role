@@ -205,8 +205,8 @@ STATS_JS = r"""
 # 真实打字延迟：逐字写值 → 等 React 提交后那一帧 → 记录耗时
 TYPE_BURST_JS = r"""
 (async () => {
-  const el = document.querySelector('.inputBar input');
-  if (!el) return { err: 'no .inputBar input' };
+  const el = document.querySelector('.inputbar input');
+  if (!el) return { err: 'no .inputbar input' };
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const times = [];
   for (let i = 0; i < %d; i++) {

@@ -5,7 +5,7 @@
   A. localStorage 有没有 token
   B. /auth/me 是不是通的（token 有没有被服务端认）
   C. 界面是登录页还是主界面
-  D. .inputBar input 在不在、React props.value 是什么
+  D. .inputbar input 在不在、React props.value 是什么
   E. 点发送前后 /health 的 llmCalls
 
 关键：**不重启服务端**，看是不是"服务端重启把登录态打没了"。
@@ -134,7 +134,7 @@ for i in range(8):
      return JSON.stringify({
        hasToken: !!tok,
        tokenLen: tok?tok.length:0,
-       hasInputBar: !!document.querySelector('.inputBar input'),
+       hasInputBar: !!document.querySelector('.inputbar input'),
        inputs: Array.from(document.querySelectorAll('input')).map(e=>e.placeholder||''),
        head: (document.body.innerText||'').slice(0,60).replace(/\\n/g,'|')
      });})()
@@ -158,24 +158,24 @@ else:
 
 log("")
 log("=== 3) 如果已在主界面，做一次发送测试 ===")
-if c.js("!!document.querySelector('.inputBar input')"):
+if c.js("!!document.querySelector('.inputbar input')"):
     TASK = "打开 example.com，然后告诉我页面标题是什么"
     h0 = http_get("http://127.0.0.1:8787/health")
     b0 = int((json.loads(h0).get("llmCalls", 0)) if h0.startswith("{") else 0)
-    c.js("document.querySelector('.inputBar input').focus()")
+    c.js("document.querySelector('.inputbar input').focus()")
     c.js(f"""
-    (()=>{{const el=document.querySelector('.inputBar input');
+    (()=>{{const el=document.querySelector('.inputbar input');
      const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
      s.call(el,{json.dumps(TASK)}); el.dispatchEvent(new Event('input',{{bubbles:true}})); return 'SET';}})()
     """)
     time.sleep(0.5)
     log("  React props.value:", c.js("""
-    (()=>{const el=document.querySelector('.inputBar input');
+    (()=>{const el=document.querySelector('.inputbar input');
      const k=Object.keys(el).find(k=>k.startsWith('__reactProps$'));
      return k?el[k].value:'NO_KEY';})()
     """))
     r = c.js("""
-    (()=>{const b=Array.from(document.querySelectorAll('.inputBar button'))
+    (()=>{const b=Array.from(document.querySelectorAll('.inputbar button'))
        .find(x=>/发送/.test(x.innerText||''));
      if(!b) return 'NO_BTN'; if(b.disabled) return 'DISABLED'; b.click(); return 'CLICKED';})()
     """)

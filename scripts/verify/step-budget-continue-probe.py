@@ -408,20 +408,20 @@ def type_and_send(text):
     """
     c = P.Cdp()
     try:
-        c.js("document.querySelector('.inputBar input').focus()")
+        c.js("document.querySelector('.inputbar input').focus()")
         c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  if(!el) return 'NO_INPUT';
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,''); el.dispatchEvent(new Event('input',{bubbles:true})); return 'OK';})()
 """)
         time.sleep(0.3)
         c.send('Input.insertText', text=text)
-        c.js("document.querySelector('.inputBar input').dispatchEvent(new Event('input',{bubbles:true}))")
+        c.js("document.querySelector('.inputbar input').dispatchEvent(new Event('input',{bubbles:true}))")
         time.sleep(0.4)
-        dom_value = c.js("document.querySelector('.inputBar input').value")
+        dom_value = c.js("document.querySelector('.inputbar input').value")
         r = c.js("""
-(()=>{const bs=Array.from(document.querySelectorAll('.inputBar button'));
+(()=>{const bs=Array.from(document.querySelectorAll('.inputbar button'));
  const b=bs.find(x=>/发送/.test(x.innerText||''));
  if(!b) return 'NO_BTN';
  if(b.disabled) return 'DISABLED';

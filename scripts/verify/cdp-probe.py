@@ -323,14 +323,14 @@ if __name__ == '__main__':
         text = sys.argv[2]
         ok = False
         for attempt in range(4):
-            c.click_rect('.inputBar input')
+            c.click_rect('.inputbar input')
             time.sleep(0.3)
             tag = c.js('document.activeElement ? document.activeElement.tagName : ""')
             if tag != 'INPUT':
-                c.js("document.querySelector('.inputBar input').focus()")
+                c.js("document.querySelector('.inputbar input').focus()")
                 time.sleep(0.2)
             c.type_text(text)
-            val = c.js("document.querySelector('.inputBar input').value")
+            val = c.js("document.querySelector('.inputbar input').value")
             if val == text:
                 ok = True
                 break
@@ -338,7 +338,7 @@ if __name__ == '__main__':
         if not ok:
             print('SEND_ABORT: 输入框内容不等于期望文本')
             sys.exit(1)
-        print(c.js("(() => { const b=document.querySelector('.inputBar button');"
+        print(c.js("(() => { const b=document.querySelector('.inputbar button');"
                    " if(!b) return 'NO_SEND_BTN'; b.click(); return 'sent:'+b.textContent; })()"))
         prev = None
         same = 0

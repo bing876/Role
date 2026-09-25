@@ -303,7 +303,7 @@ def wait_input_ready(timeout=45):
     """输入框在 streaming 时是 disabled 的（React 的 disabled={streaming}）——
     不等它可用就打字，字会打在沙箱里，然后「发出去」的消息是空的。"""
     ok, _, dt = wait_until(
-        lambda: not ev("(() => { const b = document.querySelector('.inputBar button');"
+        lambda: not ev("(() => { const b = document.querySelector('.inputbar button');"
                        " return b ? b.disabled : true; })()"),
         timeout=timeout, interval=0.4)
     return ok, dt
@@ -312,8 +312,8 @@ def wait_input_ready(timeout=45):
 def say(text, settle=1.4):
     """在聊天输入框里**真敲**一句话并点发送；返回实测值，证据里能看到到底发出去的是什么。"""
     ready, dt = wait_input_ready()
-    typed = type_into('.inputBar input', text)
-    hit, geom = click_checked_soft('.inputBar button', settle=settle)
+    typed = type_into('.inputbar input', text)
+    hit, geom = click_checked_soft('.inputbar button', settle=settle)
     return {'ready': ready, 'readyMs': dt, 'typed': typed, 'typedOk': typed == text, 'sendHit': hit,
             'geom': geom}
 
