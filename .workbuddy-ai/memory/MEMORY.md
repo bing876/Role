@@ -20,10 +20,13 @@
 
 ## 一、架构边界（改哪层 → 怎么生效）
 三进程：Electron 桌面端 + Fastify(8787) + PG(5432)。桌面端**不打包服务端**。
-- 服务端 `apps/server/src/**` 热重载；验收跑 `dist/index.js` ⇒ 先 `npm run build -w @ai-workbench/server`
-- 渲染层 `apps/desktop/src/**` vite 热更；换装 `npm run build -w @ai-workbench/desktop`
+- 服务端 `apps/server/src/**`：★ **不是热重载**（桌面端起的是构建产物）⇒ 先 `npm run build -w @ai-workbench/server`
+- ★★ **服务端可「免重启热换」**：重建 dist 后 `taskkill /F /PID <8787 上的旧服务端>`，
+  桌面端 `main.ts` 的 **10 秒保活心跳**会自动从新 dist 重拉一个（实测第 10 秒接管、`/health` 立刻 `db=up`）。
+  8787 上的服务端进程名是 **`electron.exe`**（桌面端的 utilityProcess child）⇒ **不用关桌面端、不用重跑 `npm run dev`**
+- 渲染层 `apps/desktop/src/**` vite 热更（直接从磁盘读，新增/删除文件都能跟上）；换装 `npm run build -w @ai-workbench/desktop`
 - 主进程 `apps/desktop/electron/**` **必须** `npm run build:electron`
-- 判 8787 是不是新代码：看 `/health` 有没有新字段
+- 判 8787 是不是新代码：看进程**启动时间**是否晚于 dist 构建时间 + 直接在 dist 上跑一段新逻辑（比看 `/health` 字段可靠）
 - 服务端**不在 asar 里**（桌面端从 `repoRoot/apps/server/dist/index.js` 拉起）⇒ 服务端改动与换装无关
 
 ## 二、★★ 环境与数据库
