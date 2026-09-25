@@ -39,7 +39,19 @@ function check(id: string, fn: () => void): void {
     console.log(`  ✗ ${id}\n      ${msg.split('\n').slice(0, 3).join('\n      ')}`);
   }
 }
-const read = (p: string): string => readFileSync(p, 'utf8');
+/**
+ * ★ 读文件时**必须先归一 CRLF → LF**（2026-09-25 修）。
+ *
+ * 本仓 `core.autocrlf=true` 且根目录没有 `.gitattributes` ⇒ 工作区里**同一个仓库的两份文件
+ * 可能行尾不同**：经 checkout/merge 落盘的是 CRLF，而由工具直接写出的仍是 LF。
+ * 于是「拿两边原始字节比对」的判定会**假红**，且只在 Windows 上出现、在 LF 检出上永远绿
+ * —— 最坏的一种测试：本机红、CI 绿，让人怀疑代码而不是怀疑测试。
+ *
+ * 实测：归一前 02-base / 99-theme 两条 FAIL；归一后两条 PASS，代码零改动。
+ * 另外 `theme.slice(0, iT).replace(/\n$/, '')` 这类「只剥一个 \n」的写法在 CRLF 下会
+ * **留下一个孤立的 `\r`**，所以归一必须在这里做，不能靠各判定自己补。
+ */
+const read = (p: string): string => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 const assert = (cond: unknown, msg: string): asserts cond => {
   if (!cond) throw new Error(msg);
 };
