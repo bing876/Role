@@ -66,6 +66,7 @@ import {
 import type { BrowserWorkspace, ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
 import { useBrowserGlue } from './app/browserGlue';
+import { useBrowserColumn } from './app/useBrowserColumn';
 import { useProjects } from './features/projects';
 import { useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
@@ -1508,6 +1509,20 @@ export default function App() {
   } = useBrowserGlue({ browser, curAgentId, onNote: setChatNote });
 
   /**
+   * 批次 M-2 · 第四列(浏览器区):隐藏 / 第四列 / 覆盖(盖聊天、可拖到全宽)三形态。
+   * 状态与交互在 app/useBrowserColumn.ts(左缘拖动 / 阈值 / 记忆宽度);
+   * browser/ 的 view 三态原样驱动(showFullscreen ↔ 列可见, exitFullscreen ↔ 列隐藏)。
+   */
+  const col = useBrowserColumn();
+
+  /** 第四列触发 ①:点会话内链接/HTML 卡片 → 内嵌浏览器打开 + 列弹出 */
+  const openInBrowser = (url: string): void => {
+    const agentId = curAgentRef.current;
+    if (agentId !== null) void browser.openUrl(agentId, url);
+    col.openColumn();
+  };
+
+  /**
    * 收尾 7 | 读回这个智能体自己存的可见度档位（切换智能体 / 登录态变化时各读一次）。
    *
    * ★ 读不到（未登录、网络、老后端没这条路由）就**保持当前档位不动**，绝不回落成 `status` 再写回去 ——
@@ -1522,7 +1537,10 @@ export default function App() {
       if (off || !v) return;
       // 读回来的档位如果是「接管」，也要把浏览器前置 —— 否则重开应用后档位说是接管、页却在后台
       setComputerVisibility(v);
-      if (v === 'takeover') browser.showFullscreen();
+      if (v === 'takeover') {
+        browser.showFullscreen();
+        col.openColumn();
+      }
     });
     return () => { off = true; };
     // browser.showFullscreen 是 hook 里的稳定回调；这里只按「换人 / 换登录态」重读
@@ -1538,7 +1556,10 @@ export default function App() {
    */
   const onChangeComputerVisibility = (v: ComputerVisibilityLevel): void => {
     setComputerVisibility(v);
-    if (v !== 'status') browser.showFullscreen();
+    if (v !== 'status') {
+      browser.showFullscreen();
+      col.openColumn();
+    }
     const agentId = curAgentId;
     const token = session?.token ?? null;
     if (!agentId || !token) return;
@@ -1905,7 +1926,11 @@ export default function App() {
   const curConfirmed = curAgentId !== null && Boolean(lastUserWasOpenRef.current[curAgentId]);
 
   return (
-    <div className="app">
+    <div
+      className={col.colOpen && browser.view === 'fullscreen' && col.colMode === 'column' ? 'app app--col' : 'app'}
+      ref={col.frameRef}
+      style={{ '--browser-w': `${col.colWidth}px` } as React.CSSProperties}
+    >
       {/*
         左侧：**智能体列表**（自带「小助」+ 用户点「添加」建的）。
         第 15 步起这里不再是一个写死的联系人——一个智能体一行，点一行就换一份聊天。
@@ -2253,23 +2278,27 @@ export default function App() {
           <div className="workbenchNav__views">
             <button
               type="button"
-              className={`workbenchNav__btn ${browser.view !== 'fullscreen' ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => browser.exitFullscreen()}
+              className={`workbenchNav__btn workbenchNav__btn--chat ${!col.colOpen || browser.view !== 'fullscreen' ? 'workbenchNav__btn--active' : ''}`}
+              onClick={() => {
+                browser.exitFullscreen();
+                col.hideColumn();
+              }}
             >
               💬 对话
             </button>
             <button
               type="button"
-              className={`workbenchNav__btn ${browser.view === 'fullscreen' ? 'workbenchNav__btn--active' : ''}`}
+              className={`workbenchNav__btn workbenchNav__btn--browser ${browser.view === 'fullscreen' && col.colOpen ? 'workbenchNav__btn--active' : ''}`}
               onClick={() => {
                 if (browser.tabs.length === 0) {
                   browser.openNewTab();
                 }
                 browser.showFullscreen();
+                col.openColumn();
               }}
-              title="切换到内嵌浏览器工作台（没有标签页时自动打开主页）"
+              title="启用内嵌浏览器工作台（没有标签页时自动打开主页）"
             >
-              🌐 浏览器
+              🌐 启用
               {browser.tabCount > 0 && <span className="workbenchNav__badge">{browser.tabCount}</span>}
               {browser.drivingIds.length > 0 && <span className="workbenchNav__driving" title="AI 正在操作网页" />}
             </button>
@@ -2341,80 +2370,6 @@ export default function App() {
           </div>
         )}
 
-        {browser.allTabs.length > 0 && (
-          <div
-            className={
-              // 第 27 步：第三种态 —— 求助卡模式（层透明、只露出求助的那一张页）
-              browser.view === 'embed'
-                ? 'browserLayer browserLayer--embed'
-                : browser.view === 'fullscreen'
-                  ? 'browserLayer'
-                  : 'browserLayer browserLayer--bg'
-            }
-          >
-            {/*
-              阶段简报 · 方案 B：**临时测试条**（本阶段只用临时按钮，正式 UI 不在本阶段做）。
-              作用对象是「当前切到前面的那张页」（按钮点名它的 wcId），
-              所以暂停这一路 = 只停这一路，别的页、别的智能体照跑。
-            */}
-            {loopGone && (
-                <div className="loopGone">
-                  <span className="loopGone__q">{loopGone.question}</span>
-                  <button className="btn loopGone__warn" type="button" onClick={() => answerLoopGone('restart')}>
-                    重新开始
-                  </button>
-                  <button className="btn loopGone__giveup" type="button" onClick={() => answerLoopGone('giveup')}>
-                    算了
-                  </button>
-                </div>
-              )}
-            {/*
-              收尾 7 | 批次 H 的三级可见度**第一次真的渲染出来**（以前只 export 没人用）。
-
-              ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
-                children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
-                驾驶的点击坐标也全废（`styles.css` 里 `.browserLayer--bg` 的注释写的就是这个坑）。
-                组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
-              ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
-            */}
-            <ComputerVisibility
-              agentId={curAgentId}
-              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
-              statusDetail={visAgent?.statusDetail ?? null}
-              step={visAgent?.statusStep ?? null}
-              currentTool={visLastStep}
-              pageSummary={visPage}
-              visibility={computerVisibility}
-              onChange={onChangeComputerVisibility}
-              apiBase={API_BASE()}
-              token={session?.token ?? null}
-            />
-            <BrowserPanel
-              ws={browser}
-              agentLabel={agents.find((a) => a.id === curAgentId)?.name}
-              /*
-               * 第 27 步：求助卡模式下的几何（wcId + 那块"窗口"的位置）。
-               * 非 embed 态时 wcId 为 null，面板会完全按老逻辑渲染 —— 零影响。
-               */
-              embed={{ wcId: browser.embedWcId, rect: embedRect }}
-            />
-          </div>
-        )}
-        {/*
-          第 25 步：**后台运行小图标**。
-          只在「有页 + 用户已退出全屏」时出现 —— 点它回到全屏，看到实时执行状态。
-          它只是个视图开关，跟任务执行毫无耦合（点了不 start / 不 resume / 不改 sleep）。
-        */}
-        {browser.allTabs.length > 0 && browser.view === 'background' && (
-          <button
-            type="button"
-            className="browserFloating"
-            title="浏览器正在后台运行（任务没有中断）。点这里回到全屏"
-            onClick={() => browser.showFullscreen()}
-          >
-            <span aria-hidden="true">🌐</span> 浏览器后台运行中
-          </button>
-        )}
         <div className="chat">
           {/*
             任务进行中明确状态指示：贯穿前后端状态机
@@ -2521,6 +2476,7 @@ export default function App() {
                       browser.openNewTab();
                     }
                     browser.showFullscreen();
+                    col.openColumn();
                   }}
                 >
                   🌐 立即打开内嵌浏览器
@@ -2618,6 +2574,11 @@ export default function App() {
                         target="_blank"
                         rel="noreferrer noopener"
                         title={src.url}
+                        onClick={(e) => {
+                          // 批次 M-2 · 第四列触发①:会话内链接在**内嵌浏览器**打开(不再跳系统浏览器)
+                          e.preventDefault();
+                          openInBrowser(src.url);
+                        }}
                       >
                         <span className="sources__title">{src.title}</span>
                         <span className="sources__domain">{src.domain}</span>
@@ -2736,6 +2697,89 @@ export default function App() {
           </button>
         </div>
       </main>
+      {/*
+        批次 M-2 · **第四列(浏览器区)** —— 用户 2026-09-25 定稿:
+        三形态 隐藏 / 第四列 / 覆盖(盖聊天、可拖到全宽),状态与交互在 app/useBrowserColumn。
+
+        ★ 有活页时层**恒挂载**(有意卸载路径只有一条:allTabs 归零,见 M0 冒烟网);
+          隐藏态 = transform 移出视野 —— **绝不 display:none、绝不尺寸归零、绝不卸载**:
+          驾驶点击坐标依赖 webview 的真实几何,归零坐标全废(同 .browserLayer 旧注释的红线)。
+        ★ 与 main.middle 是兄弟(不再嵌在中列里)—— 祖先链有意变更,M0 golden 已按
+          `--update-golden` 显式更新;节点身份与「不许卸载」的规矩照旧由冒烟网钉住。
+        ★ embed(求助卡)态与本三态正交:几何由 HelpCard 每帧量、BrowserPanel 写进 webview
+          内联样式,舞台移动后相对量自动跟上(影子层机制自适配)。
+      */}
+      {browser.allTabs.length > 0 && (
+        <div
+          className={
+            // 可见性 = colOpen(外壳侧) 且 view==='fullscreen'(browser/ 内部态):
+            // 面板自己的「退出全屏」按钮走 view→background,同样把列收走 —— 两条路同归隐藏,不绕状态。
+            browser.view === 'embed'
+              ? 'browserLayer browserLayer--embed'
+              : col.colOpen && browser.view === 'fullscreen'
+                ? col.layerClass
+                : 'browserLayer browserLayer--hidden'
+          }
+        >
+          {col.colOpen && browser.view !== 'embed' && (
+            <div
+              className="browserCol__resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖动调整浏览器列宽(向左拖宽,过阈值变覆盖;向右收回)"
+              onPointerDown={col.onResizerPointerDown}
+              onPointerMove={col.onResizerPointerMove}
+              onPointerUp={col.onResizerPointerUp}
+              onPointerCancel={col.onResizerPointerUp}
+            />
+          )}
+            {/*
+              阶段简报 · 方案 B：**临时测试条**（本阶段只用临时按钮，正式 UI 不在本阶段做）。
+              作用对象是「当前切到前面的那张页」（按钮点名它的 wcId），
+              所以暂停这一路 = 只停这一路，别的页、别的智能体照跑。
+            */}
+            {loopGone && (
+                <div className="loopGone">
+                  <span className="loopGone__q">{loopGone.question}</span>
+                  <button className="btn loopGone__warn" type="button" onClick={() => answerLoopGone('restart')}>
+                    重新开始
+                  </button>
+                  <button className="btn loopGone__giveup" type="button" onClick={() => answerLoopGone('giveup')}>
+                    算了
+                  </button>
+                </div>
+              )}
+            {/*
+              收尾 7 | 批次 H 的三级可见度**第一次真的渲染出来**（以前只 export 没人用）。
+
+              ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
+                children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
+                驾驶的点击坐标也全废（`styles.css` 里 `.browserLayer--bg` 的注释写的就是这个坑）。
+                组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
+              ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
+            */}
+            <ComputerVisibility
+              agentId={curAgentId}
+              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
+              statusDetail={visAgent?.statusDetail ?? null}
+              step={visAgent?.statusStep ?? null}
+              currentTool={visLastStep}
+              pageSummary={visPage}
+              visibility={computerVisibility}
+              onChange={onChangeComputerVisibility}
+              apiBase={API_BASE()}
+              token={session?.token ?? null}
+            />
+            <BrowserPanel
+              ws={browser}
+              agentLabel={agents.find((a) => a.id === curAgentId)?.name}
+              /*
+               * 第 27 步：求助卡模式下的几何（wcId + 那块"窗口"的位置）。
+               * 非 embed 态时 wcId 为 null，面板会完全按老逻辑渲染 —— 零影响。
+               */
+              embed={{ wcId: browser.embedWcId, rect: embedRect }}
+            />        </div>
+      )}
 
       {/*
         第 13/17 步：右栏整个撤掉 —— 驾驶台、调试区、**任务卡**一律不画。

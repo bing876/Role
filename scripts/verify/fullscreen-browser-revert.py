@@ -34,10 +34,10 @@ PANEL = os.path.join(REPO, 'apps', 'desktop', 'src', 'browser', 'BrowserPanel.ts
 # 每个缺陷：名字 / 文件 / 原文 / 改坏后 / 期望变红的断言关键字
 DEFECTS = [
     {
-        'name': '① 后台态改用 display:none（webview 尺寸归零 → 驾驶坐标失效）',
+        'name': '① 隐藏态改用 display:none（webview 尺寸归零 → 驾驶坐标失效）（批次 M-2:--bg → --hidden）',
         'file': STYLES,
-        'old': '.browserLayer--bg {\n  opacity: 0;\n  pointer-events: none;\n  z-index: 0;\n}',
-        'new': '.browserLayer--bg {\n  display: none;\n  opacity: 0;\n  pointer-events: none;\n  z-index: 0;\n}',
+        'old': '.browserLayer--hidden {\n  transform: translateX(calc(100% + 16px));\n  pointer-events: none;\n  z-index: 0;\n  border-left: none;\n}',
+        'new': '.browserLayer--hidden {\n  display: none;\n  transform: translateX(calc(100% + 16px));\n  pointer-events: none;\n  z-index: 0;\n  border-left: none;\n}',
         'expect': ['退出后 webview 尺寸', '仍非零尺寸'],
     },
     {
@@ -52,7 +52,7 @@ DEFECTS = [
                    '任务继续完成了后续真点击'],
     },
     {
-        'name': '③ 小图标点了回不去（重新展开失效）',
+        'name': '③ 「启用」点了回不去（重新展开失效）（批次 M-2:小图标 → 启用钮）',
         'file': WS,
         'old': "  const showFullscreen = (): void => setView('fullscreen');",
         'new': ("  const showFullscreen = (): void => {\n"

@@ -183,7 +183,10 @@ globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
   if (path === '/projects') return json({ projects: [PROJECT], currentProjectId: 7 });
   if (path === '/agents') return json({ agents: AGENTS });
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
-  if (path === '/chat/history') return json({ conversationId: 501, messages: [] });
+  // 批次 M-2:第四列触发①需要会话内链接 → 给当前智能体的历史一条带 sources 的助手消息
+  if (path === '/chat/history') return json({ conversationId: 501, messages: [
+    { id: 5011, role: 'assistant', text: '这是从网页查到的回答。', sources: [{ title: '示例文章', url: 'https://example.com/article', domain: 'example.com' }] },
+  ] });
   if (path === '/memory/user' || path.startsWith('/agents/') && path.endsWith('/memory')) return json({ items: [] });
   if (path === '/memories') return json({ items: [], pending: [] });
   if (path === '/knowledge') return json({ documents: [] });
@@ -328,10 +331,15 @@ await act(async () => {
 await check('open 事件被 App 接住并开出页', () => {
   assert.equal(opened, 1, 'bridge.on("open") 没注册处理函数');
 });
-await check('.browserLayer 出现，且它是 main.middle 的孩子', async () => {
+await check('.browserLayer 出现，且它是 div.app 的孩子（第四列，与 main 并列）', async () => {
   await waitFor('.browserLayer 出现', () => q('.browserLayer') !== null);
   const layer = q('.browserLayer') as Element;
-  assert.equal(layer.parentElement?.tagName.toLowerCase(), 'main', `.browserLayer 的父节点不是 main（是 ${layer.parentElement?.tagName}）`);
+  const parent = layer.parentElement;
+  assert.ok(parent, '.browserLayer 没有父节点');
+  assert.ok(
+    parent!.getAttribute('class')?.includes('app') ?? false,
+    `.browserLayer 的父节点不是 div.app（是 ${parent!.tagName}.${parent!.getAttribute('class')}）—— 第四列必须挂在外壳根上`,
+  );
 });
 await check('BrowserPanel 与 ComputerVisibility 都在浏览器层里，且互为**兄弟**', () => {
   const layer = q('.browserLayer') as Element;
@@ -421,7 +429,7 @@ await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', as
   });
   await flush(2);
   // 只看「对话 / 浏览器」两颗（顶栏还可能有「编辑人设」等按钮，点它们会开弹窗，与视图无关）
-  const btns = qa('.workbenchNav__btn').filter((b) => /对话|浏览器/.test(b.textContent ?? ''));
+  const btns = qa('.workbenchNav__btn').filter((b) => /对话|启用/.test(b.textContent ?? ''));
   assert.equal(btns.length, 2, `顶栏视图按钮不是 2 颗（${btns.length} 颗）`);
   let viewChanges = 0;
   for (const b of btns) {
@@ -438,10 +446,14 @@ await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', as
   const seen = q('.browserLayer')?.getAttribute('class') ?? '';
   assert.ok(/browserLayer/.test(seen), `层的 class 读不到：${seen}`);
 });
-await check('视图切换前后，.browserLayer 的 class 始终在文档化的三态里', () => {
-  const ALLOWED = new Set(['browserLayer', 'browserLayer browserLayer--bg', 'browserLayer browserLayer--embed']);
-  const cls = q('.browserLayer')?.getAttribute('class') ?? '';
-  assert.ok(ALLOWED.has(cls), `出现了计划外的层 class：${JSON.stringify(cls)}（要么改了可见度机制，要么在层上加样式捷径）`);
+await check('视图切换前后，.browserLayer 的 class 始终在文档化的形态里', () => {
+  // 批次 M-2:三形态 隐藏/第四列/覆盖 + 正交的 embed + 拖动态 —— 全部是有文档的修饰符
+  const ALLOWED_TOKENS = new Set(['browserLayer', 'browserLayer--hidden', 'browserLayer--overlay', 'browserLayer--dragging', 'browserLayer--embed']);
+  const cls = (q('.browserLayer')?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+  assert.ok(cls.length >= 1 && cls[0] === 'browserLayer', `层 class 必须以 browserLayer 开头：${JSON.stringify(cls)}`);
+  for (const t of cls) {
+    assert.ok(ALLOWED_TOKENS.has(t), `出现了计划外的层 class token：${JSON.stringify(t)}（要么改了可见度机制，要么在层上加样式捷径）`);
+  }
 });
 
 await check('切智能体（换一个人）不换 webview 元素', async () => {
@@ -458,23 +470,125 @@ await check('切智能体（换一个人）不换 webview 元素', async () => {
 });
 
 log('');
-log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
-await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
-  // 上一段把当前智能体切走了（那张页属于第一个智能体），先切回去 —— 顶栏只列当前智能体的 tab
-  const first = qa('aside.sidebar .contact')[0];
+log('--- ⑧ 第四列（批次 M-2）：过阈值变覆盖 / 收回 / 隐藏≠卸载 / 会话内链接触发 / 记忆宽度 ---');
+
+const firePointer = (el: Element | null, type: string, x: number): void => {
+  assert.ok(el, `拖动手柄不见了（${type}）`);
+  el!.dispatchEvent(new dom.window.PointerEvent(type, { bubbles: true, cancelable: true, clientX: x }));
+};
+
+await check('⑧-1 第四列可见时,左缘有拖动手柄', () => {
+  assert.ok(q('.browserCol__resizer'), '第四列可见但 .browserCol__resizer 不在');
+});
+
+await check('⑧-2 向左连续拖宽、过阈值 → 覆盖形态（盖聊天、聊天列不让位、webview 同一元素）', async () => {
+  const before = q('webview') as Element;
   await act(async () => {
-    click(first, '切回第一个智能体');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    firePointer(q('.browserCol__resizer'), 'pointerdown', 500);
+    firePointer(q('.browserCol__resizer'), 'pointermove', 100); // 420 + 400 = 820 → 夹到 640 ≥ 阈值 480
+    firePointer(q('.browserCol__resizer'), 'pointerup', 100);
+  });
+  await flush(2);
+  const l = q('.browserLayer') as Element;
+  const cls = l.getAttribute('class') ?? '';
+  assert.ok(cls.includes('browserLayer--overlay'), `拖过阈值应进覆盖形态：${cls}`);
+  const appCls = (q('div.app') as Element).getAttribute('class') ?? '';
+  assert.ok(!appCls.includes('app--col'), `覆盖形态下聊天列不该让位（应全宽被盖）：${appCls}`);
+  assert.ok(before === q('webview'), '拖宽把 <webview> 换成了新元素');
+});
+
+await check('⑧-3 向右收回（回阈值以下）→ 第四列形态,聊天列让位回来', async () => {
+  const before = q('webview') as Element;
+  await act(async () => {
+    firePointer(q('.browserCol__resizer'), 'pointerdown', 100);
+    firePointer(q('.browserCol__resizer'), 'pointermove', 400); // 640 - 300 = 340 ≥ MIN 320、< 阈值 480
+    firePointer(q('.browserCol__resizer'), 'pointerup', 400);
+  });
+  await flush(2);
+  const cls = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(!cls.includes('browserLayer--overlay'), `收回后不该还是覆盖：${cls}`);
+  assert.ok(!cls.includes('browserLayer--hidden'), `收回后应在第四列形态：${cls}`);
+  const appCls = (q('div.app') as Element).getAttribute('class') ?? '';
+  assert.ok(appCls.includes('app--col'), `第四列形态下聊天列应让位（app--col 缺失）：${appCls}`);
+  assert.ok(before === q('webview'), '收回把 <webview> 换成了新元素');
+});
+
+await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏≠卸载）;「🌐 启用」→ 列回来', async () => {
+  const navBtns = qa('.workbenchNav__btn').filter((b) => /对话|启用/.test(b.textContent ?? ''));
+  await act(async () => {
+    click(navBtns[0], '💬 对话');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const clsHidden = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(clsHidden.includes('browserLayer--hidden'), `「💬 对话」后应进隐藏形态：${clsHidden}`);
+  const wv = q('webview') as Element;
+  assert.ok(doc.contains(wv), '隐藏形态下 <webview> 被卸载了（违反 隐藏≠卸载）');
+  await act(async () => {
+    click(navBtns[1], '🌐 启用');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const clsOpen = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(!clsOpen.includes('browserLayer--hidden'), `「🌐 启用」后列应打开：${clsOpen}`);
+});
+
+await check('⑧-5 触发①:点会话内链接（来源）→ 列从隐藏弹出（内嵌浏览器打开）', async () => {
+  const navBtns = qa('.workbenchNav__btn').filter((b) => /对话|启用/.test(b.textContent ?? ''));
+  await act(async () => {
+    click(navBtns[0], '💬 对话');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(((q('.browserLayer') as Element).getAttribute('class') ?? '').includes('browserLayer--hidden'), '前置:应先隐藏');
+  const link = q('.sources__item') as Element;
+  assert.ok(link, '会话内来源链接不在（/chat/history 夹具没生效?）');
+  await act(async () => {
+    click(link, '会话内链接');
+    await new Promise((r) => setTimeout(r, 0));
   });
   await flush(3);
-  const closeBtns = qa('.browserTab__x');
-  assert.ok(closeBtns.length >= 1, '没有关页按钮（browserTab__x）');
-  for (const b of closeBtns) {
+  const cls = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(!cls.includes('browserLayer--hidden'), `点链接后列应弹出：${cls}`);
+});
+
+await check('⑧-6 宽度记忆上次值（localStorage workbench.browserCol 有合法宽度）', () => {
+  const raw = dom.window.localStorage.getItem('workbench.browserCol');
+  assert.ok(raw !== null, 'localStorage 里没有 workbench.browserCol（记忆宽度没落地）');
+  const v = Number(raw);
+  assert.ok(Number.isFinite(v) && v >= 320, `记忆值不像合法宽度:${raw}`);
+});
+
+await check('⑧-7 样式红线:--hidden 规则用 transform 移出视野（不是 display:none）', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+  const m = css.match(/\.browserLayer--hidden\s*\{([^}]*)\}/);
+  assert.ok(m, 'styles.css 里找不到 .browserLayer--hidden 规则');
+  assert.ok(/transform\s*:\s*translateX/.test(m![1]), '隐藏态必须用 transform 移出视野');
+  assert.ok(!/display\s*:\s*none/.test(m![1]), '隐藏态绝不允许 display:none');
+});
+
+log('');
+log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
+await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
+  // 批次 M-2:tab 可能分布在多个智能体名下（⑧ 在会话里点链接开的页属于当时的智能体），
+  // 顶栏只列**当前**智能体的 tab → 轮转每个智能体把可见 tab 关光,直到层消失。
+  const contacts = qa('aside.sidebar .contact');
+  assert.ok(contacts.length >= 1, '没有可切的智能体行');
+  for (let round = 0; round < contacts.length + 1 && q('.browserLayer') !== null; round++) {
     await act(async () => {
-      click(b, '关页');
+      click(contacts[round % contacts.length], '切智能体');
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await flush(2);
+    const closeBtns = qa('.browserTab__x');
+    assert.ok(closeBtns.length >= 1, '没有关页按钮（browserTab__x）');
+    for (const b of closeBtns) {
+      await act(async () => {
+        click(b, '关页');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await flush(2);
+    }
   }
   await waitFor('浏览器层消失', () => q('.browserLayer') === null && q('webview') === null);
   assert.ok(q('webview') === null, `<webview> 应该随最后一张页一起卸载（还有 ${qa('webview').length} 个）`);

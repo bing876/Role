@@ -197,9 +197,16 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  /* 第 25 步：浏览器全屏层（.browserLayer）用绝对定位铺满这里，所以要定位上下文 */
+  /* 批次 M-2：浏览器层改成第四列（.app 的兄弟绝对定位），中列自己就是定位上下文 */
   position: relative;
   overflow: hidden;
+  /* 第四列让位动画：列宽变化时聊天列平滑收放（与层的 width/transform 同一组过渡） */
+  transition: margin-right 240ms ease;
+}
+
+/* 第四列「column 形态」时聊天列让出列宽（overlay/隐藏 时全宽）—— 变量由 div.app 内联写 */
+.app--col .middle {
+  margin-right: var(--browser-w, 420px);
 }
 
 /*
@@ -214,36 +221,69 @@ body {
   z-index: 10;
 }
 
-/* 浏览器层：铺满中栏会话区（位于顶栏下方，左栏与顶栏照旧可见可点） */
+/*
+ * 批次 M-2 · 第四列（浏览器区）—— 用户 2026-09-25 定稿：
+ * 三形态 隐藏 / 第四列 / 覆盖（盖聊天、可拖到全宽）+ 正交的 embed（求助卡）态。
+ * 列宽 = --browser-w（div.app 内联写，记忆上次宽度，见 app/useBrowserColumn）。
+ */
 .browserLayer {
   position: absolute;
-  top: 45px;
+  top: 0;
   bottom: 0;
-  left: 0;
   right: 0;
+  width: var(--browser-w, 420px);
   z-index: 20;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  border-left: 1px solid var(--border);
+  /* 滑动动画（用户定稿）；拖动时 --dragging 关掉过渡 1:1 跟手 */
+  transition: width 200ms ease, transform 240ms ease;
 }
 
 /*
- * ★★ 退出全屏 = 后台运行。这是本步最关键的一条 CSS，改之前先读懂：
+ * ★★ 隐藏 = transform 移出视野。这是第四列最关键的一条 CSS，改之前先读懂：
  *
- *   只用 opacity + pointer-events 让它"看不见、点不到"，
  *   **绝不 display:none、绝不把 width/height 设成 0、绝不卸载**。
  *
  *   原因（侦查阶段已证实）：驾驶（AI 操作内嵌页）的点击坐标来自
  *   页内 `getBoundingClientRect`，一旦 webview 尺寸归零，所有坐标都算不出来，
- *   点击会静默失败。所以后台态必须保持**与全屏时完全相同的真实尺寸与挂载状态**。
+ *   点击会静默失败。所以隐藏态必须保持**与列形态完全相同的真实尺寸与挂载状态**，
+ *   只是被整体平移出视野（transform 不改变元素的布局尺寸）。
  *
  *   本目录里 .browserPanel__view--off（别的智能体的页）用的是同一套机制，
  *   那边同样"看不见但照样跑"，已经过验收。
  */
-.browserLayer--bg {
-  opacity: 0;
+.browserLayer--hidden {
+  transform: translateX(calc(100% + 16px));
   pointer-events: none;
   z-index: 0;
+  border-left: none;
+}
+
+/* 覆盖形态：盖聊天（可拖到全宽）—— 聊天列此时不让位（margin-right 为 0） */
+.browserLayer--overlay {
+  z-index: 40;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.14);
+}
+
+/* 拖动中：关过渡，1:1 跟手 */
+.browserLayer--dragging {
+  transition: none;
+}
+
+/* 左缘拖动手柄（向左拖宽、过阈值变覆盖；向右收回）—— 只画在可见列上 */
+.browserCol__resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 21;
+}
+.browserCol__resizer:hover {
+  background: rgba(47, 111, 237, 0.18);
 }
 
 /*
@@ -257,16 +297,13 @@ body {
  *     ② `opacity:0` 会把整层连同那张页一起藏掉，正好把要露的那张也藏了。
  *
  *   所以 embed 是**独立一态**：层透明 + 不吃指针事件（页自己再打开 pointer-events），
- *   z-index 抬到聊天之上，但底下的聊天照常可读、可滚、可点。
+ *   但底下的聊天照常可读、可滚、可点。批次 M-2 起 z-index 抬到第四列之上。
  */
 .browserLayer--embed {
   background: transparent;
   pointer-events: none;
   z-index: 30;
-}
-/* 求助卡模式下"临时测试条"让位（它属于全屏工作区，此时用户看的是聊天卡片） */
-.browserLayer--embed .driveBar {
-  display: none;
+  border-left: none;
 }
 
 /*
@@ -308,29 +345,6 @@ body {
   color: var(--text-weak);
   background: #f1efe8;
   border: 1px solid #e2e2e4;
-}
-
-/* 后台运行小图标（右下角，浮在最上层；只提示"有浏览器在后台跑"，不挡操作） */
-.browserFloating {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 13px;
-  font: inherit;
-  font-size: 12.5px;
-  color: #fff;
-  background: #2f6feb;
-  border: none;
-  border-radius: 999px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
-  cursor: pointer;
-}
-.browserFloating:hover {
-  background: #245bd0;
 }
 
 .chat {
