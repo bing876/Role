@@ -34,7 +34,7 @@
     "verify:batches": "node scripts/verify/handoff-structured.mjs && node scripts/verify/whiteboard.mjs && node scripts/verify/routing-upgrade.mjs && node scripts/verify/restart-recovery.mjs && node scripts/verify/frontend-guide.mjs && node scripts/verify/self-check-fixes.mjs && node scripts/verify/skills.mjs && npm run -s verify:visibility && npm run -s verify:routing",
     "verify:websearch": "tsx scripts/verify/websearch-single-source.mts",
     "verify:db": "node scripts/verify/checkpoint-encryption-db.mjs && node scripts/verify/board-lock-db.mjs && node scripts/verify/task-encryption-db.mjs && tsx scripts/verify/task-encryption-pglite.mts",
-    "verify:redact": "tsx scripts/verify/redact-placeholder.mts",
+    "verify:redact": "tsx scripts/verify/redact-placeholder.mts && node scripts/verify/payload-steps-audit.mjs",
     "verify:mention": "npm run -s verify:mention:parse && npm run -s verify:mention:decision && npm run -s verify:mention:desktop",
     "verify:db:pglite": "tsx scripts/verify/task-encryption-pglite.mts",
     "verify:db:mutate-nocipher": "node scripts/verify/task-encryption-nocipher.mjs",
