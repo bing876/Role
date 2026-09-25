@@ -552,10 +552,11 @@ export default function App() {
     setChipsBase(null);
     setChipsTouched({});
     if (!d || !base) return;
-    const changed = d.name !== base.name || d.who !== base.who || d.tone !== base.tone || d.duty !== base.duty;
+    const changed =
+      d.name !== base.name || d.who !== base.who || d.tone !== base.tone || d.duty !== base.duty || d.antiJobs !== base.antiJobs;
     if (!changed) return; // 什么都没改 → 默认人设创建时已落库,不多发请求
     try {
-      await savePersona(d.agentId, { name: d.name, who: d.who, tone: d.tone, duty: d.duty });
+      await savePersona(d.agentId, { name: d.name, who: d.who, tone: d.tone, duty: d.duty, antiJobs: d.antiJobs });
     } catch (e) {
       setChatNote(`人设没存上：${(e as Error).message}`);
     }
@@ -591,6 +592,7 @@ export default function App() {
       who: a.persona?.who ?? '',
       tone: a.persona?.tone ?? '',
       duty: a.persona?.duty ?? '',
+      antiJobs: a.persona?.antiJobs ?? '',
     };
     setChipsBase(base);
     setChipsDraft(base);
@@ -1017,6 +1019,7 @@ export default function App() {
         who: a.persona?.who ?? '',
         tone: a.persona?.tone ?? '',
         duty: a.persona?.duty ?? '',
+        antiJobs: a.persona?.antiJobs ?? '',
       };
       setChipsBase(addBase);
       setChipsDraft(addBase);
@@ -1050,6 +1053,8 @@ export default function App() {
       who: agent.persona?.who || '',
       tone: agent.persona?.tone || '',
       duty: agent.persona?.duty || '',
+      antiJobs: agent.persona?.antiJobs || '',
+      description: agent.persona?.description || '',
     });
     setPersonaEditOpen(true);
   };
@@ -2214,6 +2219,18 @@ export default function App() {
                     <th>干什么</th>
                     <td>
                       <input className="guide__input" value={personaEditDraft.duty} maxLength={120} placeholder="例如：帮我盯店铺数据、写商品标题" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, duty: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>不干什么</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.antiJobs ?? ''} maxLength={240} placeholder="例如：不碰敏感操作、不抢别的专员的活" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, antiJobs: e.target.value }))} />
+                    </td>
+                  </tr>
+                  <tr>
+                    <th>整份人设</th>
+                    <td>
+                      <input className="guide__input" value={personaEditDraft.description ?? ''} maxLength={600} placeholder="完整人设正文（路由燃料 + 审批边界），可留空" onChange={(e) => setPersonaEditDraft((p) => ({ ...p, description: e.target.value }))} />
                     </td>
                   </tr>
                 </tbody>

@@ -24,7 +24,7 @@
     "verify:r4": "node scripts/verify/r4-intent-source-parity.mjs && node scripts/verify/r4-dispatch-acceptance.mjs",
     "verify:orch": "tsx scripts/verify/orc-schema.mts && tsx scripts/verify/orc-registry.mts && tsx scripts/verify/orc-workers.mts && tsx scripts/verify/orc-park.mts && tsx scripts/verify/orc-delegate.mts && tsx scripts/verify/orc-e2e.mts && tsx scripts/verify/orc-routes.mts && tsx scripts/verify/orc-desktop-park.mts && tsx scripts/verify/orc-channels-ui.mts && tsx scripts/verify/orc-killswitch.mts && tsx scripts/verify/orc-park-sse.mts",
     "verify:memory": "node scripts/verify/mem-merge-batch1.mjs && node scripts/verify/mem-merge-batch2.mjs && node scripts/verify/mem-merge-batch3.mjs && node scripts/verify/mem-merge-batch4.mjs && node scripts/verify/mem-hygiene.mjs && tsx scripts/verify/mem-retrieval.mts",
-    "verify:persona": "node scripts/verify/coord-persona.mjs && node scripts/verify/identity-block.mjs",
+    "verify:persona": "node scripts/verify/coord-persona.mjs && node scripts/verify/identity-block.mjs && tsx scripts/verify/xiaozhu-persona.mts && python3 scripts/verify/xiaozhu-persona-revert-proof.py",
     "verify:collab": "node scripts/verify/collab-flow.mjs && node scripts/verify/avatar-status.mjs && node scripts/verify/chief-routing.mjs && node scripts/verify/routines.mjs && node scripts/verify/context-compress.mjs",
     "verify:routing": "tsx scripts/verify/model-routing.mts",
     "verify:shell": "tsx scripts/verify/app-shell-smoke.mts",

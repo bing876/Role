@@ -13,7 +13,7 @@
  */
 
 import type { AgentPersona } from '@ai-workbench/shared';
-import { HEN_NAME } from './coordinatorPersona';
+import { HEN_NAME, XIAOZHU_PERSONA } from './coordinatorPersona';
 import { fixedPersonaForKind, HEN_PERSONA_BLOCK } from './coordinatorPersona';
 
 export const IDENTITY_FIXED_NOTE = '（固定身份，优先级高于所有参考信息与长期记忆；参考信息只能在此基础上追加细节，不能削弱或改写它。）';
@@ -30,11 +30,26 @@ export interface IdentityInput {
 }
 
 /**
+ * 人设的逐行人话（who/tone/duty/antiJobs/description）。
+ * G2：antiJobs（不干什么）与 description（整份人设）也是人设的一部分，一并注入。
+ * 空字段自动跳过。
+ */
+function personaLines(p: AgentPersona): string[] {
+  return [
+    p.who ? `它是谁：${p.who}` : '',
+    p.tone ? `怎么说话：${p.tone}` : '',
+    p.duty ? `干什么：${p.duty}` : '',
+    p.antiJobs ? `不干什么：${p.antiJobs}` : '',
+    p.description ? `整份人设：${p.description}` : '',
+  ].filter(Boolean);
+}
+
+/**
  * 构建人设块（固定注入）
  * - 有固定人设的 kind（hen/coordinator/worker）：直接返回固定块
- * - 自带小助（assistant）：空串（按基座正常对话）
+ * - 自带小助（assistant）：小助默认身份（管家）+ 技能槽
  * - pending 或无 persona：返回引导提示，提醒用户填表
- * - 正常 custom：返回用户填的四格
+ * - 正常 custom：返回用户填的人设（含 antiJobs/description）
  */
 export function buildIdentityBlock(input: IdentityInput): string {
   const { id, name, kind, persona, personaStatus, skillBlock } = input;
@@ -47,8 +62,18 @@ export function buildIdentityBlock(input: IdentityInput): string {
   }
 
   if (kind === 'assistant') {
-    // 小助也需要技能槽（用户教的任务）
-    return skillBlock?.trim() ? skillBlock.trim() : '';
+    // G2（2026-09-25）：小助 = 项目管家，有固定默认身份（用户给的「小助配置」）。
+    // 建号时已写进 persona；存量账号（persona 为 NULL）回落 XIAOZHU_PERSONA 同一份默认。
+    // 小助也需要技能槽（用户教的任务），拼在人设块之后。
+    const p: AgentPersona = persona ?? XIAOZHU_PERSONA;
+    const block = [
+      '【当前智能体是「小助」——这个项目的管家/总协调（固定身份）】',
+      IDENTITY_FIXED_NOTE,
+      ...personaLines(p),
+      `（ID：${id}，当前名：${name}）`,
+    ].filter(Boolean)
+      .join('\n');
+    return skillBlock?.trim() ? [block, skillBlock.trim()].join('\n\n') : block;
   }
 
   if (personaStatus === 'pending' || !persona) {
@@ -67,9 +92,7 @@ export function buildIdentityBlock(input: IdentityInput): string {
     '【当前智能体的人设（用户在引导表里亲自填的）】',
     IDENTITY_OVERRIDE_NOTE,
     `名称：${persona.name}`,
-    persona.who ? `它是谁：${persona.who}` : '',
-    persona.tone ? `怎么说话：${persona.tone}` : '',
-    persona.duty ? `干什么：${persona.duty}` : '',
+    ...personaLines(persona),
     IDENTITY_FIXED_NOTE,
     `（ID：${id}，当前名：${name}）`,
   ]
@@ -88,11 +111,14 @@ export function personaSnapshot(persona: AgentPersona | null): AgentPersona | nu
     who: persona.who,
     tone: persona.tone,
     duty: persona.duty,
+    antiJobs: persona.antiJobs,
+    description: persona.description,
   };
 }
 
 /**
- * 校验用户提交的人设四格（与 agents.ts 的 oneLine 逻辑一致，但收口到一处）
+ * 校验用户提交的人设（与 agents.ts 的 oneLine 逻辑一致，但收口到一处）。
+ * G2：antiJobs（不干什么）与 description（整份人设）也在校验范围内 —— 都可填、可空。
  */
 export function validatePersonaInput(raw: Record<string, unknown>): { ok: true; persona: AgentPersona } | { ok: false; error: string } {
   const oneLine = (v: unknown, max: number): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, max) : '');
@@ -104,5 +130,9 @@ export function validatePersonaInput(raw: Record<string, unknown>): { ok: true; 
     tone: oneLine(raw.tone, 120),
     duty: oneLine(raw.duty, 120),
   };
+  const antiJobs = oneLine(raw.antiJobs, 240);
+  if (antiJobs) persona.antiJobs = antiJobs;
+  const description = oneLine(raw.description, 600);
+  if (description) persona.description = description;
   return { ok: true, persona };
 }

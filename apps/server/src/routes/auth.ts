@@ -42,6 +42,7 @@ import {
 import { isDbUnreachable, isUniqueViolation, withTx } from '../db';
 import { allocateXyz, normalizeXyz } from '../xyz';
 import { currentProjectId, loadOwnedProject, toProjectSummary } from '../projectScope';
+import { XIAOZHU_PERSONA } from '../coordinatorPersona';
 
 export interface AuthDeps {
   pool: Pool;
@@ -371,8 +372,10 @@ export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: 
               // 这个开关**必须在这里显式写 true**：列的默认值是 false（那是给「用户自建的普通智能体」的），
               // 而启动时那次不变量回填只在服务重启时跑 —— 光靠它，**服务运行期间新注册的账号**
               // 会拿到一只没有权限的小助（本轮真机验收就是这么抓到的）。
-              "INSERT INTO agents (project_id, name, kind, can_create_agents) VALUES ($1, '小助', 'assistant', true) RETURNING id, name",
-              [p.rows[0].id],
+              // G2（2026-09-25）：小助建号即带默认身份（用户给的「小助配置」整份人设 + 不干什么），
+              // 左栏/人设接口读回的就是这份；persona_status=ready，不挡聊天。
+              "INSERT INTO agents (project_id, name, kind, persona, persona_status, can_create_agents) VALUES ($1, '小助', 'assistant', $2, 'ready', true) RETURNING id, name",
+              [p.rows[0].id, JSON.stringify(XIAOZHU_PERSONA)],
             );
             return { userId: u.rows[0].id, createdProject: p.rows[0], createdAgent: a.rows[0] };
           });

@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { isSensitive as isSensitiveMem } from './memoryNormalize';
 import type { JsonCipher } from './crypto';
+import { XIAOZHU_PERSONA } from './coordinatorPersona';
 
 export function makePool(connectionString: string): Pool {
   if (connectionString.startsWith('pglite')) {
@@ -620,6 +621,12 @@ async function migrateProjectScope(pool: Pool): Promise<void> {
     const perm = await pool.query(
       "UPDATE agents SET can_create_agents = true WHERE kind IN ('assistant', 'hen') AND can_create_agents = false",
     );
+    // G2（2026-09-25）：自带「小助」的默认身份回填 —— 只补 persona 为 NULL 的老账号小助，
+    // 绝不覆盖用户改过的人设。这样老账号读回小助人设也是整份人设 + 不干什么。
+    const xz = await pool.query(
+      "UPDATE agents SET persona = $1::jsonb, persona_status = 'ready' WHERE kind = 'assistant' AND (persona IS NULL OR persona = 'null'::jsonb)",
+      [JSON.stringify(XIAOZHU_PERSONA)],
+    );
     const docs = await pool.query(
       `UPDATE knowledge_documents kd
           SET project_id = (
@@ -651,7 +658,7 @@ async function migrateProjectScope(pool: Pool): Promise<void> {
 
     console.log(
       `[db] 项目层迁移完成：当前项目补 ${cur.rowCount ?? 0} 行、权限开关补 ${perm.rowCount ?? 0} 行、` +
-        `知识库归属回填 资料 ${docs.rowCount ?? 0} 条 / 片段 ${chunks.rowCount ?? 0} 条`,
+        `小助默认人设补 ${xz.rowCount ?? 0} 个、知识库归属回填 资料 ${docs.rowCount ?? 0} 条 / 片段 ${chunks.rowCount ?? 0} 条`,
     );
   } catch (err) {
     console.warn('[db] 项目层迁移失败（忽略，继续启动）：', (err as Error).message);
