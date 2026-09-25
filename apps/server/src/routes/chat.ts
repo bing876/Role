@@ -36,7 +36,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ServerResponse } from 'node:http';
 import type { Pool } from 'pg';
-import type { ChatHistoryResult, ChatRow, ChatSource, ChatStateResult } from '@ai-workbench/shared';
+import type { AgentView, ChatHistoryResult, ChatRow, ChatSource, ChatStateResult } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
 import { registerLoopSse } from '../loopSse';
 import type { JsonCipher } from '../crypto';
@@ -54,7 +54,7 @@ import {
 } from '../sessionState';
 import { buildMemoryBlock } from './memories';
 import { buildKnowledgeBlock } from './knowledge';
-import { buildAgentContext, buildUserMemoryBlock, ensureAgentConversation } from './agents';
+import { buildAgentContext, buildUserMemoryBlock, ensureAgentConversation, toAgentView, loadOwnedAgent } from './agents';
 import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
@@ -505,6 +505,19 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
             const finalCreatorId = creatorId ?? (fallbackRow?.rows[0] ? Number(fallbackRow.rows[0].id) : null);
             if (finalCreatorId !== null) {
               const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, buildIntent);
+              /**
+               * 产品交互规格 C1（2026-09-25）：新智能体必须**立刻出现在左栏（真名字）**。
+               * 桌面端的 `agents` 名单只在切项目/登录时拉，对话式建完它不知道多了一位 ——
+               * 所以 meta 事件里带一份 `newAgent`（toAgentView 视图），桌面收到即并入名单。
+               * 读不回来只 warn、不带 newAgent，不挡「已建好」回话。
+               */
+              let newAgent: AgentView | undefined;
+              try {
+                const builtRow = await loadOwnedAgent(pool, claims.sub, built.agentId);
+                if (builtRow) newAgent = toAgentView(builtRow);
+              } catch (e) {
+                console.warn('[chat] 建智能体后读不回新智能体视图（左栏要手动刷新）：', (e as Error).message);
+              }
               const builtMsg = `已建好「${built.name}」：${buildIntent.duty}。直接和TA聊就行，对话里说"建一个XXX"就能继续建同事，不挡你。`;
               const umTmp = await pool.query<{ id: string }>(
                 "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
@@ -529,6 +542,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
                 userMessageId: Number(umTmp.rows[0].id),
                 agentId: turnSpeakerId,
                 mention: mentionMeta,
+                ...(newAgent ? { newAgent } : {}),
               });
               sse(res, null, { delta: builtMsg });
               sse(res, 'done', {

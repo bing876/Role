@@ -286,7 +286,7 @@ async function main() {
     `deletable=${hen.deletable}`,
   );
   check(
-    '前端那条**唯一没按 deletable 判**的删除入口也进不去：母鸡 personaStatus 恒为 ready → 引导表（内含删除按钮）永不渲染',
+    '母鸡 personaStatus 恒为 ready（规格 C1 起无 pending UI：建好即 ready,不存在「引导表」一类的 pending 入口）',
     hen.personaStatus === 'ready',
     `personaStatus=${hen.personaStatus}`,
   );

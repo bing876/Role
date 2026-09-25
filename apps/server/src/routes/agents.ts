@@ -104,7 +104,7 @@ interface AgentRow {
   can_create_agents?: boolean | null;
 }
 
-function toAgentView(r: AgentRow): AgentView {
+export function toAgentView(r: AgentRow): AgentView {
   const persona = parsePersona(r.persona);
   // 批次 C | 路由升级：空描述警告
   let dutyWarning: string | null = null;
@@ -134,7 +134,7 @@ function toAgentView(r: AgentRow): AgentView {
   };
 }
 
-async function loadOwnedAgent(pool: Pool, ownerId: number, agentId: number): Promise<AgentRow | null> {
+export async function loadOwnedAgent(pool: Pool, ownerId: number, agentId: number): Promise<AgentRow | null> {
   const r = await pool.query<AgentRow>(
     `SELECT a.id, a.name, a.kind, a.persona, a.persona_status, a.project_id, a.can_create_agents,
             (SELECT c.id FROM conversations c WHERE c.agent_id = a.id ORDER BY c.id DESC LIMIT 1) AS conversation_id
@@ -432,11 +432,20 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
         return out;
       }
 
-      // 旧路径：建空壳 pending，引导表在聊天里填
+      // 产品交互规格 C1（2026-09-25）：「＋添加」不再建**空壳**（空壳配引导表 = 大表单,已废）。
+      // 建一个带默认人设的 **ready** 智能体：名字先用占位「新智能体」,桌面在输入框上方摆一行
+      // chips（含改名 chips,可点/可自己写/可跳过）—— 答完/跳过 → POST persona 细化（含改名）,
+      // 用户直接打字则 chips 自行消失。聊天立刻能开,不挡你。
+      const shellPersona = {
+        name: DEFAULT_AGENT_NAME,
+        who: '一个待你定义的同事',
+        tone: '简洁、直接',
+        duty: '先聊聊，看看它能帮你做什么',
+      };
       const created = await withTx(pool, async (client) => {
         const a = await client.query<{ id: string; name: string }>(
-          "INSERT INTO agents (project_id, name, kind, persona_status) VALUES ($1, $2, 'custom', 'pending') RETURNING id, name",
-          [projectId, DEFAULT_AGENT_NAME],
+          "INSERT INTO agents (project_id, name, kind, persona, persona_status) VALUES ($1, $2, 'custom', $3, 'ready') RETURNING id, name",
+          [projectId, DEFAULT_AGENT_NAME, JSON.stringify(shellPersona)],
         );
         const c = await client.query<{ id: string }>(
           'INSERT INTO conversations (project_id, agent_id, title) VALUES ($1, $2, $3) RETURNING id',

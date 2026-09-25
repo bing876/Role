@@ -134,7 +134,7 @@ function detectBuildIntentSimple(message) {
   if (/^我是/.test(t) && t.length < 30) return null;
   if (t.length < 4) return null;
   // 简化提取
-  const m = t.match(/(?:建|创建|新建|来个|来一个|需要|想要|加个|加一个|招个|招一个)\s*一个?\s*([^\s，。,.!！?？]{2,12})/);
+  const m = t.match(/(?:建|创建|新建|来个|来一个|需要|想要|加个|加一个|招个|招一个)\s*(?:一个|个)?\s*([^\s，。,.!！?？]{2,12})/);
   if (m) {
     const name = m[1].trim();
     if (/(什么|怎么|为什么|如何|吗|意思)/.test(name)) return null;

@@ -52,6 +52,8 @@ export function buildIdentityBlock(input: IdentityInput): string {
   }
 
   if (personaStatus === 'pending' || !persona) {
+    // 兼容存量空壳 pending（旧数据）；新流程（规格 C1）建好即 ready + 默认人设，
+    // 「三问」走桌面输入框上方的 chips（可选精调），不经过这条引导。
     const pendingBlock = [
       '【当前智能体还没设定】用户刚点了「添加」，会话里已经摆好一张引导表，但他还没填完。',
       '这一轮不要展开长聊、不要自己编人设：只回一两句，请他在上面的引导表里写下',

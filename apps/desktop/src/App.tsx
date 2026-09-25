@@ -72,8 +72,8 @@ import { useSidebarColumn } from './app/useSidebarColumn';
 import { useProjects } from './features/projects';
 import { AuthScreen, useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
-import { AgentGuide, useChat } from './features/chat';
-import type { AgentChat, Message, Role } from './features/chat';
+import { PersonaChips, useChat } from './features/chat';
+import type { AgentChat, Message, Role, PersonaChipsDraft, PersonaField } from './features/chat';
 import type { CurrentTask } from './features/tasks';
 
 /**
@@ -283,7 +283,8 @@ function userAvatarChar(u: { xyz_id?: string; phone_masked?: string | null }): s
 function agentStatusLine(a: AgentView): string {
   if (a.statusDetail) return a.statusDetail;
   if (a.kind === 'assistant') return '在线';
-  return a.personaStatus === 'pending' ? '等你填引导表' : '已就位';
+  // 规格 C1 起新智能体建好即 ready（chips 只是可选精调）；'pending' 只剩旧数据兼容
+  return a.personaStatus === 'pending' ? '等你定个样子' : '已就位';
 }
 
 export default function App() {
@@ -531,6 +532,72 @@ export default function App() {
   const loadAgentStateRef = useRef<(agentId: number) => Promise<void>>(async () => undefined);
 
   /**
+   * 产品交互规格 C1（2026-09-25）：三问 = **输入框上方一行 chips**（旧 AgentGuide 大表格已废）。
+   * - draft = 当前值（答了哪个问题就更新哪个）；base = 创建时的默认人设（做 diff,没改就不多发请求）；
+   * - touched = 哪些问题被答过（「全答完」判据）；
+   * - 消失路径：全答完（onComplete）/ 跳过（onSkip）/ 用户开始打字（主输入框 onChange 触发 finishChips）。
+   * - 只在「正在看那个智能体」时渲染（切到别人自然消失）。
+   * 定义必须排在 useChat 之前（options.onNewAgent 引用本函数）；引用的 savePersona /
+   * justAdded* 等都是「调用期」才用（渲染完成后），无 TDZ。
+   */
+  const [chipsDraft, setChipsDraft] = useState<PersonaChipsDraft | null>(null);
+  const [chipsBase, setChipsBase] = useState<PersonaChipsDraft | null>(null);
+  const [chipsTouched, setChipsTouched] = useState<Partial<Record<PersonaField, boolean>>>({});
+
+  /** C1：chips 收尾（全答完 / 跳过 / 打字 三条路的唯一出口）：改过才落库,然后收起 */
+  const finishChips = async (final: PersonaChipsDraft | null): Promise<void> => {
+    const base = chipsBase;
+    const d = final ?? chipsDraft;
+    setChipsDraft(null);
+    setChipsBase(null);
+    setChipsTouched({});
+    if (!d || !base) return;
+    const changed = d.name !== base.name || d.who !== base.who || d.tone !== base.tone || d.duty !== base.duty;
+    if (!changed) return; // 什么都没改 → 默认人设创建时已落库,不多发请求
+    try {
+      await savePersona(d.agentId, { name: d.name, who: d.who, tone: d.tone, duty: d.duty });
+    } catch (e) {
+      setChatNote(`人设没存上：${(e as Error).message}`);
+    }
+  };
+
+  /** C1：某个问题被答了（PersonaChips 上报 → App 更新 draft + touched） */
+  const onChipsField = (k: PersonaField, v: string): void => {
+    setChipsDraft((prev) => (prev ? { ...prev, [k]: v } : prev));
+    setChipsTouched((prev) => ({ ...prev, [k]: true }));
+  };
+
+  /**
+   * C1：对话式建好新智能体（服务端 meta 帧带回 newAgent）→
+   * ① 左栏立刻现真名字（真数据 + 刚创建脉冲）② 切到它（「直接和TA聊就行」可执行）
+   * ③ 输入框上方摆三问 chips（名字已在原话里,占位名 false）。
+   */
+  const onNewAgent = (a: AgentView): void => {
+    setAgents((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
+    if (curProjectRef.current !== null) agentProjectRef.current.set(a.id, curProjectRef.current);
+    historyLoadedRef.current.add(a.id);
+    patchChat(a.id, () => ({ messages: [], convId: a.conversationId }));
+    setJustAddedAgentId(a.id);
+    if (justAddedTimerRef.current) clearTimeout(justAddedTimerRef.current);
+    justAddedTimerRef.current = setTimeout(() => setJustAddedAgentId(null), 1600);
+    curAgentRef.current = a.id;
+    setCurAgentId(a.id);
+    setProjMem([]);
+    setProjMemOpen(false);
+    const base: PersonaChipsDraft = {
+      agentId: a.id,
+      name: a.name,
+      nameIsPlaceholder: false,
+      who: a.persona?.who ?? '',
+      tone: a.persona?.tone ?? '',
+      duty: a.persona?.duty ?? '',
+    };
+    setChipsBase(base);
+    setChipsDraft(base);
+    setChipsTouched({});
+  };
+
+  /**
    * 批次 M · 逻辑抽离第 7a 片：**聊天这一侧的 state 与历史**搬进 `features/chat`。
    *
    * ★ 依旧**只换来源、不改名字** → 本文件 100 多处 `messages` / `setMessages` / `chatNote` /
@@ -609,6 +676,8 @@ export default function App() {
     },
     /** 批次 J 的兜底发车闸（纯函数，住在 `./mentionGate`） */
     shouldFallbackLaunch,
+    /** 规格 C1：对话式建好新智能体（meta 帧 newAgent）→ 左栏现真名字 + 切到它 + 摆三问 chips */
+    onNewAgent,
     /** 纯本地判定（开页 / 停 / 继续…）：单一实现住在 `browser/`，注入进来用 */
     intent: {
       detectStopIntent,
@@ -937,6 +1006,21 @@ export default function App() {
       setProjMem([]);
       setProjMemOpen(false);
       setChatNote('');
+      /**
+       * 规格 C1：「＋添加」路径同样走 chips（不再是旧的大表格）—— 占位名「新智能体」
+       * 多一个改名 chip（nameIsPlaceholder=true）；用户可点/可自己写/可跳过。
+       */
+      const addBase: PersonaChipsDraft = {
+        agentId: a.id,
+        name: a.name,
+        nameIsPlaceholder: a.name === '新智能体',
+        who: a.persona?.who ?? '',
+        tone: a.persona?.tone ?? '',
+        duty: a.persona?.duty ?? '',
+      };
+      setChipsBase(addBase);
+      setChipsDraft(addBase);
+      setChipsTouched({});
     } catch (e) {
       setAgentNote(`添加没成：${(e as Error).message}`);
     } finally {
@@ -2255,18 +2339,11 @@ export default function App() {
             </div>
           )}
           {/*
-            第 15 步：新智能体的**引导表**就摆在这个会话里（不是独立设置窗、不是后台配置页）。
-            填完确认 → 服务端存人设 → personaStatus 变 ready，它才按这份描述干活。
+            规格 C1（2026-09-25）：旧「引导表」AgentGuide 已废 —— 新智能体的三问改
+            输入框上方一行 chips（见下方 .inputbar 前的 <PersonaChips/>）。建好即 ready
+            （默认人设），chips 只是可选精调：可点 / 可自己写 / 可跳过,打字/跳过/答完即消失。
           */}
-          {curAgent && curAgent.personaStatus === 'pending' && (
-            <AgentGuide
-              key={curAgent.id}
-              agent={curAgent}
-              onSave={(p) => savePersona(curAgent.id, p)}
-              onDelete={() => void deleteAgent(curAgent.id)}
-            />
-          )}
-          {messages.length === 0 && !streaming && !(curAgent && curAgent.personaStatus === 'pending') && (
+          {messages.length === 0 && !streaming && (
             <div className="welcomeCard">
               <h4 className="welcomeCard__title">
                 <span>🤖</span> 欢迎使用 AI 自主浏览器工作台
@@ -2472,6 +2549,18 @@ export default function App() {
           )}
         </div>
 
+        {/* 规格 C1：三问 = 输入框上方一行 chips（替代旧引导表大表单）。
+             可点（快速选项）/ 可自己写（内联输入框）/ 可跳过；
+             打字（主输入框一有字）/ 跳过 / 全答完 → 即消失（没改过就不落库）。 */}
+        {chipsDraft && curAgentId === chipsDraft.agentId && (
+          <PersonaChips
+            draft={chipsDraft}
+            touched={chipsTouched}
+            onField={onChipsField}
+            onComplete={(f) => void finishChips(f)}
+            onSkip={() => void finishChips(null)}
+          />
+        )}
         {/* 底部输入栏 —— 批次 M-4'：视觉搬入 design/04-inputbar.css（设计基准
              workbench-ui 的 pill 式输入栏）。真数据接线原样保留：
              input / onSend（useChat → /chat/stream SSE）/ tidyCurrentAgent。
@@ -2490,10 +2579,15 @@ export default function App() {
                   ? '正在打字…'
                   : awaitHere
                     ? '回复小助的提问即可，发出后自动继续…'
-                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“建一个销售助手”立刻建好，不挡你）`
+                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“创建小美”立刻建好,不挡你）`
             }
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setInput(v);
+              // C1：开始打字 = 不再折腾人设 → chips 即消失（已答的部分照常落库）
+              if (v && chipsDraft) void finishChips(null);
+            }}
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
             disabled={streaming && !runningLoopId}
           />

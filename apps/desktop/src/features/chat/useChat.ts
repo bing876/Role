@@ -166,6 +166,12 @@ export interface UseChatOptions {
   }) => boolean;
   /** 纯本地判定（开页 / 停 / 继续 …），单一实现住在 `browser/` */
   intent: ChatIntentPort;
+  /**
+   * 产品交互规格 C1（2026-09-25）：对话式建智能体时，服务端在 meta 帧里带回 `newAgent`。
+   * 组合层（App）收到它 → 左栏立刻出现真名字（并入 agents）+ 输入框上方摆三问 chips。
+   * 可选：老调用方不传就不触发（行为不变）。
+   */
+  onNewAgent?: (a: AgentView) => void;
 }
 
 export interface ChatApi {
@@ -779,6 +785,8 @@ export function useChat(options: UseChatOptions): ChatApi {
             sources?: ChatSource[];
             /** 批次 J：meta 帧带来的点名裁决（谁开口、点到了谁、为什么没换人） */
             mention?: ChatMentionMeta;
+            /** 规格 C1：对话式建智能体时，服务端在 meta 帧带回新建的智能体（左栏数据源） */
+            newAgent?: AgentView;
           };
           try {
             j = JSON.parse(dl.slice(5).trim());
@@ -798,6 +806,17 @@ export function useChat(options: UseChatOptions): ChatApi {
             if (j.mention) {
               sawMention = j.mention;
               if (j.mention.speakerAgentId !== null) setStreamingAgentId(j.mention.speakerAgentId);
+            }
+            /**
+             * 规格 C1：对话式建好新智能体。
+             * 聊天桶这一侧先落好（它自己的空会话,历史标记已拉过,切过去不会闪请求）,
+             * 再通知组合层（App）：左栏现真名字 + 切到它 + 输入框上方摆三问 chips。
+             */
+            if (j.newAgent) {
+              const na = j.newAgent;
+              historyLoadedRef.current.add(na.id);
+              patchChat(na.id, () => ({ messages: [], convId: na.conversationId }));
+              options.onNewAgent?.(na);
             }
           } else if (ev === 'loop' && typeof j.loopId === 'string') {
             // 第 21 步：服务端已经建好工具循环 —— 现在才发车，带着这个循环号
