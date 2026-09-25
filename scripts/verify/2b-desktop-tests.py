@@ -241,6 +241,17 @@ def click_checked(sel, settle=0.8):
     return ok, h
 
 
+
+def click_add_agent(settle=3.0):
+    """批次 M-2'：「＋ 添加」从单按钮(.agentList__add)改为两步：
+    顶栏「＋」钮(.add-btn) → 弹层「新建智能体」(.add-popup .opt)。
+    返回 (ok, 命中信息)，语义与 click_checked 一致（以最后一步为准）。"""
+    ok1, h1 = click_checked('.add-btn', settle=0.8)
+    if not ok1:
+        return False, h1
+    return click_checked('.add-popup .opt', settle=settle)
+
+
 def expect(ok, msg, detail=''):
     """前提不成立就当场停：后面每一步都建立在它之上，硬撑只会产出一串假的 FAIL。"""
     check(msg, ok, detail)
@@ -289,21 +300,21 @@ def set_file(sel, path):
 
 UI_JS = r"""
 (() => {
-  const rows = [...document.querySelectorAll('.agentList .contact')];
+  const rows = [...document.querySelectorAll('.agentList .contact-item')];
   const projCur = document.querySelector('.projectBox__cur');
   const projRows = [...document.querySelectorAll('.projectBox__row')].map((b) => ({
     id: Number(b.getAttribute('data-project-id')),
-    name: (b.querySelector('.contact__name') || {}).textContent || '',
+    name: (b.querySelector('.contact-name') || {}).textContent || '',
     on: b.className.includes('contact--on'),
   }));
-  const on = document.querySelector('.agentList .contact--on');
+  const on = document.querySelector('.agentList .contact-item.active');
   const kb = document.querySelector('.knowledgePanel__toggle');
   return {
-    names: rows.map((b) => ((b.querySelector('.contact__name') || {}).textContent || '')),
+    names: rows.map((b) => ((b.querySelector('.contact-name') || {}).textContent || '')),
     ids: rows.map((b) => Number(b.getAttribute('data-agent-id'))),
     projCur: projCur ? projCur.textContent : null,
     projRows,
-    selected: on ? (on.querySelector('.contact__name') || {}).textContent : null,
+    selected: on ? (on.querySelector('.contact-name') || {}).textContent : null,
     kbButton: kb ? kb.textContent : null,
     kbOpen: Boolean(document.querySelector('.knowledgePanel__file')),
     note: (() => { const n = document.querySelector('.knowledgePanel__note'); return n ? n.textContent : ''; })(),
@@ -349,8 +360,8 @@ def ensure_knowledge_open():
 
 def select_agent_by_name(name):
     return ev("""(() => {
-      const rows = [...document.querySelectorAll('.agentList .contact')];
-      const hit = rows.find(b => ((b.querySelector('.contact__name')||{}).textContent||'') === %s);
+      const rows = [...document.querySelectorAll('.agentList .contact-item')];
+      const hit = rows.find(b => ((b.querySelector('.contact-name')||{}).textContent||'') === %s);
       if (!hit) return 'NO_ROW';
       hit.click();
       return 'clicked';
@@ -581,7 +592,7 @@ def main():
         before_ids = [a['id'] for a in d0_agents]
         check('点之前，左栏就是默认项目的名单', ui()['names'] == [a['name'] for a in d0_agents],
               json.dumps(ui()['names'], ensure_ascii=False))
-        hit, geom = click_checked('.agentList__add', settle=3.0)
+        hit, geom = click_add_agent(settle=3.0)
         evidence['addAgentDefaultProject'] = {'hit': geom, 'beforeIds': before_ids}
         check('「＋ 添加」按钮真的点得到（命中自检：鼠标落点就是它本人、且在视口内）', hit,
               json.dumps(geom, ensure_ascii=False))
@@ -632,7 +643,7 @@ def main():
         hen_a = hen_rows[0]
 
         t_mark = now_ms()
-        hit_a, geom_a = click_checked('.agentList__add', settle=3.5)
+        hit_a, geom_a = click_add_agent(settle=3.5)
         evidence['addAgentProjectA'] = {'hit': geom_a}
         check('项目 A 里「＋ 添加」也点得到（命中自检）', hit_a, json.dumps(geom_a, ensure_ascii=False))
         recs = [r for r in req_log(t_mark) if r['url'].endswith('/agents') and r['m'] == 'POST']
@@ -664,7 +675,7 @@ def main():
         ok, _, dt = wait_until(lambda: any(r['id'] == pb_id and r['on'] for r in ui()['projRows']), timeout=15)
         check('建完自动切到项目 B', ok, 'projCur=%s' % ui()['projCur'])
         hen_b = dbq('SELECT id, kind, can_create_agents FROM agents WHERE project_id = $1 ORDER BY id', [pb_id])[0]
-        hit_b, geom_b = click_checked('.agentList__add', settle=3.5)
+        hit_b, geom_b = click_add_agent(settle=3.5)
         check('项目 B 里「＋ 添加」也点得到（命中自检）', hit_b, json.dumps(geom_b, ensure_ascii=False))
         b_agents = http_json('/agents?projectId=%d' % pb_id, token=token)[1]['agents']
         customs_b = [a for a in b_agents if a['kind'] == 'custom']
@@ -740,8 +751,8 @@ def main():
         goal = '打开 %s 把整页读完，最后给我一份 %s 结论' % (PAGE_URL, MARK)
         h_before = http_json('/health')[1]
         t_send = now_ms()
-        type_into('.inputBar input', goal)
-        click('.inputBar button', settle=1.2)
+        type_into('.inputbar input', goal)
+        click('.inputbar button', settle=1.2)
         evidence['task'] = {'goal': goal, 'sentAt': t_send,
                             'llmCallsBefore': h_before.get('llmCalls'), 'liveLoopsBefore': h_before.get('liveLoops')}
         ok, _, _ = wait_until(lambda: any((x.get('url') or '').startswith(PAGE_URL) for x in webviews()),

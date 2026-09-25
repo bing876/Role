@@ -56,7 +56,7 @@ PYTHONIOENCODING=utf-8 C:/Users/bing/.workbuddy/binaries/python/envs/default/Scr
 - **pg 的 `bigint` 回包是字符串**：`project_id="24"` 跟 int `24` 比会假失败，取回来一律先 `int()`。
 - **活库零污染要用「跑前基线」当参照**：拿清理脚本自带的「删除前」去比，那份里含测试账号，怎么比都不等。
   正确做法是主脚本在**跑任何写操作之前**先拍一份 `liveBefore`，最后跟「删完」对。
-- dev 模式渲染层由 vite 直供源码，**改 `App.tsx` / `styles.css` 不用重新 build**（只有改主进程才要）。
+- dev 模式渲染层由 vite 直供源码，**改 `App.tsx` / `design/` 目录下的 CSS 不用重新 build**（只有改主进程才要）。
 
 ## Phase 3（浏览器登录态隔离粒度：agentId → projectId）
 

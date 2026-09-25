@@ -6,7 +6,6 @@ import type {
   AgentPersona,
   AgentTidyResult,
   AgentView,
-  AuthProfile,
   AuthSession,
   ChatHistoryResult,
   ChatSource,
@@ -36,7 +35,9 @@ import { shouldFallbackLaunch } from './mentionGate';
  * 原先写在本文件里（模块级、组件之外），被 30 多处逻辑用到。抽出 feature 时它们
  * 必须离开 App.tsx —— 否则每个 feature 都要反向依赖 App。现已原样搬到 `shared/api.ts`。
  */
-import { API_BASE, TOKEN_KEY, authFetchJson, dbHint } from './shared/api';
+import { API_BASE, TOKEN_KEY, authFetchJson } from './shared/api';
+/** 批次 M-8'：首帧兜底配置（原写在本文件模块级）搬进 shared/settings.ts */
+import { SETTINGS_FALLBACK } from './shared/settings';
 import { useKnowledge } from './features/knowledge';
 import { useMemory } from './features/memory';
 import {
@@ -66,10 +67,12 @@ import {
 import type { BrowserWorkspace, ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
 import { useBrowserGlue } from './app/browserGlue';
+import { useBrowserColumn } from './app/useBrowserColumn';
+import { useSidebarColumn } from './app/useSidebarColumn';
 import { useProjects } from './features/projects';
-import { useAuth } from './features/auth';
+import { AuthScreen, useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
-import { useChat } from './features/chat';
+import { AgentGuide, useChat } from './features/chat';
 import type { AgentChat, Message, Role } from './features/chat';
 import type { CurrentTask } from './features/tasks';
 
@@ -258,272 +261,6 @@ function driveStateView(
 // - 未登录时整个工作台不渲染（登录门控在 App 的 return 处），不做“游客看假数据”那一套。
 // ---------------------------------------------------------------------------
 
-
-/**
- * 第 22 步：可调配置的**兜底值** —— `packages/shared` 里 `DEFAULT_SETTINGS` 的第二份。
- *
- * 只用于「主进程还没把配置同步过来」的那一瞬间（首帧）。正常路径永远以主进程为准
- * （挂载时 getSettings 拉一次，之后跟随 'settings' 广播）。
- * 之所以不复用 shared 的运行时值：渲染层至今只从 shared 取类型，不引入打包期依赖更稳。
- */
-const SETTINGS_FALLBACK: WorkbenchSettings = {
-  // ⚠️ 这几个数必须与 packages/shared 的 DEFAULT_SETTINGS 保持一致（权威值在主进程 settings.ts，
-  // 这里只是首帧兜底）。之所以不复用 shared 的运行时值：渲染层至今只从 shared 取**类型**，
-  // 不引入打包期依赖更稳 —— 代价就是**改默认值时要记得同步这一处**。
-  // 当前：并发默认 20（子阶段 A 起）、开页上限默认 4；
-  // Phase 4 新增的资源守护者字段（开关 / 频率 / 两档阈值 / 系统内存兜底）同样照抄一份。
-  maxConcurrentAgentTasks: 20,
-  maxBrowserInstances: 4,
-  resourceGuardEnabled: 1,
-  resourceSampleMs: 5000,
-  resourceMemHealthMB: 3072,
-  resourceMemWarnMB: 4096,
-  resourceCpuHealthPct: 20,
-  resourceCpuWarnPct: 35,
-  resourceSysMemGuard: 0,
-  resourceSysMemFloorMB: 1536,
-};
-
-
-type AuthTab = 'sms' | 'xyz' | 'wechat';
-
-function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void }) {
-  const [tab, setTab] = useState<AuthTab>('sms');
-  const [phone, setPhone] = useState('');
-  const [code, setCode] = useState('');
-  const [xyz, setXyz] = useState('');
-  const [password, setPassword] = useState('');
-  const [err, setErr] = useState('');
-  const [hint, setHint] = useState('');
-  const [busy, setBusy] = useState(false);
-  /** 获取验证码后的 60 秒冷却（和服务端 60 秒防连发对齐） */
-  const [cooldown, setCooldown] = useState(0);
-  /** 后端就绪状态：checking 首次探测 / waiting 正在自愈 / ready 可用 */
-  const [backend, setBackend] = useState<'checking' | 'waiting' | 'ready'>('checking');
-  /** 已经等了多久（秒），给用户一个"在动"的反馈 */
-  const [waited, setWaited] = useState(0);
-  /** 自增即可重新触发下面的探测 effect（请求失败时用它"重新排队等后端"） */
-  const [probeKey, setProbeKey] = useState(0);
-  /** mock 模式下的验证码（应用自己拉起的服务端，用户看不到任何窗口 —— 由主进程转过来） */
-  const [mockCode, setMockCode] = useState<{ masked: string; code: string } | null>(null);
-
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const timer = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
-    return () => window.clearTimeout(timer);
-  }, [cooldown]);
-
-  /**
-   * ★★ 等后端自己就绪（2026-09-20 补，修的就是"明明在自愈、界面却甩红字"）。
-   *
-   * 背景：应用启动时会在后台**自己拉起 PostgreSQL + 服务端**（见 server-supervisor）。
-   * 冷启动最坏要 ~40 秒（PG 崩溃恢复 + 建表重试）。而登录页原来一发现 fetch 失败
-   * 就写死一句「连不上后端 … 再重试」，**而且不会自己重试** ——
-   * 用户看到的是一句吓人的红字，其实后端半分钟后就自己好了。
-   * 这就是"功能明明修好了、用户却还是进不去"的真正来源：**报错报早了，且不撤销**。
-   *
-   * 现在：不通就每 2 秒自己重探，期间只显示"正在准备"，探到就**自动把红字撤掉**继续。
-   * 探测口径与主进程一致：认 `/health` 的 `service` 标识，不认"有东西回 200"。
-   */
-  useEffect(() => {
-    let off = false;
-    let timer: number | undefined;
-    const tick = async () => {
-      try {
-        const r = await fetch(`${API_BASE()}/health`, { signal: AbortSignal.timeout(2500) });
-        const j = (await r.json()) as { service?: string };
-        if (off) return;
-        if (j?.service === 'ai-workbench-server') {
-          setBackend('ready');
-          setErr('');   // ★ 后端自己好了 → 必须把之前那句红字撤掉，否则用户以为还坏着
-          setWaited(0);
-          return;
-        }
-      } catch {
-        /* 还没起来，继续等 */
-      }
-      if (off) return;
-      setBackend('waiting');
-      setWaited((w) => w + 2);
-      timer = window.setTimeout(() => void tick(), 2000);
-    };
-    void tick();
-    return () => { off = true; if (timer) window.clearTimeout(timer); };
-  }, [probeKey]);
-
-  /** 主进程转来的 mock 验证码（只有应用自己拉起服务端时才会有） */
-  useEffect(() => {
-    const off = window.workbench?.onSmsMockCode?.((info) => {
-      setMockCode(info);
-      setCode(info.code);
-    });
-    return () => { off?.(); };
-  }, []);
-
-  const smsCodeSent = async () => {
-    setErr('');
-    setHint('');
-    setBusy(true);
-    try {
-      await authFetchJson('/auth/sms/send', { method: 'POST', body: JSON.stringify({ phone: phone.trim() }) });
-      setCooldown(60);
-      setHint(
-        '验证码已发送（开发模式不发真短信）。'
-        + '下面会直接显示 6 位码；万一没显示，说明服务端是你手动起的 —— '
-        + '去「AI工作台-服务端」窗口找 [sms:mock] 那行。',
-      );
-    } catch (e) {
-      // 429 是限流（服务端每分钟每个 IP 有上限）——直接说清楚，别让用户以为是自己输错了。
-      const msg = (e as Error).message;
-      // 连不上 = 后端还在自愈 → 不甩红字，改成"重新排队等后端"（见上面的探测 effect）
-      if (msg.includes('连不上后端')) { setProbeKey((k) => k + 1); }
-      else setErr(msg.includes('太频繁') ? `${msg}（这是防刷限制，等一会儿再点就好，不是你的手机号有问题）` : msg);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const login = async (path: string, body: Record<string, string>) => {
-    setErr('');
-    setHint('');
-    setBusy(true);
-    try {
-      const sess = await authFetchJson<AuthSession>(path, { method: 'POST', body: JSON.stringify(body) });
-      localStorage.setItem(TOKEN_KEY, sess.token);
-      /**
-       * ★ 登录成功 → 显式把登录态同步给主进程一次。
-       * 主进程的 token 是纯内存的，只有这一条通道能让它"知道"用户已登录，
-       * 供下载文档等**主进程自己发请求**的场景使用（详见 preload 的 syncSession 注释）。
-       */
-      void window.workbench?.syncSession?.(API_BASE(), sess.token);
-      console.info(`[auth] 登录成功：${sess.user.xyz_id}（token 已保存 ${sess.token.length} 字符，全文不打印）`);
-      onSession(sess);
-    } catch (e) {
-      const msg = (e as Error).message;
-      // 同上：连不上后端不是"错误"，是"还在自愈中"—— 别写红字，重新排队等它
-      if (msg.includes('连不上后端')) setProbeKey((k) => k + 1);
-      // 「该账号还没设置过密码…」这类服务端人话原样显示，不吞
-      else setErr(msg);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const tabBtn = (id: AuthTab, label: string) => (
-    <button type="button" className={tab === id ? 'authTab authTab--on' : 'authTab'} onClick={() => { setTab(id); setErr(''); setHint(''); }}>
-      {label}
-    </button>
-  );
-
-  return (
-    <div className="authWrap">
-      <div className="authCard">
-        <h3>登录 AI 工作台</h3>
-        <div className="authTabs">
-          {tabBtn('sms', '手机验证码')}
-          {tabBtn('xyz', 'XYZ号+密码')}
-          {tabBtn('wechat', '微信')}
-        </div>
-
-        {/*
-          ★ 后端还在自愈时**只显示"正在准备"**，绝不写红字。
-          应用启动会在后台自己拉起数据库 + 服务端，冷启动最坏 ~40 秒；
-          这段时间里甩一句"连不上后端"会让人以为坏了（这正是之前反复被报的问题）。
-        */}
-        {backend !== 'ready' && (
-          <div className="small" style={{ color: '#8a6d3b', padding: '6px 0' }}>
-            正在准备后端…（应用会自动拉起数据库和服务端，首次启动最长约 1 分钟
-            {waited > 0 ? `，已等 ${waited} 秒` : ''}）
-          </div>
-        )}
-
-        {/* ★ mock 模式下直接把验证码摆出来：服务端是应用自己起的，用户看不到任何窗口 */}
-        {mockCode && (
-          <div className="small" style={{ padding: '6px 0' }}>
-            本次验证码：<b style={{ fontSize: 16, letterSpacing: 2 }}>{mockCode.code}</b>
-            <span style={{ opacity: 0.65 }}>（开发模式 · {mockCode.masked}）</span>
-          </div>
-        )}
-
-        {tab === 'sms' && (
-          <>
-            <input className="authInput" placeholder="大陆手机号（11 位）" value={phone} maxLength={11}
-              onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))} />
-            <div className="authRow">
-              <input className="authInput" style={{ flex: 1 }} placeholder="6 位验证码" value={code} maxLength={6}
-                onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
-              <button type="button" className="btn" disabled={busy || backend !== 'ready' || cooldown > 0 || phone.length !== 11} onClick={() => void smsCodeSent()}>
-                {cooldown > 0 ? `${cooldown}s 后可重发` : '获取验证码'}
-              </button>
-            </div>
-            <button type="button" className="btn btn--go" disabled={busy || backend !== 'ready' || phone.length !== 11 || code.length !== 6}
-              onClick={() => void login('/auth/login/sms', { phone: phone.trim(), code })}>
-              登录 / 注册
-            </button>
-            <div className="small">未注册的手机号会自动建号，并分配对外号 XYZ+数字（不能自选）。</div>
-            <div style={{ marginTop: 12, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }}>
-              <button
-                type="button"
-                className="btn"
-                style={{ width: '100%', background: '#f0f7ff', color: '#0284c7', borderColor: '#bae6fd', fontWeight: 600, padding: '8px 12px' }}
-                onClick={async () => {
-                  setErr('');
-                  setBusy(true);
-                  try {
-                    const testPhone = '1380013' + String(Date.now()).slice(-4);
-                    setPhone(testPhone);
-                    const s = await authFetchJson<{ sent: boolean; mock_code?: string }>('/auth/sms/send', {
-                      method: 'POST',
-                      body: JSON.stringify({ phone: testPhone }),
-                    });
-                    const c = s.mock_code || '123456';
-                    setCode(c);
-                    await login('/auth/login/sms', { phone: testPhone, code: c });
-                  } catch (e) {
-                    setErr((e as Error).message);
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                ⚡ 快捷登录：一键演示账号进入
-              </button>
-            </div>
-          </>
-        )}
-
-        {tab === 'xyz' && (
-          <>
-            <input className="authInput" placeholder="XYZ 号（如 XYZ10001，也可只输数字）" value={xyz}
-              onChange={(e) => setXyz(e.target.value)} />
-            <input className="authInput" type="password" placeholder="密码（≥8 位）" value={password}
-              onChange={(e) => setPassword(e.target.value)} />
-            <button type="button" className="btn btn--go" disabled={busy || backend !== 'ready' || !xyz || !password}
-              onClick={() => void login('/auth/login/xyz', { xyz, password })}>
-              登录
-            </button>
-            <div className="small">没设置过密码的号会在这里被明确拒绝：先用手机号验证码登录后到左栏设密码。</div>
-          </>
-        )}
-
-        {tab === 'wechat' && (
-          <>
-            <div className="small" style={{ padding: '8px 0' }}>
-              微信登录「即将开通」：本步只在数据库预留了 openid/unionid 字段，未接入真实微信。
-            </div>
-            <button type="button" className="btn btn--go" onClick={() => setHint('微信登录即将开通，本步点它没有用——请走手机号或 XYZ号+密码。')}>
-              用微信登录（即将开通）
-            </button>
-          </>
-        )}
-
-        {hint && <div className="small">{hint}</div>}
-        {err && <div className="authErr">{err}</div>}
-      </div>
-    </div>
-  );
-}
-
 /** 左栏头像里的那个字：小助固定「助」，自建智能体取名字首字（还没名字就是「新」） */
 function agentGlyph(a: AgentView): string {
   if (a.kind === 'assistant') return '助';
@@ -531,83 +268,22 @@ function agentGlyph(a: AgentView): string {
   return n ? n.slice(0, 1) : '新';
 }
 
-/**
- * 第 15 步：聊天里的「引导表」。
- *
- * 用户点「添加」后，**新会话里先摆这张表**（不是先弹一个独立设置窗、更不是后台配置页）：
- * 四行简单表格——名称 / 它是谁 / 怎么说话 / 干什么，加一个确认按钮。
- * 确认 → 服务端存人设 → personaStatus 变 ready，这个智能体才按这份描述干活；
- * 没填完也可以先留着这个会话（服务端这时只让模型引导用户填表，不空人设乱聊）。
- */
-function AgentGuide({
-  agent,
-  onSave,
-  onDelete,
-}: {
-  agent: AgentView;
-  onSave: (p: AgentPersona) => Promise<void>;
-  onDelete: () => void;
-}) {
-  const [name, setName] = useState(agent.persona?.name ?? '');
-  const [who, setWho] = useState(agent.persona?.who ?? '');
-  const [tone, setTone] = useState(agent.persona?.tone ?? '');
-  const [duty, setDuty] = useState(agent.persona?.duty ?? '');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+/** M2':头像块的品牌底色（按 id 确定性派生，纯呈现 —— AgentView 没有头像 URL，不造假图） */
+function agentColor(a: AgentView): string {
+  const hue = Math.round((a.id * 137.508 + 195) % 360);
+  return `hsl(${hue} 62% 60%)`;
+}
 
-  const rows: Array<{ label: string; value: string; ph: string; set: (v: string) => void; max: number }> = [
-    { label: '名称', value: name, ph: '它叫什么？', set: setName, max: 24 },
-    { label: '它是谁', value: who, ph: '例如：一个只懂电商运营的老手', set: setWho, max: 120 },
-    { label: '怎么说话', value: tone, ph: '例如：短句、直接、别客套', set: setTone, max: 120 },
-    { label: '干什么', value: duty, ph: '例如：帮我盯店铺数据、写商品标题', set: setDuty, max: 120 },
-  ];
+/** M3':第一列头像块的那一个字（真数据：会话对外号 / 打码手机号首字，都没有就 U） */
+function userAvatarChar(u: { xyz_id?: string; phone_masked?: string | null }): string {
+  return (u.xyz_id || u.phone_masked || 'U').slice(0, 1).toUpperCase();
+}
 
-  const submit = async () => {
-    if (!name.trim() || busy) return;
-    setErr('');
-    setBusy(true);
-    try {
-      await onSave({ name: name.trim(), who: who.trim(), tone: tone.trim(), duty: duty.trim() });
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="guide">
-      <div className="guide__head">先给这个智能体定个样子</div>
-      <div className="small">填完点确认，它才按这份描述干活；没填完也能先留着这个会话。</div>
-      <table className="guide__table">
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.label}>
-              <th>{r.label}</th>
-              <td>
-                <input
-                  className="guide__input"
-                  value={r.value}
-                  placeholder={r.ph}
-                  maxLength={r.max}
-                  onChange={(e) => r.set(e.target.value)}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="buttons-row">
-        <button type="button" className="btn btn--go guide__ok" disabled={busy || !name.trim()} onClick={() => void submit()}>
-          {busy ? '保存中…' : '确认，就按这个来'}
-        </button>
-        <button type="button" className="btn guide__del" onClick={onDelete}>
-          删掉这个智能体
-        </button>
-      </div>
-      {err && <div className="authErr">{err}</div>}
-    </div>
-  );
+/** M2':行第二行的真实状态人话（服务端 statusDetail 优先；否则沿用既有状态逻辑） */
+function agentStatusLine(a: AgentView): string {
+  if (a.statusDetail) return a.statusDetail;
+  if (a.kind === 'assistant') return '在线';
+  return a.personaStatus === 'pending' ? '等你填引导表' : '已就位';
 }
 
 export default function App() {
@@ -1121,6 +797,7 @@ export default function App() {
     setProjectsOpen,
     projectBusy,
     projectNote,
+    projectErr,
     newProjectName,
     setNewProjectName,
     loadProjects,
@@ -1249,6 +926,10 @@ export default function App() {
       // Phase 3：把新智能体也登记进「agentId → projectId」（它马上就可能开页，分区要算对）
       if (curProjectRef.current !== null) agentProjectRef.current.set(a.id, curProjectRef.current);
       setAgents((prev) => prev.concat(a));
+      // M2':刚创建脉冲（真事件驱动；动画 1.4s，1.6s 后摘 class 防止卡住）
+      setJustAddedAgentId(a.id);
+      if (justAddedTimerRef.current) clearTimeout(justAddedTimerRef.current);
+      justAddedTimerRef.current = setTimeout(() => setJustAddedAgentId(null), 1600);
       historyLoadedRef.current.add(a.id);
       patchChat(a.id, () => ({ messages: [], convId: a.conversationId }));
       curAgentRef.current = a.id;
@@ -1508,6 +1189,30 @@ export default function App() {
   } = useBrowserGlue({ browser, curAgentId, onNote: setChatNote });
 
   /**
+   * 批次 M-2 · 第四列(浏览器区):隐藏 / 第四列 / 覆盖(盖聊天、可拖到全宽)三形态。
+   * 状态与交互在 app/useBrowserColumn.ts(左缘拖动 / 阈值 / 记忆宽度);
+   * browser/ 的 view 三态原样驱动(showFullscreen ↔ 列可见, exitFullscreen ↔ 列隐藏)。
+   */
+  const col = useBrowserColumn();
+
+  /**
+   * 批次 M-2':第二列宽度的拖动/记忆(app/useSidebarColumn),与第四列互不引用。
+   * 侧栏三个纯 UI state:搜索词(真名单过滤)、＋弹层开合、刚创建脉冲(真事件驱动)。
+   */
+  const sb = useSidebarColumn();
+  const [agentQuery, setAgentQuery] = useState('');
+  const [showAgentPopup, setShowAgentPopup] = useState(false);
+  const [justAddedAgentId, setJustAddedAgentId] = useState<number | null>(null);
+  const justAddedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** 第四列触发 ①:点会话内链接/HTML 卡片 → 内嵌浏览器打开 + 列弹出 */
+  const openInBrowser = (url: string): void => {
+    const agentId = curAgentRef.current;
+    if (agentId !== null) void browser.openUrl(agentId, url);
+    col.openColumn();
+  };
+
+  /**
    * 收尾 7 | 读回这个智能体自己存的可见度档位（切换智能体 / 登录态变化时各读一次）。
    *
    * ★ 读不到（未登录、网络、老后端没这条路由）就**保持当前档位不动**，绝不回落成 `status` 再写回去 ——
@@ -1522,7 +1227,10 @@ export default function App() {
       if (off || !v) return;
       // 读回来的档位如果是「接管」，也要把浏览器前置 —— 否则重开应用后档位说是接管、页却在后台
       setComputerVisibility(v);
-      if (v === 'takeover') browser.showFullscreen();
+      if (v === 'takeover') {
+        browser.showFullscreen();
+        col.openColumn();
+      }
     });
     return () => { off = true; };
     // browser.showFullscreen 是 hook 里的稳定回调；这里只按「换人 / 换登录态」重读
@@ -1538,7 +1246,10 @@ export default function App() {
    */
   const onChangeComputerVisibility = (v: ComputerVisibilityLevel): void => {
     setComputerVisibility(v);
-    if (v !== 'status') browser.showFullscreen();
+    if (v !== 'status') {
+      browser.showFullscreen();
+      col.openColumn();
+    }
     const agentId = curAgentId;
     const token = session?.token ?? null;
     if (!agentId || !token) return;
@@ -1868,7 +1579,8 @@ export default function App() {
   // 第 5 步门控：未登录（或正在用存好的 JWT 换会话）时，工作台整体不渲染——不做“游客看假数据”
   if (checkingAuth) {
     return (
-      <div className="authWrap">
+      // F4：占位页与真登录页各带修饰类（不再共用裸 .authWrap 一名两义）
+      <div className="authWrap authWrap--checking">
         <div className="authCard">
           <h3>正在恢复登录状态…</h3>
         </div>
@@ -1896,6 +1608,10 @@ export default function App() {
   }));
   const sidebarAgents: AgentView[] = agents.length > 0 ? agents : curProjectId !== null ? [] : loginAgentsFallback;
   const curAgent = sidebarAgents.find((a) => a.id === curAgentId) ?? null;
+  /** M2':侧栏搜索 = 对真名单做实时过滤（空 = 全名单） */
+  const filteredAgents = agentQuery.trim()
+    ? sidebarAgents.filter((a) => a.name.toLowerCase().includes(agentQuery.trim().toLowerCase()))
+    : sidebarAgents;
   /** 第 16 步：当前智能体的会话状态（服务端为准）——状态行与保活按钮都读它 */
   const curState = curAgentId === null ? undefined : agentStates[curAgentId];
   /**
@@ -1905,7 +1621,113 @@ export default function App() {
   const curConfirmed = curAgentId !== null && Boolean(lastUserWasOpenRef.current[curAgentId]);
 
   return (
-    <div className="app">
+    <div
+      className={col.colOpen && browser.view === 'fullscreen' && col.colMode === 'column' ? 'app app--col' : 'app'}
+      ref={col.frameRef}
+      style={{ '--browser-w': `${col.colWidth}px`, '--sb-w': `${sb.sbWidth}px` } as React.CSSProperties}
+    >
+      {/*
+        M3':第一列（玻璃栏）—— 结构跟设计基准 workbench-ui 的 Rail,内容全是真功能:
+        顶部 = 用户头像块（真:登录会话对外号首字）;中段 = 两颗**真**视图开关
+        （与旧顶栏按钮同源,第四列状态接线一字未动）+ 条件渲染的编辑人设;
+        其下 = 真名单 chip（与第二列同数据源,点击 = 真切换）+ ＋ 真新建。
+        微信 5 tab（假子视图）/ 汉堡（无真功能）不搬。
+      */}
+      <nav className="rail" aria-label="主导航">
+        <div
+          className="menu-btn"
+          title={session ? (session.user.phone_masked || session.user.xyz_id || '已登录账号') : '未登录'}
+        >
+          <span className="user-avatar-ico" aria-hidden="true">
+            {session ? userAvatarChar(session.user) : '·'}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`tab tab--chat ${!col.colOpen || browser.view !== 'fullscreen' ? ' selected' : ''}`}
+          style={{ top: 72 }}
+          onClick={() => {
+            browser.exitFullscreen();
+            col.hideColumn();
+          }}
+          aria-label="对话模式"
+          title="💬 对话"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <path d="M4 5.5h16v11H9l-5 4z" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={`tab tab--browser ${browser.view === 'fullscreen' && col.colOpen ? ' selected' : ''}`}
+          style={{ top: 122 }}
+          onClick={() => {
+            if (browser.tabs.length === 0) {
+              browser.openNewTab();
+            }
+            browser.showFullscreen();
+            col.openColumn();
+          }}
+          aria-label="启用浏览器"
+          title="🌐 启用内嵌浏览器工作台（没有标签页时自动打开主页）"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M3.5 12h17" />
+            <path d="M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z" />
+          </svg>
+          {browser.tabCount > 0 && <span className="workbenchNav__badge">{browser.tabCount}</span>}
+          {browser.drivingIds.length > 0 && <span className="workbenchNav__driving" title="AI 正在操作网页" />}
+        </button>
+        {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
+          <button
+            type="button"
+            className="tab tab--persona"
+            style={{ top: 172 }}
+            onClick={() => openPersonaEdit(curAgent)}
+            aria-label="编辑人设"
+            title="编辑人设：名称 / 它是谁 / 怎么说话 / 干什么"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+              <path d="M14.5 5.5l4 4L8 20H4v-4z" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+        <div className="agent-list" aria-label="智能体">
+          {sidebarAgents.map((a) => (
+            <div
+              key={a.id}
+              role="button"
+              tabIndex={0}
+              className={`agent-chip${a.id === curAgentId ? ' selected' : ''}${justAddedAgentId === a.id ? ' agent-pop' : ''}`}
+              title={a.name}
+              aria-label={a.name}
+              style={{ '--c1': agentColor(a) } as React.CSSProperties}
+              onClick={() => selectAgent(a)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  selectAgent(a);
+                }
+              }}
+            >
+              {agentGlyph(a)}
+            </div>
+          ))}
+          <button
+            className="rail-quick-add"
+            aria-label="快捷新建智能体"
+            title="新建智能体"
+            disabled={agentBusy}
+            onClick={() => void addAgent()}
+            type="button"
+          >
+            <i className="qadd-h" />
+            <i className="qadd-v" />
+          </button>
+        </div>
+      </nav>
+
       {/*
         左侧：**智能体列表**（自带「小助」+ 用户点「添加」建的）。
         第 15 步起这里不再是一个写死的联系人——一个智能体一行，点一行就换一份聊天。
@@ -1913,382 +1735,396 @@ export default function App() {
       */}
       <aside className="sidebar">
         {/*
-          子阶段 2-B：**最简项目入口**（看得见全部项目 / 新建 / 点一下切换当前项目）。
-
-          刻意不做下拉动效、双击切换、全屏小圆圈那套正式交互 —— 那些留给后面独立的 UI 阶段；
-          这里只在功能上把「项目层」跑通，用既有的 .contact / .btn / .authInput 拼出来，不加新视觉。
-          切换只换「看不见的项目视角 + 名单 + 资料列表」，**浏览器一张页都不动**（见 enterProject）。
+          M2':搜索胶囊 + 「＋」—— 过滤是对**真名单**实时做的、弹层里只有真操作（新建 / 删当前），
+          设计基准里「添加联系人（占位）alert」那种假动作不搬。
         */}
-        <div className="projectBox">
-          <div className="small projectBox__cur">
-            当前项目：{projects.find((p) => p.id === curProjectId)?.name ?? '（还没读到）'}
+        <div className="search-pill search-component" data-state={agentQuery ? 'filled' : 'default'}>
+          <span className="search-ico" aria-hidden="true">
+            <svg viewBox="0 0 18 18">
+              <circle cx="7.4" cy="7.4" r="4.7" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="1.8" />
+              <path d="M10.9 10.9L15.2 15.2" fill="none" stroke="rgba(255,255,255,0.58)" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          </span>
+          <input
+            className="search-field"
+            type="text"
+            value={agentQuery}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="搜索智能体"
+            aria-label="搜索智能体"
+            onChange={(e) => setAgentQuery(e.target.value)}
+          />
+          {agentQuery && (
+            <button className="search-clear" aria-label="清空搜索" onClick={() => setAgentQuery('')} type="button" />
+          )}
+        </div>
+        <button
+          className="add-btn"
+          aria-label="新建"
+          onClick={() => setShowAgentPopup((v) => !v)}
+          type="button"
+        />
+        <div className={`add-popup${showAgentPopup ? ' open' : ''}`}>
+          <div className="opt" onClick={() => { setShowAgentPopup(false); void addAgent(); }}>
+            <span>{agentBusy ? '创建中…' : '新建智能体'}</span>
           </div>
-          <div className="buttons-row">
-            <button
-              type="button"
-              className="btn projectBox__toggle"
-              disabled={projectBusy}
-              onClick={() => setProjectsOpen((v) => !v)}
-            >
-              {projectsOpen ? '收起项目' : `切换项目（${projects.length}）`}
-            </button>
+          {curAgent && curAgent.deletable && (
+            <div className="opt opt--danger" onClick={() => { setShowAgentPopup(false); void deleteAgent(curAgent.id); }}>
+              <span>删掉「{curAgent.name}」</span>
+            </div>
+          )}
+        </div>
+        <div className="sidebar__body">
+
+          {/*
+            子阶段 2-B：**最简项目入口**（看得见全部项目 / 新建 / 点一下切换当前项目）。
+
+            刻意不做下拉动效、双击切换、全屏小圆圈那套正式交互 —— 那些留给后面独立的 UI 阶段；
+            这里只在功能上把「项目层」跑通，用既有的 .contact / .btn / .authInput 拼出来，不加新视觉。
+            切换只换「看不见的项目视角 + 名单 + 资料列表」，**浏览器一张页都不动**（见 enterProject）。
+          */}
+          <div className="projectBox">
+            <div className="small projectBox__cur">
+              当前项目：{projects.find((p) => p.id === curProjectId)?.name ?? '（还没读到）'}
+            </div>
+            <div className="buttons-row">
+              <button
+                type="button"
+                className="btn projectBox__toggle"
+                disabled={projectBusy}
+                onClick={() => setProjectsOpen((v) => !v)}
+              >
+                {projectsOpen ? '收起项目' : `切换项目（${projects.length}）`}
+              </button>
+            </div>
+            {projectsOpen && (
+              <div className="projectBox__list" role="list" aria-label="我的项目">
+                {projects.map((p) => (
+                  <button
+                    type="button"
+                    role="listitem"
+                    key={p.id}
+                    data-project-id={p.id}
+                    disabled={projectBusy}
+                    className={p.id === curProjectId ? 'contact projectBox__row contact--on' : 'contact projectBox__row'}
+                    onClick={() => void switchProject(p.id)}
+                  >
+                    <div className="contact__meta">
+                      <div className="contact__name">{p.name}</div>
+                      <div className="small">
+                        {p.id === curProjectId ? '使用中' : '点击切到这里'}
+                        {p.henAgentId ? ' · 有母鸡' : ' · 默认项目'}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+                <input
+                  className="authInput projectBox__name"
+                  placeholder="新项目名字（≤24 字）"
+                  value={newProjectName}
+                  maxLength={24}
+                  onChange={(e) => setNewProjectName(e.target.value)}
+                />
+                <div className="buttons-row">
+                  <button
+                    type="button"
+                    className="btn projectBox__create"
+                    disabled={projectBusy || !newProjectName.trim()}
+                    onClick={() => void createProject()}
+                  >
+                    {projectBusy ? '处理中…' : '新建项目'}
+                  </button>
+                </div>
+              </div>
+            )}
+            {/* F2-③：成功/失败两个槽 + 两套样式（失败槽 = 红，一眼看出坏没坏） */}
+            {projectNote && <div className="small projectBox__note">{projectNote}</div>}
+            {projectErr && <div className="small projectBox__note projectBox__note--err">{projectErr}</div>}
           </div>
-          {projectsOpen && (
-            <div className="projectBox__list" role="list" aria-label="我的项目">
-              {projects.map((p) => (
+
+          <div className="agentList">
+            {/* M2':行结构换设计基准 .contact-item(头像块/名字/真实状态行),数据仍是真名单;
+                新建/删除收进顶栏「＋」弹层(真操作),不再摆两个按钮 */}
+            <div className="contact-list" role="list" aria-label="我的智能体">
+              {filteredAgents.map((a) => (
                 <button
                   type="button"
                   role="listitem"
-                  key={p.id}
-                  data-project-id={p.id}
-                  disabled={projectBusy}
-                  className={p.id === curProjectId ? 'contact projectBox__row contact--on' : 'contact projectBox__row'}
-                  onClick={() => void switchProject(p.id)}
+                  key={a.id}
+                  data-agent-id={a.id}
+                  className={`contact-item${a.id === curAgentId ? ' active' : ''}${justAddedAgentId === a.id ? ' just-added' : ''}`}
+                  onClick={() => selectAgent(a)}
                 >
-                  <div className="contact__meta">
-                    <div className="contact__name">{p.name}</div>
-                    <div className="small">
-                      {p.id === curProjectId ? '使用中' : '点击切到这里'}
-                      {p.henAgentId ? ' · 有母鸡' : ' · 默认项目'}
-                    </div>
-                  </div>
-                </button>
-              ))}
-              <input
-                className="authInput projectBox__name"
-                placeholder="新项目名字（≤24 字）"
-                value={newProjectName}
-                maxLength={24}
-                onChange={(e) => setNewProjectName(e.target.value)}
-              />
-              <div className="buttons-row">
-                <button
-                  type="button"
-                  className="btn projectBox__create"
-                  disabled={projectBusy || !newProjectName.trim()}
-                  onClick={() => void createProject()}
-                >
-                  {projectBusy ? '处理中…' : '新建项目'}
-                </button>
-              </div>
-            </div>
-          )}
-          {projectNote && <div className="small projectBox__note">{projectNote}</div>}
-        </div>
-
-        <div className="agentList" role="list" aria-label="我的智能体">
-          {sidebarAgents.map((a) => (
-            <button
-              type="button"
-              role="listitem"
-              key={a.id}
-              data-agent-id={a.id}
-              className={a.id === curAgentId ? 'contact contact--on' : 'contact'}
-              onClick={() => selectAgent(a)}
-            >
-              <div className="avatar">
-                <span className="avatar__face" aria-hidden="true">
-                  {agentGlyph(a)}
-                </span>
-                {a.kind === 'assistant' && hasUnread && (
-                  <span className="red-dot" title={curTask?.unreadHint || '任务结果待查看'} />
-                )}
-              </div>
-              <div className="contact__meta">
-                <div className="contact__name">{a.name}</div>
-                <div className="small">
-                  {a.kind === 'assistant' ? '在线' : a.personaStatus === 'pending' ? '等你填引导表' : '已就位'}
-                </div>
-              </div>
-            </button>
-          ))}
-          <button type="button" className="btn agentList__add" disabled={agentBusy} onClick={() => void addAgent()}>
-            {agentBusy ? '添加中…' : '＋ 添加'}
-          </button>
-          {/* 自建智能体可以删（「小助」是自带的，服务端也会拒）；它自己的聊天与项目记忆一并清掉 */}
-          {curAgent && curAgent.deletable && (
-            <button type="button" className="btn agentList__del" onClick={() => void deleteAgent(curAgent.id)}>
-              删掉「{curAgent.name}」
-            </button>
-          )}
-          {agentNote && <div className="small agentList__note">{agentNote}</div>}
-        </div>
-
-        {/*
-          第 16 步「启动并保活」最小闭环：
-          只把这个智能体的会话标成监听态（仍在这一个窗口里，不新开窗口、不起新进程）。
-          空闲时服务端一次模型都不调——有新消息才走 /chat/stream。
-        */}
-        {curAgent && (
-          <div className="keepalive">
-            <button type="button" className="btn keepalive__btn" disabled={keepaliveBusy} onClick={() => void toggleKeepalive()}>
-              {keepaliveBusy ? '切换中…' : curState?.keepalive ? '停止保活' : '启动并保活'}
-            </button>
-            <div className="small">
-              {curState?.keepalive
-                ? `「${curAgent.name}」监听中：空闲不调模型，来消息才处理`
-                : '未保活：只在你说一句话时才处理'}
-            </div>
-          </div>
-        )}
-
-        {/* 第 5 步：我的账号（XYZ 对外号 + 设置/修改密码；退出回登录页） */}
-        <div className="account">
-          <div className="small">我的号：{session.user.xyz_id}{session.user.phone_masked ? ` · ${session.user.phone_masked}` : ''}</div>
-          <div className="small">{session.user.has_password ? '密码：已设置' : '密码：未设置（XYZ+密码登录会明确失败）'}</div>
-          {session.user.has_password && (
-            <input className="authInput" type="password" placeholder="原密码" value={pwOld} onChange={(e) => setPwOld(e.target.value)} />
-          )}
-          <input className="authInput" type="password" placeholder="新密码（≥8 位）" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
-          <div className="buttons-row">
-            <button className="btn" type="button" disabled={pwNew.length < 8} onClick={() => void onSubmitPassword()}>
-              {session.user.has_password ? '修改密码' : '设置密码'}
-            </button>
-            <button className="btn" type="button" onClick={onLogout}>
-              退出登录
-            </button>
-          </div>
-          {pwMsg && <div className="small">{pwMsg}</div>}
-          {/*
-            第 22 步：浏览器可调配置（A1.5 的并发数 / D 的多实例上限）。
-            不弹独立设置窗、不开新 BrowserWindow —— 就摆在这儿（沿用既有设计）。
-            主进程是权威：输入越界会被夹回来，改完立刻生效并落盘到 userData。
-          */}
-          <div className="small">浏览器设置</div>
-          <div className="settingsRow">
-            <label className="small" htmlFor="setConcurrency">
-              同时驾驶路数
-            </label>
-            <input
-              id="setConcurrency"
-              className="authInput settingsRow__num"
-              type="number"
-              min={1}
-              // 上限与 packages/shared 的 SETTINGS_RANGE.maxConcurrentAgentTasks 一致（改一处要改两处）
-              max={20}
-              value={settings.maxConcurrentAgentTasks}
-              onChange={(e) => void onSettingsChange({ maxConcurrentAgentTasks: Number(e.target.value) })}
-            />
-          </div>
-          <div className="settingsRow">
-            <label className="small" htmlFor="setMaxPages">
-              最多同时开页
-            </label>
-            <input
-              id="setMaxPages"
-              className="authInput settingsRow__num"
-              type="number"
-              min={1}
-              // 上限与 packages/shared 的 SETTINGS_RANGE.maxBrowserInstances 一致
-              max={20}
-              value={settings.maxBrowserInstances}
-              onChange={(e) => void onSettingsChange({ maxBrowserInstances: Number(e.target.value) })}
-            />
-          </div>
-          <div className="small">
-            并发默认 20：调小可临时限流、调大即解锁更多并行（状态本就按页独立存储，改这个数不用动数据结构）。
-            开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
-          </div>
-          {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
-          {/* 记忆合并第四批：待确认记忆确认卡 */}
-          <div className="buttons-row">
-            <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
-              用户记忆（{userMem.length}）
-            </button>
-            <button type="button" className="btn" onClick={() => setProjMemOpen((v) => !v)}>
-              项目记忆（{projMem.length}）
-            </button>
-            <button type="button" className={pendingMem.length > 0 ? 'btn btn--pending' : 'btn'} onClick={() => setPendingMemOpen((v) => !v)}>
-              待确认（{pendingMem.length}）
-            </button>
-          </div>
-          {userMemOpen && (
-            <div className="memList" role="list" aria-label="用户记忆库">
-              <div className="small memList__title">账号级 · 所有智能体都读得到</div>
-              {userMem.length === 0 && <div className="small">还没有记过东西。</div>}
-              {userMem.map((m) => (
-                <div className="memList__row" key={m.id}>
-                  <span className="small">{m.content}</span>
-                  <button type="button" className="memList__forget" onClick={() => void forgetEntry('user', m.id)}>
-                    忘掉这条
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {projMemOpen && (
-            <div className="memList" role="list" aria-label="当前智能体的项目记忆">
-              <div className="small memList__title">
-                {curAgent ? `${curAgent.name} 专属 · 别的智能体看不到` : '智能体级'}
-              </div>
-              {projMem.length === 0 && <div className="small">这个智能体还没有项目记忆。</div>}
-              {projMem.map((m) => (
-                <div className="memList__row" key={m.id}>
-                  <span className="small">{m.content}</span>
-                  <button type="button" className="memList__forget" onClick={() => void forgetEntry('agent', m.id)}>
-                    忘掉这条
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-          {pendingMemOpen && (
-            <div className="memList memList--pending" role="list" aria-label="待确认记忆">
-              <div className="small memList__title">待确认 · 需你确认后才生效（decision/fact）</div>
-              {pendingMem.length === 0 && <div className="small">没有待确认的记忆。</div>}
-              {pendingMem.length > 0 && (
-                <div className="buttons-row" style={{ marginBottom: 8 }}>
-                  <button type="button" className="btn btn--go" onClick={() => void confirmAllPending()}>
-                    全部确认
-                  </button>
-                  <button type="button" className="btn" onClick={() => void rejectAllPending()}>
-                    全部忽略
-                  </button>
-                </div>
-              )}
-              {pendingMem.map((m) => (
-                <div className="memList__row memList__row--pending" key={m.id}>
-                  <span className="small">
-                    <b>[{m.type === 'decision' ? '决定' : m.type === 'fact' ? '事实' : '偏好'}]</b> {m.content}
+                  <span
+                    className="contact-avatar"
+                    style={{ '--c1': agentColor(a) } as React.CSSProperties}
+                    aria-hidden="true"
+                  >
+                    {agentGlyph(a)}
+                    {a.kind === 'assistant' && hasUnread && (
+                      <span className="red-dot" title={curTask?.unreadHint || '任务结果待查看'} />
+                    )}
                   </span>
-                  <div className="memList__actions">
-                    <button type="button" className="btn btn--go memList__confirm" onClick={() => void confirmMemory(m.id)}>
-                      确认
-                    </button>
-                    <button type="button" className="btn memList__reject" onClick={() => void rejectMemory(m.id)}>
-                      不用
-                    </button>
-                  </div>
-                </div>
+                  <span className="contact-body">
+                    <span className="contact-line">
+                      <span className="contact-name">{a.name}</span>
+                    </span>
+                    <span className="contact-line">
+                      <span className="contact-msg">{agentStatusLine(a)}</span>
+                    </span>
+                  </span>
+                </button>
               ))}
+              {filteredAgents.length === 0 && (
+                <div className="small contact-list__empty">没有匹配「{agentQuery}」的智能体</div>
+              )}
+            </div>
+            {agentNote && <div className="small agentList__note">{agentNote}</div>}
+          </div>
+
+          {/*
+            第 16 步「启动并保活」最小闭环：
+            只把这个智能体的会话标成监听态（仍在这一个窗口里，不新开窗口、不起新进程）。
+            空闲时服务端一次模型都不调——有新消息才走 /chat/stream。
+          */}
+          {curAgent && (
+            <div className="keepalive">
+              <button type="button" className="btn keepalive__btn" disabled={keepaliveBusy} onClick={() => void toggleKeepalive()}>
+                {keepaliveBusy ? '切换中…' : curState?.keepalive ? '停止保活' : '启动并保活'}
+              </button>
+              <div className="small">
+                {curState?.keepalive
+                  ? `「${curAgent.name}」监听中：空闲不调模型，来消息才处理`
+                  : '未保活：只在你说一句话时才处理'}
+              </div>
             </div>
           )}
-          {/* 第 11 步：同一主窗口左栏入口；标准文件选择器后 POST 到本机服务端，不创建 Electron 窗口。 */}
-          <div className="buttons-row">
-            <button
-              type="button"
-              className="btn knowledgePanel__toggle"
-              onClick={() => setKnowledgeOpen((v) => !v)}
-            >
-              知识库（{knowledgeDocs.length}）
-            </button>
-          </div>
-          {knowledgeOpen && (
-            <div className="knowledgePanel">
-              <div className="small">
-                上传 .txt / .md / .pdf；资料原文片段会加密入库。
-                资料只属于<b>当前项目</b>（{projects.find((p) => p.id === curProjectId)?.name ?? '…'}）：切到别的项目看不到这里的资料。
-              </div>
+
+          {/* 第 5 步：我的账号（XYZ 对外号 + 设置/修改密码；退出回登录页） */}
+          <div className="account">
+            <div className="small">我的号：{session.user.xyz_id}{session.user.phone_masked ? ` · ${session.user.phone_masked}` : ''}</div>
+            <div className="small">{session.user.has_password ? '密码：已设置' : '密码：未设置（XYZ+密码登录会明确失败）'}</div>
+            {session.user.has_password && (
+              <input className="authInput" type="password" placeholder="原密码" value={pwOld} onChange={(e) => setPwOld(e.target.value)} />
+            )}
+            <input className="authInput" type="password" placeholder="新密码（≥8 位）" value={pwNew} onChange={(e) => setPwNew(e.target.value)} />
+            <div className="buttons-row">
+              <button className="btn" type="button" disabled={pwNew.length < 8} onClick={() => void onSubmitPassword()}>
+                {session.user.has_password ? '修改密码' : '设置密码'}
+              </button>
+              <button className="btn" type="button" onClick={onLogout}>
+                退出登录
+              </button>
+            </div>
+            {pwMsg && <div className="small">{pwMsg}</div>}
+            {/*
+              第 22 步：浏览器可调配置（A1.5 的并发数 / D 的多实例上限）。
+              不弹独立设置窗、不开新 BrowserWindow —— 就摆在这儿（沿用既有设计）。
+              主进程是权威：输入越界会被夹回来，改完立刻生效并落盘到 userData。
+            */}
+            <div className="small">浏览器设置</div>
+            <div className="settingsRow">
+              <label className="small" htmlFor="setConcurrency">
+                同时驾驶路数
+              </label>
               <input
-                ref={knowledgeFileRef}
-                className="knowledgePanel__file"
-                type="file"
-                accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
-                onChange={onChooseKnowledgeFile}
+                id="setConcurrency"
+                className="authInput settingsRow__num"
+                type="number"
+                min={1}
+                // 上限与 packages/shared 的 SETTINGS_RANGE.maxConcurrentAgentTasks 一致（改一处要改两处）
+                max={20}
+                value={settings.maxConcurrentAgentTasks}
+                onChange={(e) => void onSettingsChange({ maxConcurrentAgentTasks: Number(e.target.value) })}
               />
-              <div className="buttons-row">
-                <button
-                  type="button"
-                  className="btn knowledgePanel__upload"
-                  // 子阶段 2-B：切项目过程中不许上传 —— 服务端的「当前项目」正在变，
-                  // 这一瞬间传上去会落到上一个项目（归属由服务端按当前项目写）。
-                  disabled={knowledgeUploading || projectBusy}
-                  onClick={() => knowledgeFileRef.current?.click()}
-                >
-                  {knowledgeUploading ? '上传中…' : '上传资料'}
-                </button>
-              </div>
-              {knowledgeNote && <div className="small knowledgePanel__note">{knowledgeNote}</div>}
-              <div className="knowledgePanel__list" role="list" aria-label="已入库资料">
-                {knowledgeDocs.length === 0 && <div className="small">还没有上传资料。</div>}
-                {knowledgeDocs.map((doc) => (
-                  <div className="knowledgePanel__row" role="listitem" key={doc.id} title={doc.filename}>
-                    {/* 第 19 步：每条资料一行 + 一个「删除」。一点就删，删完在下面回一句人话。 */}
-                    <div className="knowledgePanel__line">
-                      <span className="knowledgePanel__name">{doc.filename}</span>
-                      <button
-                        type="button"
-                        className="knowledgePanel__del"
-                        title={`删除《${doc.filename}》`}
-                        aria-label={`删除 ${doc.filename}`}
-                        disabled={knowledgeDeletingId !== null}
-                        onClick={() => void deleteKnowledgeDoc(doc)}
-                      >
-                        {knowledgeDeletingId === doc.id ? '删除中…' : '删除'}
-                      </button>
-                    </div>
-                    <span className="small">{doc.kind.toUpperCase()} · {doc.chunkCount} 段</span>
+            </div>
+            <div className="settingsRow">
+              <label className="small" htmlFor="setMaxPages">
+                最多同时开页
+              </label>
+              <input
+                id="setMaxPages"
+                className="authInput settingsRow__num"
+                type="number"
+                min={1}
+                // 上限与 packages/shared 的 SETTINGS_RANGE.maxBrowserInstances 一致
+                max={20}
+                value={settings.maxBrowserInstances}
+                onChange={(e) => void onSettingsChange({ maxBrowserInstances: Number(e.target.value) })}
+              />
+            </div>
+            <div className="small">
+              并发默认 20：调小可临时限流、调大即解锁更多并行（状态本就按页独立存储，改这个数不用动数据结构）。
+              开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
+            </div>
+            {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
+            {/* 记忆合并第四批：待确认记忆确认卡 */}
+            <div className="buttons-row">
+              <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
+                用户记忆（{userMem.length}）
+              </button>
+              <button type="button" className="btn" onClick={() => setProjMemOpen((v) => !v)}>
+                项目记忆（{projMem.length}）
+              </button>
+              <button type="button" className={pendingMem.length > 0 ? 'btn btn--pending' : 'btn'} onClick={() => setPendingMemOpen((v) => !v)}>
+                待确认（{pendingMem.length}）
+              </button>
+            </div>
+            {userMemOpen && (
+              <div className="memList" role="list" aria-label="用户记忆库">
+                <div className="small memList__title">账号级 · 所有智能体都读得到</div>
+                {userMem.length === 0 && <div className="small">还没有记过东西。</div>}
+                {userMem.map((m) => (
+                  <div className="memList__row" key={m.id}>
+                    <span className="small">{m.content}</span>
+                    <button type="button" className="memList__forget" onClick={() => void forgetEntry('user', m.id)}>
+                      忘掉这条
+                    </button>
                   </div>
                 ))}
               </div>
+            )}
+            {projMemOpen && (
+              <div className="memList" role="list" aria-label="当前智能体的项目记忆">
+                <div className="small memList__title">
+                  {curAgent ? `${curAgent.name} 专属 · 别的智能体看不到` : '智能体级'}
+                </div>
+                {projMem.length === 0 && <div className="small">这个智能体还没有项目记忆。</div>}
+                {projMem.map((m) => (
+                  <div className="memList__row" key={m.id}>
+                    <span className="small">{m.content}</span>
+                    <button type="button" className="memList__forget" onClick={() => void forgetEntry('agent', m.id)}>
+                      忘掉这条
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {pendingMemOpen && (
+              <div className="memList memList--pending" role="list" aria-label="待确认记忆">
+                <div className="small memList__title">待确认 · 需你确认后才生效（decision/fact）</div>
+                {pendingMem.length === 0 && <div className="small">没有待确认的记忆。</div>}
+                {pendingMem.length > 0 && (
+                  <div className="buttons-row" style={{ marginBottom: 8 }}>
+                    <button type="button" className="btn btn--go" onClick={() => void confirmAllPending()}>
+                      全部确认
+                    </button>
+                    <button type="button" className="btn" onClick={() => void rejectAllPending()}>
+                      全部忽略
+                    </button>
+                  </div>
+                )}
+                {pendingMem.map((m) => (
+                  <div className="memList__row memList__row--pending" key={m.id}>
+                    <span className="small">
+                      <b>[{m.type === 'decision' ? '决定' : m.type === 'fact' ? '事实' : '偏好'}]</b> {m.content}
+                    </span>
+                    <div className="memList__actions">
+                      <button type="button" className="btn btn--go memList__confirm" onClick={() => void confirmMemory(m.id)}>
+                        确认
+                      </button>
+                      <button type="button" className="btn memList__reject" onClick={() => void rejectMemory(m.id)}>
+                        不用
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {/* 第 11 步：同一主窗口左栏入口；标准文件选择器后 POST 到本机服务端，不创建 Electron 窗口。 */}
+            <div className="buttons-row">
+              <button
+                type="button"
+                className="btn knowledgePanel__toggle"
+                onClick={() => setKnowledgeOpen((v) => !v)}
+              >
+                知识库（{knowledgeDocs.length}）
+              </button>
             </div>
-          )}
-        </div>
+            {knowledgeOpen && (
+              <div className="knowledgePanel">
+                <div className="small">
+                  上传 .txt / .md / .pdf；资料原文片段会加密入库。
+                  资料只属于<b>当前项目</b>（{projects.find((p) => p.id === curProjectId)?.name ?? '…'}）：切到别的项目看不到这里的资料。
+                </div>
+                <input
+                  ref={knowledgeFileRef}
+                  className="knowledgePanel__file"
+                  type="file"
+                  accept=".txt,.md,.pdf,text/plain,text/markdown,application/pdf"
+                  onChange={onChooseKnowledgeFile}
+                />
+                <div className="buttons-row">
+                  <button
+                    type="button"
+                    className="btn knowledgePanel__upload"
+                    // 子阶段 2-B：切项目过程中不许上传 —— 服务端的「当前项目」正在变，
+                    // 这一瞬间传上去会落到上一个项目（归属由服务端按当前项目写）。
+                    disabled={knowledgeUploading || projectBusy}
+                    onClick={() => knowledgeFileRef.current?.click()}
+                  >
+                    {knowledgeUploading ? '上传中…' : '上传资料'}
+                  </button>
+                </div>
+                {knowledgeNote && <div className="small knowledgePanel__note">{knowledgeNote}</div>}
+                <div className="knowledgePanel__list" role="list" aria-label="已入库资料">
+                  {knowledgeDocs.length === 0 && <div className="small">还没有上传资料。</div>}
+                  {knowledgeDocs.map((doc) => (
+                    <div className="knowledgePanel__row" role="listitem" key={doc.id} title={doc.filename}>
+                      {/* 第 19 步：每条资料一行 + 一个「删除」。一点就删，删完在下面回一句人话。 */}
+                      <div className="knowledgePanel__line">
+                        <span className="knowledgePanel__name">{doc.filename}</span>
+                        <button
+                          type="button"
+                          className="knowledgePanel__del"
+                          title={`删除《${doc.filename}》`}
+                          aria-label={`删除 ${doc.filename}`}
+                          disabled={knowledgeDeletingId !== null}
+                          onClick={() => void deleteKnowledgeDoc(doc)}
+                        >
+                          {knowledgeDeletingId === doc.id ? '删除中…' : '删除'}
+                        </button>
+                      </div>
+                      <span className="small">{doc.kind.toUpperCase()} · {doc.chunkCount} 段</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
 
-        {/* 第 18 步：左栏这两个是纯演示 / 自检痕迹，用样式藏掉（.demoOnly，DOM 保留） */}
-        <div className="buttons-row demoOnly">
-          <button className="btn" type="button" onClick={() => setHasUnread((v) => !v)}>
-            切换红点（演示）
-          </button>
-        </div>
+          {/* 第 18 步：左栏这两个是纯演示 / 自检痕迹，用样式藏掉（.demoOnly，DOM 保留） */}
+          <div className="buttons-row demoOnly">
+            <button className="btn" type="button" onClick={() => setHasUnread((v) => !v)}>
+              切换红点（演示）
+            </button>
+          </div>
 
+
+        </div>
         <div className="sidebar__footer demoOnly">桥：{bridgeInfo}</div>
       </aside>
 
+      {/*
+        M2':第二↔三列可拖动分隔条 —— 拖动改 --sb-w(记忆 localStorage)、双击复位。
+        第三列(chat/browserLayer)是 flex 流自动跟,不用单独改宽度;与第四列状态互不引用。
+      */}
+      <div
+        className={`splitter${sb.dragging ? ' dragging' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="侧栏宽度"
+        title="拖动调整侧栏宽度 · 双击复位"
+        onPointerDown={sb.splitterDown}
+        onPointerMove={sb.splitterMove}
+        onPointerUp={sb.splitterUp}
+        onDoubleClick={sb.resetSbWidth}
+      />
+
       {/* 中间：**钉住的浏览器工作区**（tab + URL 栏 + 当前页）+ 聊天区 */}
       <main className="middle">
-        {/* 常驻工作台顶栏：随时随地切换【对话模式】与【浏览器工作台】 */}
-        <header className="workbenchNav">
-          <div className="workbenchNav__meta">
-            <span className="workbenchNav__name">
-              {curAgent ? `🤖 ${curAgent.name}` : 'AI 工作台'}
-            </span>
-            <span className="workbenchNav__status">在线</span>
-            {curState?.current_task && (
-              <span className="small" style={{ color: '#6b7280', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={curState.current_task}>
-                · {curState.current_task}
-              </span>
-            )}
-          </div>
-          <div className="workbenchNav__views">
-            <button
-              type="button"
-              className={`workbenchNav__btn ${browser.view !== 'fullscreen' ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => browser.exitFullscreen()}
-            >
-              💬 对话
-            </button>
-            <button
-              type="button"
-              className={`workbenchNav__btn ${browser.view === 'fullscreen' ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => {
-                if (browser.tabs.length === 0) {
-                  browser.openNewTab();
-                }
-                browser.showFullscreen();
-              }}
-              title="切换到内嵌浏览器工作台（没有标签页时自动打开主页）"
-            >
-              🌐 浏览器
-              {browser.tabCount > 0 && <span className="workbenchNav__badge">{browser.tabCount}</span>}
-              {browser.drivingIds.length > 0 && <span className="workbenchNav__driving" title="AI 正在操作网页" />}
-            </button>
-            {/*
-              多智能体编排 · 内部频道入口。
-              ★ 只是视图开关，不影响任何一路驾驶（与上面两个按钮同一性质）。
-            */}
-            {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
-              <button
-                type="button"
-                className="workbenchNav__btn"
-                onClick={() => openPersonaEdit(curAgent)}
-                title="建完也能改人设：改名称/它是谁/怎么说话/干什么"
-              >
-                ✏️ 编辑人设
-              </button>
-            )}
-          </div>
-        </header>
+        {/* M3': 常驻顶栏已改为第一列 rail（见 .app 的第一个孩子）—— 视图开关同源迁移,第四列接线未动 */}
 
         {/*
           多智能体编排 · 内部频道面板（只读）。
@@ -2341,80 +2177,6 @@ export default function App() {
           </div>
         )}
 
-        {browser.allTabs.length > 0 && (
-          <div
-            className={
-              // 第 27 步：第三种态 —— 求助卡模式（层透明、只露出求助的那一张页）
-              browser.view === 'embed'
-                ? 'browserLayer browserLayer--embed'
-                : browser.view === 'fullscreen'
-                  ? 'browserLayer'
-                  : 'browserLayer browserLayer--bg'
-            }
-          >
-            {/*
-              阶段简报 · 方案 B：**临时测试条**（本阶段只用临时按钮，正式 UI 不在本阶段做）。
-              作用对象是「当前切到前面的那张页」（按钮点名它的 wcId），
-              所以暂停这一路 = 只停这一路，别的页、别的智能体照跑。
-            */}
-            {loopGone && (
-                <div className="loopGone">
-                  <span className="loopGone__q">{loopGone.question}</span>
-                  <button className="btn loopGone__warn" type="button" onClick={() => answerLoopGone('restart')}>
-                    重新开始
-                  </button>
-                  <button className="btn loopGone__giveup" type="button" onClick={() => answerLoopGone('giveup')}>
-                    算了
-                  </button>
-                </div>
-              )}
-            {/*
-              收尾 7 | 批次 H 的三级可见度**第一次真的渲染出来**（以前只 export 没人用）。
-
-              ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
-                children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
-                驾驶的点击坐标也全废（`styles.css` 里 `.browserLayer--bg` 的注释写的就是这个坑）。
-                组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
-              ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
-            */}
-            <ComputerVisibility
-              agentId={curAgentId}
-              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
-              statusDetail={visAgent?.statusDetail ?? null}
-              step={visAgent?.statusStep ?? null}
-              currentTool={visLastStep}
-              pageSummary={visPage}
-              visibility={computerVisibility}
-              onChange={onChangeComputerVisibility}
-              apiBase={API_BASE()}
-              token={session?.token ?? null}
-            />
-            <BrowserPanel
-              ws={browser}
-              agentLabel={agents.find((a) => a.id === curAgentId)?.name}
-              /*
-               * 第 27 步：求助卡模式下的几何（wcId + 那块"窗口"的位置）。
-               * 非 embed 态时 wcId 为 null，面板会完全按老逻辑渲染 —— 零影响。
-               */
-              embed={{ wcId: browser.embedWcId, rect: embedRect }}
-            />
-          </div>
-        )}
-        {/*
-          第 25 步：**后台运行小图标**。
-          只在「有页 + 用户已退出全屏」时出现 —— 点它回到全屏，看到实时执行状态。
-          它只是个视图开关，跟任务执行毫无耦合（点了不 start / 不 resume / 不改 sleep）。
-        */}
-        {browser.allTabs.length > 0 && browser.view === 'background' && (
-          <button
-            type="button"
-            className="browserFloating"
-            title="浏览器正在后台运行（任务没有中断）。点这里回到全屏"
-            onClick={() => browser.showFullscreen()}
-          >
-            <span aria-hidden="true">🌐</span> 浏览器后台运行中
-          </button>
-        )}
         <div className="chat">
           {/*
             任务进行中明确状态指示：贯穿前后端状态机
@@ -2521,6 +2283,7 @@ export default function App() {
                       browser.openNewTab();
                     }
                     browser.showFullscreen();
+                    col.openColumn();
                   }}
                 >
                   🌐 立即打开内嵌浏览器
@@ -2555,8 +2318,7 @@ export default function App() {
                 *   用户真正要一眼看出的是「这段对话里换过人」，所以只在与**上一条助手气泡**
                 *   不是同一个人时才挂（第一条有 speaker 的也会挂 —— 前面没有可比的）。
                 * · speaker 缺失（老数据 / 服务端没给）→ 什么都不挂，**不拿当前智能体冒充**。
-                * · 版式只给了最小可读样式（小字、半透明、右对齐）；1:1 的像素还原等用户的 HTML/CSS，
-                *   className 已经留好（msg__speaker），到时候直接改样式表就行。
+                * · 版式见 design/11-chat-bubbles.css 的 .msg__speaker（小字、半透明、右对齐）。
                 */}
               {(() => {
                 const sp = m.role === 'assistant' ? m.speaker : undefined;
@@ -2575,7 +2337,6 @@ export default function App() {
                     className="msg__speaker"
                     data-agent-id={sp.id}
                     title={`这句话是「${sp.name}」说的（智能体 #${sp.id}）`}
-                    style={{ fontSize: 11, opacity: 0.72, margin: '2px 0', textAlign: 'right' }}
                   >
                     {sp.name}
                   </div>
@@ -2618,6 +2379,11 @@ export default function App() {
                         target="_blank"
                         rel="noreferrer noopener"
                         title={src.url}
+                        onClick={(e) => {
+                          // 批次 M-2 · 第四列触发①:会话内链接在**内嵌浏览器**打开(不再跳系统浏览器)
+                          e.preventDefault();
+                          openInBrowser(src.url);
+                        }}
                       >
                         <span className="sources__title">{src.title}</span>
                         <span className="sources__domain">{src.domain}</span>
@@ -2706,8 +2472,17 @@ export default function App() {
           )}
         </div>
 
-        <div className="inputBar">
+        {/* 底部输入栏 —— 批次 M-4'：视觉搬入 design/04-inputbar.css（设计基准
+             workbench-ui 的 pill 式输入栏）。真数据接线原样保留：
+             input / onSend（useChat → /chat/stream SSE）/ tidyCurrentAgent。
+             data-state 由真状态推导（empty / typing / thinking=streaming）。
+             基准的假功能（CL 额度环 / 模型弹层 / 附件弹层 / 语音）不搬。 */}
+        <div
+          className="inputbar"
+          data-state={streaming ? 'thinking' : input ? 'typing' : 'empty'}
+        >
           <input
+            className="inputbar-field"
             placeholder={
               runningLoopId && streaming
                 ? '任务进行中：输入补充指令/追问注入上下文，或输入「停」暂停任务…'
@@ -2722,13 +2497,15 @@ export default function App() {
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
             disabled={streaming && !runningLoopId}
           />
-          <button type="button" onClick={onSend} disabled={streaming && !runningLoopId}>
+          {/* 真文案（不是基准的 sparkle 图标）：桌面没有真「停止」按钮
+               （停 = 输入「停」走 detectStopIntent），文字态永远要保留 */}
+          <button type="button" className="inputbar-btn send" onClick={onSend} disabled={streaming && !runningLoopId}>
             {runningLoopId && streaming ? '发送补充' : streaming ? '打字中…' : '发送'}
           </button>
           {/* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */}
           <button
             type="button"
-            className="inputBar__end"
+            className="inputbar-btn end"
             title="结束这轮聊天，把这段总结进两层记忆"
             onClick={() => void tidyCurrentAgent()}
           >
@@ -2736,6 +2513,89 @@ export default function App() {
           </button>
         </div>
       </main>
+      {/*
+        批次 M-2 · **第四列(浏览器区)** —— 用户 2026-09-25 定稿:
+        三形态 隐藏 / 第四列 / 覆盖(盖聊天、可拖到全宽),状态与交互在 app/useBrowserColumn。
+
+        ★ 有活页时层**恒挂载**(有意卸载路径只有一条:allTabs 归零,见 M0 冒烟网);
+          隐藏态 = transform 移出视野 —— **绝不 display:none、绝不尺寸归零、绝不卸载**:
+          驾驶点击坐标依赖 webview 的真实几何,归零坐标全废(同 .browserLayer 旧注释的红线)。
+        ★ 与 main.middle 是兄弟(不再嵌在中列里)—— 祖先链有意变更,M0 golden 已按
+          `--update-golden` 显式更新;节点身份与「不许卸载」的规矩照旧由冒烟网钉住。
+        ★ embed(求助卡)态与本三态正交:几何由 HelpCard 每帧量、BrowserPanel 写进 webview
+          内联样式,舞台移动后相对量自动跟上(影子层机制自适配)。
+      */}
+      {browser.allTabs.length > 0 && (
+        <div
+          className={
+            // 可见性 = colOpen(外壳侧) 且 view==='fullscreen'(browser/ 内部态):
+            // 面板自己的「退出全屏」按钮走 view→background,同样把列收走 —— 两条路同归隐藏,不绕状态。
+            browser.view === 'embed'
+              ? 'browserLayer browserLayer--embed'
+              : col.colOpen && browser.view === 'fullscreen'
+                ? col.layerClass
+                : 'browserLayer browserLayer--hidden'
+          }
+        >
+          {col.colOpen && browser.view !== 'embed' && (
+            <div
+              className="browserCol__resizer"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="拖动调整浏览器列宽(向左拖宽,过阈值变覆盖;向右收回)"
+              onPointerDown={col.onResizerPointerDown}
+              onPointerMove={col.onResizerPointerMove}
+              onPointerUp={col.onResizerPointerUp}
+              onPointerCancel={col.onResizerPointerUp}
+            />
+          )}
+            {/*
+              阶段简报 · 方案 B：**临时测试条**（本阶段只用临时按钮，正式 UI 不在本阶段做）。
+              作用对象是「当前切到前面的那张页」（按钮点名它的 wcId），
+              所以暂停这一路 = 只停这一路，别的页、别的智能体照跑。
+            */}
+            {loopGone && (
+                <div className="loopGone">
+                  <span className="loopGone__q">{loopGone.question}</span>
+                  <button className="btn loopGone__warn" type="button" onClick={() => answerLoopGone('restart')}>
+                    重新开始
+                  </button>
+                  <button className="btn loopGone__giveup" type="button" onClick={() => answerLoopGone('giveup')}>
+                    算了
+                  </button>
+                </div>
+              )}
+            {/*
+              收尾 7 | 批次 H 的三级可见度**第一次真的渲染出来**（以前只 export 没人用）。
+
+              ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
+                children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
+                驾驶的点击坐标也全废（`design/14-browser-column.css` 里 `.browserLayer--hidden` 的注释写的就是这个坑）。
+                组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
+              ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
+            */}
+            <ComputerVisibility
+              agentId={curAgentId}
+              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
+              statusDetail={visAgent?.statusDetail ?? null}
+              step={visAgent?.statusStep ?? null}
+              currentTool={visLastStep}
+              pageSummary={visPage}
+              visibility={computerVisibility}
+              onChange={onChangeComputerVisibility}
+              apiBase={API_BASE()}
+              token={session?.token ?? null}
+            />
+            <BrowserPanel
+              ws={browser}
+              agentLabel={agents.find((a) => a.id === curAgentId)?.name}
+              /*
+               * 第 27 步：求助卡模式下的几何（wcId + 那块"窗口"的位置）。
+               * 非 embed 态时 wcId 为 null，面板会完全按老逻辑渲染 —— 零影响。
+               */
+              embed={{ wcId: browser.embedWcId, rect: embedRect }}
+            />        </div>
+      )}
 
       {/*
         第 13/17 步：右栏整个撤掉 —— 驾驶台、调试区、**任务卡**一律不画。

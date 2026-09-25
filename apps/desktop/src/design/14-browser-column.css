@@ -1,0 +1,99 @@
+/* ==========================================================================
+   14-browser-column.css —— 桌面第四列（浏览器层）三态 CSS
+   --------------------------------------------------------------------------
+   批次 M-9' 收口：从旧 styles.css **逐字节搬入**（旧文件已删,本目录是桌面
+   样式的唯一来源）。编号 14 = 第四列,桌面专属,workbench-ui 设计基准里没有。
+
+   ★ 用户定稿（批次 M-2 / d5f974e）「不碰第四列」的规矩随文件延续：
+     三形态 隐藏 / 第四列 / 覆盖 + 正交 embed（求助卡）态,
+     隐藏 = transform 移出视野（**绝不 display:none / 尺寸归零 / 卸载**——
+     驾驶坐标依赖 webview 的真实尺寸）。改这里之前先读懂下方 ★★ 注释。
+
+   审计痕迹：M-7' 前本段与 .app/.btn 等旧规则同居 styles.css;
+   M-7' 起 styles.css 只剩本段 + 删除标记;M-9' 整体删除。
+   ========================================================================== */
+
+/*
+ * 批次 M-2 · 第四列（浏览器区）—— 用户 2026-09-25 定稿：
+ * 三形态 隐藏 / 第四列 / 覆盖（盖聊天、可拖到全宽）+ 正交的 embed（求助卡）态。
+ * 列宽 = --browser-w（div.app 内联写，记忆上次宽度，见 app/useBrowserColumn）。
+ */
+.browserLayer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: var(--browser-w, 420px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  /* 滑动动画（用户定稿）；拖动时 --dragging 关掉过渡 1:1 跟手 */
+  transition: width 200ms ease, transform 240ms ease;
+}
+
+/*
+ * ★★ 隐藏 = transform 移出视野。这是第四列最关键的一条 CSS，改之前先读懂：
+ *
+ *   **绝不 display:none、绝不把 width/height 设成 0、绝不卸载**。
+ *
+ *   原因（侦查阶段已证实）：驾驶（AI 操作内嵌页）的点击坐标来自
+ *   页内 `getBoundingClientRect`，一旦 webview 尺寸归零，所有坐标都算不出来，
+ *   点击会静默失败。所以隐藏态必须保持**与列形态完全相同的真实尺寸与挂载状态**，
+ *   只是被整体平移出视野（transform 不改变元素的布局尺寸）。
+ *
+ *   本目录里 .browserPanel__view--off（别的智能体的页）用的是同一套机制，
+ *   那边同样"看不见但照样跑"，已经过验收。
+ */
+.browserLayer--hidden {
+  transform: translateX(calc(100% + 16px));
+  pointer-events: none;
+  z-index: 0;
+  border-left: none;
+}
+
+/* 覆盖形态：盖聊天（可拖到全宽）—— 聊天列此时不让位（margin-right 为 0） */
+.browserLayer--overlay {
+  z-index: 40;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.14);
+}
+
+/* 拖动中：关过渡，1:1 跟手 */
+.browserLayer--dragging {
+  transition: none;
+}
+
+/* 左缘拖动手柄（向左拖宽、过阈值变覆盖；向右收回）—— 只画在可见列上 */
+.browserCol__resizer {
+  position: absolute;
+  left: -4px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 21;
+}
+.browserCol__resizer:hover {
+  background: rgba(47, 111, 237, 0.18);
+}
+
+/*
+ * ★★ 第 27 步 · 求助卡模式（人工介入卡片）。这一条最容易写错，改之前先读完：
+ *
+ *   目标：让**求助的那一张页**看起来嵌在聊天流的卡片里，而元素一动不动。
+ *
+ *   为什么不能复用上面的 `--bg`（两个坑，都踩过）：
+ *     ① `opacity < 1` 会让这一层成为**固定/绝对定位子元素的包含块** ——
+ *        几何全都会按"层"而不是按"舞台"来算，怎么调都对不齐；
+ *     ② `opacity:0` 会把整层连同那张页一起藏掉，正好把要露的那张也藏了。
+ *
+ *   所以 embed 是**独立一态**：层透明 + 不吃指针事件（页自己再打开 pointer-events），
+ *   但底下的聊天照常可读、可滚、可点。批次 M-2 起 z-index 抬到第四列之上。
+ */
+.browserLayer--embed {
+  background: transparent;
+  pointer-events: none;
+  z-index: 30;
+  border-left: none;
+}

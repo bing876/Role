@@ -174,36 +174,36 @@ for i in range(60):
 log("")
 log("=== 诊断：登录态 / 按钮 / 输入 ===")
 log("  token 在否:", c.js("!!localStorage.getItem('workbench.token')"))
-log("  输入框存在:", c.js("!!document.querySelector('.inputBar input')"))
-log("  输入框 disabled:", c.js("document.querySelector('.inputBar input')?.disabled"))
-log("  inputBar 按钮:", c.js(
-    "JSON.stringify(Array.from(document.querySelectorAll('.inputBar button'))"
+log("  输入框存在:", c.js("!!document.querySelector('.inputbar input')"))
+log("  输入框 disabled:", c.js("document.querySelector('.inputbar input')?.disabled"))
+log("  inputbar 按钮:", c.js(
+    "JSON.stringify(Array.from(document.querySelectorAll('.inputbar button'))"
     ".map(b=>({t:b.innerText,d:b.disabled})))"))
-log("  输入框 placeholder:", c.js("document.querySelector('.inputBar input')?.placeholder"))
+log("  输入框 placeholder:", c.js("document.querySelector('.inputbar input')?.placeholder"))
 
 TASK = "打开 example.com，然后告诉我页面标题是什么"
 log("")
 log("=== 用 Key 事件真打字（最接近真人），对比 insertText ===")
 
 # 方式 A：先试 insertText + 原生 setter
-c.js("document.querySelector('.inputBar input').focus()")
+c.js("document.querySelector('.inputbar input').focus()")
 c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,''); el.dispatchEvent(new Event('input',{bubbles:true})); return 'OK';})()
 """)
 c.send("Input.insertText", text=TASK)
-c.js("document.querySelector('.inputBar input').dispatchEvent(new Event('input',{bubbles:true}))")
-log("  insertText 后 DOM value:", c.js("document.querySelector('.inputBar input').value")[:40])
+c.js("document.querySelector('.inputbar input').dispatchEvent(new Event('input',{bubbles:true}))")
+log("  insertText 后 DOM value:", c.js("document.querySelector('.inputbar input').value")[:40])
 log("  insertText 后 React 值(间接: 按钮 disabled):",
-    c.js("Array.from(document.querySelectorAll('.inputBar button')).map(b=>b.disabled).join(',')"))
+    c.js("Array.from(document.querySelectorAll('.inputbar button')).map(b=>b.disabled).join(',')"))
 
 h0 = http_get("http://127.0.0.1:8787/health")
 b0 = int((re.search(r'"llmCalls":(\d+)', h0) or ["", "0"])[1])
 log(f"  点击前 llmCalls={b0}")
 
 r = c.js("""
-(()=>{const bs=Array.from(document.querySelectorAll('.inputBar button'));
+(()=>{const bs=Array.from(document.querySelectorAll('.inputbar button'));
  const b=bs.find(x=>/发送/.test(x.innerText||''));
  if(!b) return 'NO_BTN';
  if(b.disabled) return 'DISABLED';
@@ -218,7 +218,7 @@ log(f"  点击后 llmCalls={b1}  (差={b1 - b0})")
 log("")
 log("  === 界面反馈 ===")
 log("  chatNote:", c.js("document.querySelector('.chatNote')?.innerText || '(无)'"))
-log("  输入框当前值:", c.js("document.querySelector('.inputBar input')?.value"))
+log("  输入框当前值:", c.js("document.querySelector('.inputbar input')?.value"))
 log("  会话尾部:", str(c.js("document.body.innerText.slice(-300)"))[-300:])
 
 log("")

@@ -394,7 +394,7 @@ def ui_state():
     """
     return ev_safe("""return (() => ({
       authCard: !!document.querySelector('.authCard'),
-      inputBar: !!document.querySelector('.inputBar'),
+      inputbar: !!document.querySelector('.inputbar'),
       tabs: document.querySelectorAll('.browserTab').length,
       webviews: document.querySelectorAll('webview').length,
       head: (document.body.innerText || '').slice(0, 60),
@@ -884,8 +884,8 @@ def s2_account_and_merge():
             time.sleep(2.0)
             continue
         time.sleep(9)
-        ok, last, dt = wait_until(lambda: bool(ev("!!document.querySelector('.inputBar')")), timeout=30)
-        attempts.append({'try': k + 1, 'writeToken': 'ok', 'inputBar': ok, 'waitedMs': dt})
+        ok, last, dt = wait_until(lambda: bool(ev("!!document.querySelector('.inputbar')")), timeout=30)
+        attempts.append({'try': k + 1, 'writeToken': 'ok', 'inputbar': ok, 'waitedMs': dt})
         if ok:
             break
         time.sleep(3.0)
@@ -1190,14 +1190,14 @@ def s4_alert_and_lru():
     # ---- 开始一个真任务：让「有未结束的任务」这个标记有据可查 ----
     drv_url = wv[0]['url']        # 刻意用**最前面**那张：避开刚点过的最后两张
     drv_wc = int(wv[0]['wcId'])
-    ev_safe("return (() => { const i = document.querySelector('.inputBar input');"
+    ev_safe("return (() => { const i = document.querySelector('.inputbar input');"
             " if (!i) return 'no-input'; i.focus(); return 'ok'; })()", 'focus_input')
-    typed = type_into('.inputBar input', '打开 %s 把整页读完，最后给我一份 P4-DRV 结论' % drv_url)
+    typed = type_into('.inputbar input', '打开 %s 把整页读完，最后给我一份 P4-DRV 结论' % drv_url)
     hit_ok = False
     for _ in range(3):
-        h = hit_test('.inputBar button')
+        h = hit_test('.inputbar button')
         if h and h.get('found') and h.get('isSelf'):
-            click('.inputBar button', settle=1.2)
+            click('.inputbar button', settle=1.2)
             hit_ok = True
             break
         time.sleep(0.5)

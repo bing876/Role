@@ -1,0 +1,29 @@
+/* 03-frame —— 批次 M-7'：桌面三栏框架的壳规则搬入设计基准编号位。
+   基准 03-frame.css 本体（.frame 玻璃外框 / .main-glass / .sidebar / .main-area）
+   是 workbench-ui 单文件演示的画布外壳 —— 桌面没有 .frame 外壳（div.app
+   直接铺满视口，见 99-theme.css 的 :root 变量），故基准本体不搬；
+   本文件按编号规矩收桌面的框架布局（.app / .middle），样式值照搬旧 styles.css。 */
+
+/* ---------- 三栏布局：联系人 | 聊天 | 控制 + 任务 ---------- */
+.app {
+  display: flex;
+  height: 100%;
+}
+
+.middle {
+  flex: 1 1 auto;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  /* 批次 M-2：浏览器层改成第四列（.app 的兄弟绝对定位），中列自己就是定位上下文 */
+  position: relative;
+  overflow: hidden;
+  /* 第四列让位动画：列宽变化时聊天列平滑收放（与层的 width/transform 同一组过渡） */
+  transition: margin-right 240ms ease;
+}
+
+/* 第四列「column 形态」时聊天列让出列宽（overlay/隐藏 时全宽）—— 变量由 div.app 内联写 */
+.app--col .middle {
+  margin-right: var(--browser-w, 420px);
+}

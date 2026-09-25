@@ -27,7 +27,7 @@
  *   npm run verify:shell -- --update-golden     # 只在你确认链变更是有意的时候用
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { JSDOM } from 'jsdom';
 
@@ -38,6 +38,9 @@ import { JSDOM } from 'jsdom';
  *   由 driver 通过环境变量传进来，兜底才用 cwd。
  */
 const REPO = process.env.SMOKE_REPO ?? process.cwd();
+const LEGACY_STYLES = join(REPO, 'apps', 'desktop', 'src', 'styles.css');
+// M9'：styles.css 已整体删除 —— 「旧规则消失」升级为「文件本身消失」（null = 已删,在场 = 回归）
+const legacyStyles = (): string | null => (existsSync(LEGACY_STYLES) ? readFileSync(LEGACY_STYLES, 'utf8') : null);
 const GOLDEN = join(REPO, 'docs', 'acceptance', 'app-shell', 'webview-ancestor-chain.golden.json');
 const UPDATE_GOLDEN = process.argv.includes('--update-golden');
 
@@ -108,7 +111,7 @@ const bridge = new Proxy(
      * ★ 被**直接 await / .then** 的桥方法必须给真值，不能交给 Proxy 的兜底空实现：
      *   `bridge.getSettings().then(setSettings)` 返回 undefined 会把 settings 置空，
      *   下一次渲染读 settings.maxConcurrentAgentTasks 当场崩（第一次跑就是这么崩的）。
-     *   值抄自 App.tsx 的 SETTINGS_FALLBACK（主进程是权威，这里是首帧兜底）。
+     *   值抄自 shared/settings.ts 的 SETTINGS_FALLBACK（M8' 从 App.tsx 搬走；主进程是权威，这里是首帧兜底）。
      */
     getSettings: async () => ({
       maxConcurrentAgentTasks: 20,
@@ -163,9 +166,10 @@ const emitBridge = (channel: string, payload?: unknown): number => {
 // 3. fetch 桩 —— App 启动要打一串接口；未识别的路径记下来（不许静默假装成功）
 // ---------------------------------------------------------------------------
 const requestedPaths: string[] = [];
+let agentCreateCount = 0;   // 真创建桩:⑨-4 / ⑩-4 各建一个,id 不撞
 const PROJECT = { id: 7, name: '默认项目', isCurrent: true, isDefault: true, henAgentId: null };
 const AGENTS = [
-  { id: 97, name: '小助', kind: 'assistant', deletable: false, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
+  { id: 97, name: '小助', kind: 'assistant', deletable: false, canCreateAgents: true, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
   { id: 98, name: '卡布', kind: 'worker', deletable: true, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 502, status: 'idle' },
 ];
 const STATE = {
@@ -175,15 +179,47 @@ const STATE = {
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
-globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
   const path = raw.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
   requestedPaths.push(path);
   if (path === '/auth/me') return json({ user: { id: 1, phone: '13800000000', xyz: '' }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
   if (path === '/projects') return json({ projects: [PROJECT], currentProjectId: 7 });
+  if (path === '/agents' && init?.method === 'POST') {
+    agentCreateCount += 1;
+    const nid = 98 + agentCreateCount;   // 第 1 次 → 99,第 2 次 → 100
+    return json({ agent: { id: nid, name: agentCreateCount === 1 ? '新员' : '新员乙', kind: 'worker', deletable: true, canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null, conversationId: 500 + nid, status: 'idle' } });
+  }
   if (path === '/agents') return json({ agents: AGENTS });
+  // 批次 M-4' ⑪-2 / M-5' ⑫-2:真发送走 useChat 的 /chat/stream（SSE；帧格式与服务端一字不差）。
+  // 先推一帧 search:start,250ms 后才推 delta + search:done + done ——
+  // 让「正在搜索：…」那行提示在流式中真实可见（⑫-2 的判据）。
+  if (path === '/chat/stream') {
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(enc.encode('event: search\ndata: {"phase":"start","query":"天气"}\n\n'));
+          setTimeout(() => {
+            c.enqueue(enc.encode('data: {"delta":"收到你的招呼，我待命中。"}\n\n'));
+            c.enqueue(enc.encode('event: search\ndata: {"phase":"done","query":"天气","results":2}\n\n'));
+            c.enqueue(enc.encode('event: done\ndata: {"sources": []}\n\n'));
+            c.close();
+          }, 250);
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+  }
+  // 批次 M-4' ⑪-3:「结束」钮的真处理（把这段聊天总结进两层记忆）
+  if (/^\/agents\/\d+\/tidy$/.test(path) && init?.method === 'POST') {
+    return json({ userAdded: 0, projectAdded: 0 });
+  }
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
-  if (path === '/chat/history') return json({ conversationId: 501, messages: [] });
+  // 批次 M-2:第四列触发①需要会话内链接 → 给当前智能体的历史一条带 sources 的助手消息
+  if (path === '/chat/history') return json({ conversationId: 501, messages: [
+    { id: 5011, role: 'assistant', text: '这是从网页查到的回答。', sources: [{ title: '示例文章', url: 'https://example.com/article', domain: 'example.com' }] },
+  ] });
   if (path === '/memory/user' || path.startsWith('/agents/') && path.endsWith('/memory')) return json({ items: [] });
   if (path === '/memories') return json({ items: [], pending: [] });
   if (path === '/knowledge') return json({ documents: [] });
@@ -293,14 +329,14 @@ await check('左侧栏（aside.sidebar）在', () => {
 await check('中列（main.middle）在，且它不是整页唯一内容', () => {
   assert.ok(q('main.middle'), 'main.middle 不见了');
 });
-await check('右列聊天区（.chat）+ 输入条（.inputBar）都在，且都属于 main.middle', () => {
+await check('右列聊天区（.chat）+ 输入条（.inputbar）都在，且都属于 main.middle', () => {
   const chat = q('.chat');
-  const bar = q('.inputBar');
+  const bar = q('.inputbar');
   assert.ok(chat, '.chat 不见了');
-  assert.ok(bar, '.inputBar 不见了');
+  assert.ok(bar, '.inputbar 不见了');
   const middle = q('main.middle') as Element;
   assert.ok(middle.contains(chat as Node), '.chat 不在 main.middle 里');
-  assert.ok(middle.contains(bar as Node), '.inputBar 不在 main.middle 里');
+  assert.ok(middle.contains(bar as Node), '.inputbar 不在 main.middle 里');
 });
 await check('已经越过登录页（不是停在 AuthScreen）', () => {
   assert.ok(!q('.authWrap'), '还停在登录页 —— 说明 /auth/me 没走通');
@@ -328,10 +364,15 @@ await act(async () => {
 await check('open 事件被 App 接住并开出页', () => {
   assert.equal(opened, 1, 'bridge.on("open") 没注册处理函数');
 });
-await check('.browserLayer 出现，且它是 main.middle 的孩子', async () => {
+await check('.browserLayer 出现，且它是 div.app 的孩子（第四列，与 main 并列）', async () => {
   await waitFor('.browserLayer 出现', () => q('.browserLayer') !== null);
   const layer = q('.browserLayer') as Element;
-  assert.equal(layer.parentElement?.tagName.toLowerCase(), 'main', `.browserLayer 的父节点不是 main（是 ${layer.parentElement?.tagName}）`);
+  const parent = layer.parentElement;
+  assert.ok(parent, '.browserLayer 没有父节点');
+  assert.ok(
+    parent!.getAttribute('class')?.includes('app') ?? false,
+    `.browserLayer 的父节点不是 div.app（是 ${parent!.tagName}.${parent!.getAttribute('class')}）—— 第四列必须挂在外壳根上`,
+  );
 });
 await check('BrowserPanel 与 ComputerVisibility 都在浏览器层里，且互为**兄弟**', () => {
   const layer = q('.browserLayer') as Element;
@@ -416,13 +457,13 @@ await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', as
    * `openNewTab()`，那会往舞台上再挂一张页，让后面「关光所有页」那一段变得不干净。
    */
   await act(async () => {
-    click(qa('aside.sidebar .contact')[0], '切回第一个智能体');
+    click(qa('aside.sidebar .contact-item')[0], '切回第一个智能体');
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   await flush(2);
-  // 只看「对话 / 浏览器」两颗（顶栏还可能有「编辑人设」等按钮，点它们会开弹窗，与视图无关）
-  const btns = qa('.workbenchNav__btn').filter((b) => /对话|浏览器/.test(b.textContent ?? ''));
-  assert.equal(btns.length, 2, `顶栏视图按钮不是 2 颗（${btns.length} 颗）`);
+  // M3':视图开关迁到第一列 rail 的两颗 tab（与旧顶栏按钮同源）
+  const btns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
+  assert.equal(btns.length, 2, `rail 视图 tab 不是 2 颗（${btns.length} 颗）`);
   let viewChanges = 0;
   for (const b of btns) {
     await act(async () => {
@@ -438,14 +479,18 @@ await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', as
   const seen = q('.browserLayer')?.getAttribute('class') ?? '';
   assert.ok(/browserLayer/.test(seen), `层的 class 读不到：${seen}`);
 });
-await check('视图切换前后，.browserLayer 的 class 始终在文档化的三态里', () => {
-  const ALLOWED = new Set(['browserLayer', 'browserLayer browserLayer--bg', 'browserLayer browserLayer--embed']);
-  const cls = q('.browserLayer')?.getAttribute('class') ?? '';
-  assert.ok(ALLOWED.has(cls), `出现了计划外的层 class：${JSON.stringify(cls)}（要么改了可见度机制，要么在层上加样式捷径）`);
+await check('视图切换前后，.browserLayer 的 class 始终在文档化的形态里', () => {
+  // 批次 M-2:三形态 隐藏/第四列/覆盖 + 正交的 embed + 拖动态 —— 全部是有文档的修饰符
+  const ALLOWED_TOKENS = new Set(['browserLayer', 'browserLayer--hidden', 'browserLayer--overlay', 'browserLayer--dragging', 'browserLayer--embed']);
+  const cls = (q('.browserLayer')?.getAttribute('class') ?? '').split(/\s+/).filter(Boolean);
+  assert.ok(cls.length >= 1 && cls[0] === 'browserLayer', `层 class 必须以 browserLayer 开头：${JSON.stringify(cls)}`);
+  for (const t of cls) {
+    assert.ok(ALLOWED_TOKENS.has(t), `出现了计划外的层 class token：${JSON.stringify(t)}（要么改了可见度机制，要么在层上加样式捷径）`);
+  }
 });
 
 await check('切智能体（换一个人）不换 webview 元素', async () => {
-  const contacts = qa('aside.sidebar .contact');
+  const contacts = qa('aside.sidebar .contact-item');
   assert.ok(contacts.length >= 2, `左栏智能体不足 2 个（${contacts.length} 个）`);
   for (const c of contacts) {
     await act(async () => {
@@ -458,23 +503,532 @@ await check('切智能体（换一个人）不换 webview 元素', async () => {
 });
 
 log('');
-log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
-await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
-  // 上一段把当前智能体切走了（那张页属于第一个智能体），先切回去 —— 顶栏只列当前智能体的 tab
-  const first = qa('aside.sidebar .contact')[0];
+log('--- ⑧ 第四列（批次 M-2）：过阈值变覆盖 / 收回 / 隐藏≠卸载 / 会话内链接触发 / 记忆宽度 ---');
+
+const firePointer = (el: Element | null, type: string, x: number): void => {
+  assert.ok(el, `拖动手柄不见了（${type}）`);
+  el!.dispatchEvent(new dom.window.PointerEvent(type, { bubbles: true, cancelable: true, clientX: x }));
+};
+
+await check('⑧-1 第四列可见时,左缘有拖动手柄', () => {
+  assert.ok(q('.browserCol__resizer'), '第四列可见但 .browserCol__resizer 不在');
+});
+
+await check('⑧-2 向左连续拖宽、过阈值 → 覆盖形态（盖聊天、聊天列不让位、webview 同一元素）', async () => {
+  const before = q('webview') as Element;
   await act(async () => {
-    click(first, '切回第一个智能体');
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    firePointer(q('.browserCol__resizer'), 'pointerdown', 500);
+    firePointer(q('.browserCol__resizer'), 'pointermove', 100); // 420 + 400 = 820 → 夹到 640 ≥ 阈值 480
+    firePointer(q('.browserCol__resizer'), 'pointerup', 100);
+  });
+  await flush(2);
+  const l = q('.browserLayer') as Element;
+  const cls = l.getAttribute('class') ?? '';
+  assert.ok(cls.includes('browserLayer--overlay'), `拖过阈值应进覆盖形态：${cls}`);
+  const appCls = (q('div.app') as Element).getAttribute('class') ?? '';
+  assert.ok(!appCls.includes('app--col'), `覆盖形态下聊天列不该让位（应全宽被盖）：${appCls}`);
+  assert.ok(before === q('webview'), '拖宽把 <webview> 换成了新元素');
+});
+
+await check('⑧-3 向右收回（回阈值以下）→ 第四列形态,聊天列让位回来', async () => {
+  const before = q('webview') as Element;
+  await act(async () => {
+    firePointer(q('.browserCol__resizer'), 'pointerdown', 100);
+    firePointer(q('.browserCol__resizer'), 'pointermove', 400); // 640 - 300 = 340 ≥ MIN 320、< 阈值 480
+    firePointer(q('.browserCol__resizer'), 'pointerup', 400);
+  });
+  await flush(2);
+  const cls = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(!cls.includes('browserLayer--overlay'), `收回后不该还是覆盖：${cls}`);
+  assert.ok(!cls.includes('browserLayer--hidden'), `收回后应在第四列形态：${cls}`);
+  const appCls = (q('div.app') as Element).getAttribute('class') ?? '';
+  assert.ok(appCls.includes('app--col'), `第四列形态下聊天列应让位（app--col 缺失）：${appCls}`);
+  assert.ok(before === q('webview'), '收回把 <webview> 换成了新元素');
+});
+
+await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏≠卸载）;「🌐 启用」→ 列回来', async () => {
+  const navBtns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
+  await act(async () => {
+    click(navBtns[0], '💬 对话');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const clsHidden = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(clsHidden.includes('browserLayer--hidden'), `「💬 对话」后应进隐藏形态：${clsHidden}`);
+  const wv = q('webview') as Element;
+  assert.ok(doc.contains(wv), '隐藏形态下 <webview> 被卸载了（违反 隐藏≠卸载）');
+  await act(async () => {
+    click(navBtns[1], '🌐 启用');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const clsOpen = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(!clsOpen.includes('browserLayer--hidden'), `「🌐 启用」后列应打开：${clsOpen}`);
+});
+
+await check('⑧-5 触发①:点会话内链接（来源）→ 列从隐藏弹出（内嵌浏览器打开）', async () => {
+  const navBtns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
+  await act(async () => {
+    click(navBtns[0], '💬 对话');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(((q('.browserLayer') as Element).getAttribute('class') ?? '').includes('browserLayer--hidden'), '前置:应先隐藏');
+  const link = q('.sources__item') as Element;
+  assert.ok(link, '会话内来源链接不在（/chat/history 夹具没生效?）');
+  await act(async () => {
+    click(link, '会话内链接');
+    await new Promise((r) => setTimeout(r, 0));
   });
   await flush(3);
-  const closeBtns = qa('.browserTab__x');
-  assert.ok(closeBtns.length >= 1, '没有关页按钮（browserTab__x）');
-  for (const b of closeBtns) {
+  const cls = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(!cls.includes('browserLayer--hidden'), `点链接后列应弹出：${cls}`);
+});
+
+await check('⑧-6 宽度记忆上次值（localStorage workbench.browserCol 有合法宽度）', () => {
+  const raw = dom.window.localStorage.getItem('workbench.browserCol');
+  assert.ok(raw !== null, 'localStorage 里没有 workbench.browserCol（记忆宽度没落地）');
+  const v = Number(raw);
+  assert.ok(Number.isFinite(v) && v >= 320, `记忆值不像合法宽度:${raw}`);
+});
+
+await check('⑧-7 样式红线:--hidden 规则用 transform 移出视野（不是 display:none）', () => {
+  // M9'：第四列规则已搬进 design/14-browser-column.css（旧 styles.css 已删）
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css'), 'utf8');
+  const m = css.match(/\.browserLayer--hidden\s*\{([^}]*)\}/);
+  assert.ok(m, '14-browser-column.css 里找不到 .browserLayer--hidden 规则');
+  assert.ok(/transform\s*:\s*translateX/.test(m![1]), '隐藏态必须用 transform 移出视野');
+  assert.ok(!/display\s*:\s*none/.test(m![1]), '隐藏态绝不允许 display:none');
+});
+
+log('');
+log('--- ⑨ 侧栏（批次 M-2）：真数据名单 / 真搜索 / 真创建 / 真拖宽 ---');
+
+const readVar = (name: string): string => {
+  const st = q('div.app')?.getAttribute('style') ?? '';
+  const m = st.match(new RegExp(`${name}\\s*:\\s*([^;]+)`));
+  return m ? m[1].trim() : '';
+};
+const setTextInput = async (el: Element | null, value: string, label: string): Promise<void> => {
+  assert.ok(el, `找不到输入框：${label}`);
+  const input = el as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(input, value);
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+};
+
+await check('⑨-1 屏幕上的是真名单（名字与 id 全部来自桥的真数据，行数一致）', () => {
+  const REAL: Record<string, string> = { 97: '小助', 98: '卡布' };
+  const rows = qa('.contact-item');
+  assert.equal(rows.length, 2, `智能体行应 2 行（实际 ${rows.length}）`);
+  for (const r of rows) {
+    const id = r.getAttribute('data-agent-id');
+    const name = r.querySelector('.contact-name')?.textContent ?? '';
+    assert.ok(id !== null && id in REAL, `出现名单外的智能体 id ${id}（写死假数据的信号）`);
+    assert.equal(name, REAL[id as string], `行 id=${id} 的名字是「${name}」，与真名单对不上`);
+  }
+});
+
+await check('⑨-2 真实选择：点哪行 active 落哪行', async () => {
+  const row98 = qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '98') as Element;
+  assert.ok(row98, '没有 98 号智能体的行');
+  await act(async () => {
+    click(row98, '智能体行 98');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const activeId = q('.contact-item.active')?.getAttribute('data-agent-id') ?? null;
+  assert.equal(activeId, '98', 'active 没落到 98 行');
+});
+
+await check('⑨-3 搜索是对真名单的实时过滤（打字 → 滤掉；清空 → 回来）', async () => {
+  const field = q('.search-field') as Element;
+  await setTextInput(field, '卡布', '搜索框');
+  const names1 = qa('.contact-item .contact-name').map((n) => n.textContent ?? '');
+  assert.deepEqual(names1, ['卡布'], `打「卡布」应只剩卡布：${JSON.stringify(names1)}`);
+  await setTextInput(field, 'zzz没有', '搜索框');
+  assert.equal(qa('.contact-item').length, 0, '匹配不到的词应是空列表');
+  assert.ok((q('.contact-list__empty')?.textContent ?? '').includes('zzz没有'), '空列表没有人话提示');
+  await act(async () => {
+    click(q('.search-clear'), '清空搜索');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.equal(qa('.contact-item').length, 2, '清空后应恢复全名单');
+});
+
+await check('⑨-4 「＋」弹层只有真操作：新建智能体 → 真 POST /agents，行出现且被选中', async () => {
+  await act(async () => {
+    click(q('.add-btn'), '＋ 按钮');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const popup = q('.add-popup') as Element;
+  assert.ok(popup, '＋ 弹层没出现');
+  assert.ok(popup.className.includes('open'), `弹层不是 open 态：${popup.className}`);
+  const opts = Array.from(popup.querySelectorAll('.opt')).map((o) => o.textContent ?? '');
+  assert.ok(opts.some((t) => t.includes('新建智能体')), `弹层里没有「新建智能体」：${JSON.stringify(opts)}`);
+  assert.ok(!opts.some((t) => t.includes('占位')), '设计基准的假「占位」动作被搬进来了');
+  await act(async () => {
+    click(popup.querySelector('.opt')!, '新建智能体');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('新智能体行 99 出现', () => !!qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '99'), 60);
+  const row99 = qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '99') as Element;
+  assert.ok(row99, '新智能体 99 没出现（POST 没真发 / 桩没接）');
+  assert.ok(row99.className.includes('active'), '新智能体应被自动选中（addAgent 既有行为）');
+});
+
+await check('⑨-5 分隔条拖宽是真好物：宽度夹在 [220,360] 且写进 localStorage', async () => {
+  const sp = q('.splitter') as Element;
+  assert.ok(sp, '分隔条 .splitter 不在');
+  assert.equal(readVar('--sb-w'), '250px', `初始宽度不是默认 250px：${readVar('--sb-w')}`);
+  await act(async () => {
+    sp.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 100 }));
+    sp.dispatchEvent(new dom.window.PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: 160 })); // +60 → 310
+    sp.dispatchEvent(new dom.window.PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: 4000 })); // 超界 → 夹到 360
+    sp.dispatchEvent(new dom.window.PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: 4000 }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.equal(readVar('--sb-w'), '360px', `拖超界应夹到 360px：${readVar('--sb-w')}`);
+  assert.equal(dom.window.localStorage.getItem('workbench:sb-w'), '360', '宽度没写进 localStorage');
+});
+
+await check('⑨-6 分隔条双击复位 250（也写回 localStorage）', async () => {
+  const sp = q('.splitter') as Element;
+  await act(async () => {
+    sp.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.equal(readVar('--sb-w'), '250px', `双击后应复位 250px：${readVar('--sb-w')}`);
+  assert.equal(dom.window.localStorage.getItem('workbench:sb-w'), '250', '复位值没写回 localStorage');
+});
+
+await check('⑨-7 样式红线：第二列常驻（不许 display:none / 宽 0），选中态真 class 在位', () => {
+  const design = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
+  const m = design.match(/\.sidebar\s*\{([^}]*)\}/);
+  assert.ok(m, 'design/06-sidebar.css 里找不到 .sidebar 规则');
+  assert.ok(!/display\s*:\s*none/.test(m![1]), '第二列常驻，不许 display:none');
+  assert.ok(!/width\s*:\s*0/.test(m![1]), '第二列宽度不许归零');
+  assert.ok(/\.contact-item\.active\s*\{/.test(design), '选中态 .contact-item.active 规则缺失');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./06-sidebar.css') && idx.includes('./08-search.css'), '侧栏/搜索 CSS 没挂进设计入口');
+});
+
+log('');
+log('--- ⑩ Rail（批次 M-3\'）：第一列玻璃栏 —— 真头像 / 真视图开关 / 真名单 chip / 真新建 ---');
+
+await check('⑩-1 rail 在场,chip 是真名单（个数/名字与第二列一致,选中同步）', () => {
+  assert.ok(q('.rail'), '第一列 .rail 不在');
+  const chips = qa('.rail .agent-chip');
+  const rows = qa('.contact-item');
+  assert.equal(chips.length, rows.length, `chip 数(${chips.length}) ≠ 第二列行数(${rows.length})`);
+  const rowNames = rows.map((r) => r.querySelector('.contact-name')?.textContent ?? '');
+  for (const c of chips) {
+    assert.ok(rowNames.includes(c.getAttribute('title') ?? ''), `chip 的 title「${c.getAttribute('title')}」不在真名单里`);
+  }
+  const selChip = q('.rail .agent-chip.selected');
+  assert.ok(selChip, 'rail 没有选中 chip');
+  const activeRow = q('.contact-item.active');
+  assert.ok(activeRow, '第二列没有 active 行');
+  const activeName = activeRow!.querySelector('.contact-name')?.textContent ?? '';
+  assert.equal(selChip!.getAttribute('title'), activeName, '选中 chip 与第二列 active 行不是同一个智能体');
+});
+
+await check('⑩-2 点 chip 真切换智能体（与第二列 active 行同步）', async () => {
+  const chipXiaozhu = qa('.rail .agent-chip').find((c) => c.getAttribute('title') === '小助') as Element;
+  assert.ok(chipXiaozhu, '没有「小助」chip');
+  await act(async () => {
+    click(chipXiaozhu, 'chip 小助');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const activeId2 = q('.contact-item.active')?.getAttribute('data-agent-id') ?? null;
+  assert.equal(activeId2, '97', '点 chip 没把当前智能体切过去');
+  const selTitle = q('.rail .agent-chip.selected')?.getAttribute('title') ?? null;
+  assert.equal(selTitle, '小助', 'rail 选中态没跟着动');
+});
+
+await check('⑩-3 视图开关与旧顶栏同源:「启用」→ 第四列弹出;「对话」→ 隐藏(webview 不卸载)', async () => {
+  const layerBefore = q('.browserLayer') as Element;
+  assert.ok(layerBefore, '浏览器层不在(前置状态不对?)');
+  await act(async () => {
+    click(q('.tab--browser'), '🌐 启用 tab');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const openCls = q('.browserLayer')?.getAttribute('class') ?? '';
+  assert.ok(!openCls.includes('browserLayer--hidden'), `点「启用」后第四列应可见: ${openCls}`);
+  await act(async () => {
+    click(q('.tab--chat'), '💬 对话 tab');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const hiddenCls = q('.browserLayer')?.getAttribute('class') ?? '';
+  assert.ok(hiddenCls.includes('browserLayer--hidden'), `点「对话」后应隐藏: ${hiddenCls}`);
+  assert.ok(layerBefore === q('.browserLayer'), '切视图把浏览器层元素换掉了');
+});
+
+await check('⑩-4 顶部头像块是真会话数据;快捷 ＋ 是真新建', async () => {
+  const ico = q('.rail .menu-btn .user-avatar-ico');
+  assert.ok(ico, '头像块的字缺失');
+  // 桩账号没有对外号也没有打码手机号 → 按规则回落 'U'(真逻辑,不是假数据)
+  assert.equal((ico!.textContent ?? '').trim(), 'U', `头像字不是从真会话数据推出来的: ${ico?.textContent}`);
+  const before = qa('.rail .agent-chip').length;
+  await act(async () => {
+    click(q('.rail .rail-quick-add'), '＋ 快捷创建');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('新 chip 出现', () => qa('.rail .agent-chip').length === before + 1, 60);
+  const newChip = qa('.rail .agent-chip')[before];
+  assert.equal(newChip.getAttribute('title'), '新员乙', '快捷创建的 chip 不是真新建的智能体');
+});
+
+await check('⑩-5 样式红线:第一列常驻(无 display:none),选中态真 class 在位', () => {
+  const rail = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '07-rail.css'), 'utf8');
+  const m = rail.match(/\.rail\s*\{([^}]*)\}/);
+  assert.ok(m, 'design/07-rail.css 里找不到 .rail 规则');
+  assert.ok(!/display\s*:\s*none/.test(m![1]), '第一列常驻,不许 display:none');
+  const railAgent = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '12-rail-agent.css'), 'utf8');
+  assert.ok(/\.agent-chip\.selected\s*\{/.test(railAgent), '选中态 .agent-chip.selected 规则缺失');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./07-rail.css') && idx.includes('./12-rail-agent.css'), 'rail CSS 没挂进设计入口');
+});
+
+log('');
+log(`--- ⑪ 输入栏（批次 M-4'）：pill 式输入栏接真会话数据 ---`);
+await check('⑪-1 输入栏:placeholder 由真会话推导,data-state 随真输入迁移', async () => {
+  const bar = q('.inputbar');
+  assert.ok(bar, '缺 .inputbar 输入栏（还是旧 .inputBar?）');
+  assert.ok(!q('.inputBar'), '旧 .inputBar 元素还留在 DOM');
+  assert.equal(bar.getAttribute('data-state'), 'empty', '空输入时 data-state 应为 empty');
+  const field = bar.querySelector('input.inputbar-field');
+  assert.ok(field, '缺 .inputbar-field 输入框');
+  // ⑩-4 快捷新建后当前智能体 = 刚建出来的「新员乙」→ placeholder 必须含
+  // **此刻真当前智能体**的名字（写死「小助」会挂 —— 这正是真数据不是假数据）
+  const ph = field.getAttribute('placeholder') ?? '';
+  assert.ok(ph.includes('新员乙'), `placeholder 没反映当前智能体真名: ${ph}`);
+  await act(async () => {
+    await setTextInput(field, '打个招呼', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const barTyping = q('.inputbar');
+  assert.ok(barTyping, '输入后输入栏不见了');
+  assert.equal(barTyping.getAttribute('data-state'), 'typing', '输入了字 data-state 没到 typing（状态是假的）');
+  assert.equal(field.value, '打个招呼', '输入框没留住打进去的字');
+  await act(async () => {
+    await setTextInput(field, '', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const barEmpty = q('.inputbar');
+  assert.equal(barEmpty?.getAttribute('data-state'), 'empty', '清空后没回到 empty');
+});
+await check('⑪-2 Enter 真发送:走 /chat/stream,助手气泡是流帧回出来的', async () => {
+  const field = q('.inputbar-field');
+  assert.ok(field, '缺输入框');
+  await act(async () => {
+    await setTextInput(field, '打个招呼', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('输入被消费', () => (q('.inputbar-field')?.value ?? '') === '', 60);
+  assert.ok(requestedPaths.includes('/chat/stream'), '没请求 /chat/stream（发送是假的?）');
+  await waitFor('用户气泡', () =>
+    [...document.body.querySelectorAll('.msg')].some((m) => (m.textContent ?? '').includes('打个招呼')),
+    60,
+  );
+  // 助手回复 = SSE 桩推的流帧（真打字机路径,不是渲染时写死）
+  await waitFor('助手流式回复', () =>
+    [...document.body.querySelectorAll('.msg.assistant')].some((m) => (m.textContent ?? '').includes('待命中')),
+    60,
+  );
+});
+await check('⑪-3 结束钮真 tidy:POST /agents/:id/tidy,回执进 chatNote', async () => {
+  const endBtn = q('.inputbar-btn.end');
+  assert.ok(endBtn, '缺「结束」钮');
+  assert.ok((endBtn.getAttribute('title') ?? '').includes('两层记忆'), '结束钮 title 丢失（真功能说明）');
+  // 当前智能体 = 第二列 active 行的 data-agent-id（⑩-4 之后是新建的「新员乙」）
+  const curId = q('.contact-item.active')?.getAttribute('data-agent-id') ?? null;
+  assert.ok(curId, '找不到当前智能体（第二列 active 行缺失）');
+  await act(async () => {
+    click(endBtn, '结束');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('tidy 请求', () => requestedPaths.includes(`/agents/${curId}/tidy`), 60);
+  await waitFor('回执', () => (document.body.textContent ?? '').includes('整理完了'), 60);
+});
+await check('⑪-4 样式红线:规则在 design/ 且已挂入口;旧 .inputBar 规则随组件消失', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '04-inputbar.css'), 'utf8');
+  assert.ok(/\.inputbar\s*\{/.test(css) && /\.inputbar-btn\.send\s*\{/.test(css), '04-inputbar.css 缺 .inputbar / .send 规则');
+  // 常驻件:壳规则不许 display:none（同 ⑩-5 对 .rail 的红线）
+  const barRule = css.match(/\.inputbar\s*\{([^}]*)\}/);
+  assert.ok(barRule, '04-inputbar.css 里找不到 .inputbar 壳规则');
+  assert.ok(!/display\s*:\s*none/.test(barRule[1]), '.inputbar 壳规则里有 display:none（输入栏被藏掉了）');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./04-inputbar.css'), '输入栏 CSS 没挂进设计入口');
+  // M9'：文件级红线 —— styles.css 已删,任何旧规则想回来先得让文件复活
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.inputBar* 旧规则不许回来）');
+});
+
+log('');
+log(`--- ⑫ 聊天区（批次 M-5'）：气泡体系接真会话数据,顺手修 .msg 双定义 ---`);
+await check('⑫-1 聊天区:chatNote 真 × 能关;历史气泡 + 来源标注是 /chat/history 真数据', async () => {
+  // ⑪-3 的 tidy 回执还在（期间没发过话、没切过人）→ 真 × 关掉它
+  const note = q('.chatNote');
+  assert.ok(note && (note.textContent ?? '').includes('整理完了'), 'chatNote 不该是 ⑪-3 的 tidy 回执');
+  await act(async () => {
+    click(q('.chatNote__x'), '关闭提示');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(q('.chatNote') === null, '点 × 没关掉提示（真 handler 被摘?）');
+  // ⑩-4 刚新建的「新员乙」本来就没有历史（新智能体 = 空会话,这也是真数据）——
+  // 切回 97 小助（启动时载过历史）看真历史气泡
+  const row97 = q('.contact-item[data-agent-id="97"]');
+  assert.ok(row97, '缺 97 小助 的名单行');
+  await act(async () => {
+    click(row97, '切回 97 小助');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('历史气泡出现', () => {
+    const c = q('.chat');
+    return c !== null && [...c.querySelectorAll('.msg.assistant')].some(
+      (m) => (m.textContent ?? '').includes('这是从网页查到的回答。'),
+    );
+  }, 60);
+  const chat = q('.chat');
+  assert.ok(chat, '.chat 会话容器缺失');
+  const title = chat.querySelector('.sources__title');
+  const domain = chat.querySelector('.sources__domain');
+  assert.ok(title && (title!.textContent ?? '').includes('示例文章'), '来源标题不是 history 真数据');
+  assert.ok(domain && (domain!.textContent ?? '').includes('example.com'), '来源域名不是 history 真数据');
+  const fakeBubbles = [...chat.querySelectorAll('.msg')].filter(
+    (m) => (m.textContent ?? '').includes('假气泡'),
+  );
+  assert.equal(fakeBubbles.length, 0, '出现写死的假气泡');
+});
+await check('⑫-2 搜索提示跟真 SSE 帧走（start → done 两次真迁移）', async () => {
+  const field = q('.inputbar-field');
+  assert.ok(field, '缺输入框');
+  await act(async () => {
+    await setTextInput(field, '今天天气怎么样', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  // SSE 桩先推 search:start → 「正在搜索：天气」必须真实出现（不是渲染时写死）
+  await waitFor('搜索提示（start 帧）', () => {
+    const h = q('.searchHint');
+    return h !== null && (h.textContent ?? '').includes('正在搜索：天气');
+  }, 60);
+  // 250ms 后 search:done 帧 → 文案换成结果数;流结束提示行消失
+  await waitFor('搜索完成（done 帧 / 流结束）', () => {
+    const h = q('.searchHint');
+    return h === null || (h.textContent ?? '').includes('2 条结果');
+  }, 60);
+});
+await check('⑫-3 流式气泡:真 streamText + .caret,不是假动画圆点', async () => {
+  const field = q('.inputbar-field');
+  assert.ok(field, '缺输入框');
+  await act(async () => {
+    await setTextInput(field, '再问一句', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  // 250ms 窗口内:流式气泡在(光标 ▍ 只存在于流式气泡)、还没有假 .tdot
+  await waitFor('流式气泡出现', () => q('.chat .msg.assistant .caret') !== null, 60);
+  assert.ok(!q('.chat .tdot'), '出现基准的假 thinking 圆点（不该搬）');
+  // 流结束后:caret 消失,又多一条真回复气泡（SSE 桩的固定回复文案）
+  await waitFor('流结束,caret 消失', () => q('.chat .msg.assistant .caret') === null, 120);
+  const replyCount = [...(q('.chat')?.querySelectorAll('.msg.assistant') ?? [])].filter(
+    (m) => (m.textContent ?? '').includes('待命中'),
+  ).length;
+  assert.ok(replyCount >= 2, `两次真发送后应至少 2 条回复气泡（实际 ${replyCount}）`);
+});
+await check('⑫-4 样式红线:11-chat-bubbles.css 在场且 .msg 单一 .msg 定义;旧规则随组件消失', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '11-chat-bubbles.css'), 'utf8');
+  assert.ok(/\.chat\s*\{/.test(css), '11-chat-bubbles.css 缺 .chat 容器规则');
+  // ★ 双定义修复的守门:.msg 基础规则全文件只许出现一次
+  const msgDefs = (css.match(/^\.msg\s*\{/gm) ?? []).length;
+  assert.equal(msgDefs, 1, `.msg 基础规则定义了 ${msgDefs} 次（双定义又回来了,该修基准 59/139 行那种重定义）`);
+  assert.ok(/\.msg\.user\s*\{/.test(css) && /\.msg\.assistant::before/.test(css), '缺 .msg.user / .msg.assistant 尾巴规则');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./11-chat-bubbles.css'), '聊天区 CSS 没挂进设计入口');
+  // M9'：文件级红线（.msg 双定义修复 + 聊天区全家已搬进 11-chat-bubbles.css）
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.msg/.searchHint/.welcomeCard 旧规则不许回来）');
+});
+
+log('');
+log(`--- ⑭ 其余 CSS（批次 M-7'）：编号 CSS 跟组件走,死代码清零,F2-③ 两槽在场 ---`);
+await check('⑭-1 框架/原语跟组件走:03-frame + 02-base 在场,旧规则消失', () => {
+  const frame = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '03-frame.css'), 'utf8');
+  assert.ok(/\.app\s*\{/.test(frame) && /\.middle\s*\{/.test(frame), '03-frame.css 缺 .app / .middle');
+  const base = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '02-base.css'), 'utf8');
+  assert.ok(/\.btn\s*\{/.test(base) && /\.buttons-row\s*\{/.test(base), '02-base.css 缺 .btn / .buttons-row 原语');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./03-frame.css') && idx.includes('./10-surface.css'), '新编号文件没挂进设计入口');
+  // M9'：文件级红线（.app 在 03-frame、.btn 原语在 02-base）
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.app/.btn 旧规则不许回来）');
+});
+await check('⑭-2 任务表面 + 侧栏家族在场;死代码（DOM 零引用）已清零', () => {
+  const surf = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '10-surface.css'), 'utf8');
+  assert.ok(/\.taskState\s*\{/.test(surf) && /\.driveState\s*\{/.test(surf) && /\.loopGone\s*\{/.test(surf), '10-surface.css 缺任务表面规则');
+  assert.ok(/\.taskResult \.buttons-row\s*\{/.test(surf), '必查后代选择器 .taskResult .buttons-row 没随组件搬走');
+  const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
+  assert.ok(/\.projectBox\s*\{/.test(side) && /\.memList\s*\{/.test(side) && /\.knowledgePanel\s*\{/.test(side) && /\.contact--on\s*\{/.test(side), '06-sidebar.css 缺左栏家族规则');
+  // M9'：文件级红线（死代码 M7' 已删,承载它们的 styles.css M9' 已删）
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.driveBar/.memCard 等死代码不许回来）');
+});
+await check('⑭-3 F2-③ 两槽在场:成功槽朴素 + 失败槽红;演示行只藏不删（DOM 还在）', () => {
+  const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
+  assert.ok(/\.projectBox__note\s*\{/.test(side) && /\.projectBox__note--err\s*\{/.test(side), 'F2-③ 的两套样式没进 06-sidebar.css');
+  const surf = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '10-surface.css'), 'utf8');
+  assert.ok(/\.demoOnly\s*\{[^}]*display\s*:\s*none/.test(surf), '.demoOnly（演示行隐藏）规则丢了');
+  // 演示行 DOM 保留（只藏不删,桥自检照跑）
+  const demo = q('.demoOnly');
+  assert.ok(demo, '演示行 DOM 没了（第 18 步的"只藏不删"被破坏）');
+});
+
+log('');
+log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
+await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
+  // 批次 M-2:tab 可能分布在多个智能体名下（⑧ 在会话里点链接开的页属于当时的智能体），
+  // 顶栏只列**当前**智能体的 tab → 轮转每个智能体把可见 tab 关光,直到层消失。
+  const contacts = qa('aside.sidebar .contact-item');
+  assert.ok(contacts.length >= 1, '没有可切的智能体行');
+  for (let round = 0; round < contacts.length + 1 && q('.browserLayer') !== null; round++) {
     await act(async () => {
-      click(b, '关页');
+      click(contacts[round % contacts.length], '切智能体');
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     await flush(2);
+    const closeBtns = qa('.browserTab__x');
+    assert.ok(closeBtns.length >= 1, '没有关页按钮（browserTab__x）');
+    for (const b of closeBtns) {
+      await act(async () => {
+        click(b, '关页');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      await flush(2);
+    }
   }
   await waitFor('浏览器层消失', () => q('.browserLayer') === null && q('webview') === null);
   assert.ok(q('webview') === null, `<webview> 应该随最后一张页一起卸载（还有 ${qa('webview').length} 个）`);
@@ -482,8 +1036,9 @@ await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失
 
 log('');
 log('--- ⑦ 样式红线：宿主与舞台不许被 display:none / 尺寸归零 ---');
-await check('styles.css 里 .browserLayer / .browserPanel__stage 没有 display:none / 0 尺寸', () => {
-  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+await check('14-browser-column + browser/styles.css 里 .browserLayer / .browserPanel__stage 没有 display:none / 0 尺寸', () => {
+  // M9'：第四列三态规则在 design/14-browser-column.css（旧 styles.css 已删）
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css'), 'utf8');
   const browser = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'browser', 'styles.css'), 'utf8');
   const stripped = (css + browser).replace(/\/\*[\s\S]*?\*\//g, '').replace(/min-height\s*:\s*0/g, '');
   for (const sel of ['.browserLayer', '.browserPanel__stage', '.browserPanel']) {
@@ -503,6 +1058,220 @@ await check('styles.css 里 .browserLayer / .browserPanel__stage 没有 display:
     const inline = layerEl.getAttribute('style') ?? '';
     assert.ok(!/display\s*:\s*none/.test(inline), `.browserLayer 上出现了内联 display:none：${inline}`);
     assert.ok(!/(?<!min-)height\s*:\s*0/.test(inline), `.browserLayer 上出现了内联 height:0：${inline}`);
+  }
+});
+
+function stripFor16(t: string): string {
+  return t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+const esc16 = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+log('');
+log(`--- ⑯ M9' 收口：styles.css 整体删除,零残留 ---`);
+
+const DESKTOP_SRC = join(REPO, 'apps', 'desktop', 'src');
+function walkTs(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkTs(full));
+    else if (/\.(ts|tsx)$/.test(e.name)) out.push(full);
+  }
+  return out;
+}
+
+await check('⑯-1 零残留：styles.css 文件不在场,main.tsx 唯一入口,第四列规则在 14-browser-column.css', () => {
+  assert.ok(!existsSync(LEGACY_STYLES), 'styles.css 文件还在（M9\' 要删）');
+  const main = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'main.tsx'), 'utf8');
+  assert.ok(!main.includes("import './styles.css'"), 'main.tsx 还在 import styles.css');
+  assert.ok(main.includes("import './design/index.css'"), 'main.tsx 没引 design 入口');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./14-browser-column.css'), '14-browser-column.css 没挂进设计入口');
+  const col = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css'), 'utf8');
+  // 7 条规则全在（三态 + 拖拽手柄 + embed）
+  for (const sel of ['.browserLayer {', '.browserLayer--hidden {', '.browserLayer--overlay {',
+                     '.browserLayer--dragging {', '.browserCol__resizer {', '.browserCol__resizer:hover {', '.browserLayer--embed {']) {
+    assert.ok(col.includes(sel), `14-browser-column.css 缺 ${sel}`);
+  }
+  // 铁律：隐藏 = transform,绝不 display:none（规则搬家不许顺手改）
+  const hidden = col.match(/\.browserLayer--hidden\s*\{([^}]*)\}/);
+  assert.ok(hidden && /transform\s*:\s*translateX/.test(hidden[1]) && !/display\s*:\s*none/.test(hidden[1]),
+    '--hidden 规则被改坏了（必须是 transform 移出视野）');
+  // 14 只装第四列家族：不许混进别的组件的规则
+  const stripped14 = col.replace(/\/\*[\s\S]*?\*\//g, '');
+  const sels14 = [...stripped14.matchAll(/([{};,\s])(\.[A-Za-z][\w-]*(?:[:.-][\w-]+)?)/g)].map((m) => m[2]);
+  assert.ok(sels14.every((x) => x.startsWith('.browserLayer') || x.startsWith('.browserCol__resizer')),
+    `14-browser-column.css 混进了第四列之外的选择器：${sels14.filter((x) => !x.startsWith('.browserLayer') && !x.startsWith('.browserCol__resizer')).join(', ')}`);
+});
+
+/**
+ * ⑯-2 零残留审计 —— 基线 = 批次 M 之前（ac75d63）styles.css 的**全部 120 个类选择器**。
+ * 口径：原表里每个类，只要还在桌面源码的 className 语境里出现，就**必须**在
+ * （design/ ∪ browser/ ∪ channels/）里有规则 —— 旧表没有任何一块规则被悄悄弄丢。
+ * 唯一例外 agentList：M2' 有意让位（列表布局职责改由 .contact-list + .sidebar__body 承担，
+ * 见 06-sidebar.css;wrapper div 保留为纯容器,JSX 里 M2' 注释写明）。
+ */
+const ORIG_CLASSES = [
+    'account',
+    'agentList',
+    'agentList__add',
+    'agentList__del',
+    'agentList__note',
+    'agentSteps',
+    'app',
+    'assistant',
+    'authCard',
+    'authErr',
+    'authInput',
+    'authRow',
+    'authTab',
+    'authTab--on',
+    'authTabs',
+    'authWrap',
+    'avatar',
+    'avatar__face',
+    'browserFloating',
+    'browserLayer',
+    'browserLayer--bg',
+    'browserLayer--embed',
+    'btn',
+    'btn--go',
+    'btn--pending',
+    'buttons-row',
+    'card',
+    'caret',
+    'chat',
+    'chatNote',
+    'chatNote__x',
+    'contact',
+    'contact--on',
+    'contact__name',
+    'demoOnly',
+    'docDownload',
+    'driveBar',
+    'driveBar__go',
+    'driveBar__note',
+    'driveBar__tag',
+    'driveState',
+    'driveState--agent',
+    'driveState--none',
+    'driveState--user',
+    'driveState__icon',
+    'guide',
+    'guide__del',
+    'guide__head',
+    'guide__input',
+    'guide__ok',
+    'guide__table',
+    'inputBar',
+    'inputBar__end',
+    'keepalive',
+    'keepalive__btn',
+    'knowledgePanel',
+    'knowledgePanel__del',
+    'knowledgePanel__file',
+    'knowledgePanel__line',
+    'knowledgePanel__list',
+    'knowledgePanel__name',
+    'knowledgePanel__note',
+    'knowledgePanel__row',
+    'loopGone',
+    'loopGone__q',
+    'loopGone__warn',
+    'memCard',
+    'memList',
+    'memList--pending',
+    'memList__actions',
+    'memList__confirm',
+    'memList__forget',
+    'memList__reject',
+    'memList__row',
+    'memList__row--pending',
+    'memList__title',
+    'middle',
+    'msg',
+    'personaEditCard',
+    'personaEditOverlay',
+    'projectBox',
+    'projectBox__list',
+    'projectBox__note',
+    'projectBox__row',
+    'readTag',
+    'red-dot',
+    'right',
+    'searchHint',
+    'settingsRow',
+    'settingsRow__num',
+    'sidebar',
+    'sidebar__footer',
+    'small',
+    'sources',
+    'sources__domain',
+    'sources__item',
+    'sources__label',
+    'sources__list',
+    'sources__title',
+    'status-running',
+    'taskResult',
+    'taskState',
+    'taskSummary',
+    'unreadTag',
+    'user',
+    'welcomeCard',
+    'welcomeCard__actions',
+    'welcomeCard__btn',
+    'welcomeCard__btn--primary',
+    'welcomeCard__desc',
+    'welcomeCard__title',
+    'workbenchNav',
+    'workbenchNav__badge',
+    'workbenchNav__btn',
+    'workbenchNav__btn--active',
+    'workbenchNav__driving',
+    'workbenchNav__meta',
+    'workbenchNav__name',
+    'workbenchNav__status',
+    'workbenchNav__views',
+];
+await check('⑯-2 零残留审计：原表 120 类仍在用者,规则一个都不许丢（design/browser/channels 合并口径）', () => {
+  const designDir = join(DESKTOP_SRC, 'design');
+  const cssAll = readdirSync(designDir).filter((f) => f.endsWith('.css'))
+      .map((f) => readFileSync(join(designDir, f), 'utf8')).join('\n')
+    + '\n' + readFileSync(join(DESKTOP_SRC, 'browser', 'styles.css'), 'utf8')
+    + '\n' + readFileSync(join(DESKTOP_SRC, 'channels', 'styles.css'), 'utf8');
+  const definedRe = (c: string): RegExp => new RegExp('\\.' + esc16(c) + '(?![\\w-])');
+  assert.ok(definedRe('authWrap').test(cssAll), '自检失败：.authWrap 应该定义在 09-modal.css（审计器坏了）');
+  const srcText = walkTs(DESKTOP_SRC).map((f) => stripFor16(readFileSync(f, 'utf8'))).join('\n');
+  const classCtx = [...srcText.matchAll(/className="([^"]+)"/g)].map((m) => m[1]).join(' ')
+    + ' ' + [...srcText.matchAll(/className=\{([^}]*)\}/g)].map((m) => m[1]).join(' ');
+  assert.ok(classCtx.includes('app'), '自检失败：className 语境里应该有 .app（审计器坏了）');
+  const exceptions: Record<string, string> = {
+    agentList: 'M2\' 有意让位（布局职责 → .contact-list + .sidebar__body,见 06-sidebar.css）',
+  };
+  const lost: string[] = [];
+  for (const c of ORIG_CLASSES) {
+    const re = new RegExp('(?<![\\w.-])' + esc16(c) + '(?![\\w-])');
+    if (!re.test(classCtx)) continue;          // 源码里没人再用 → 规则随 UI 删除,合理
+    if (definedRe(c).test(cssAll)) continue;   // 规则在场（新家）→ OK
+    if (c in exceptions) continue;             // 文档化例外
+    lost.push(c);
+  }
+  assert.equal(lost.length, 0, `原表规则丢了:${lost.join(', ')}`);
+});
+
+await check('⑯-3 .agentList 家族去向钉死：__note 有规则,布局新东家在场,__add/__del 与 UI 一起消失', () => {
+  const side = readFileSync(join(DESKTOP_SRC, 'design', '06-sidebar.css'), 'utf8');
+  assert.ok(/\.agentList__note\s*\{/.test(side), '06-sidebar.css 缺 .agentList__note 规则（在用的类丢了样式）');
+  // 容器布局的新东家（M2' 接替旧 .agentList 的 flex 列 + 滚动职责）
+  const contactList = side.match(/\.contact-list\s*\{([^}]*)\}/);
+  assert.ok(contactList && /flex-direction:\s*column/.test(contactList[1]), '.contact-list 不再是 flex 列（列表布局没人管了）');
+  const body = side.match(/\.sidebar__body\s*\{([^}]*)\}/);
+  assert.ok(body && /overflow-y:\s*auto/.test(body[1]), '.sidebar__body 不再滚动（左栏超高时入口够不着,旧 .agentList 的坑回来了）');
+  // 旧「＋ 添加 / 删除」两钮 M2' 起已收进顶栏弹层 —— 若按钮回来,规则必须跟回来
+  const srcText = walkTs(DESKTOP_SRC).map((f) => stripFor16(readFileSync(f, 'utf8'))).join('\n');
+  for (const c of ['agentList__add', 'agentList__del']) {
+    const re = new RegExp('(?<![\\w.-])' + esc16(c) + '(?![\\w-])');
+    assert.ok(!re.test(srcText), `${c} 又出现在源码里（按钮回来了,规则必须跟着回来）`);
   }
 });
 

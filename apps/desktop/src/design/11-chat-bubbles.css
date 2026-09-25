@@ -1,0 +1,273 @@
+/* 11-chat-bubbles —— 批次 M-5'：聊天区气泡体系搬入设计基准 workbench-ui。
+   来源：workbench-ui/src/styles/11-chat-bubbles.css（V19 微信式气泡体系：
+   .chat-stream / .msg 灰底圆角 / .msg.user 微信绿 #95EC69 / 左右小尾巴
+   clip-path / 15px 1.45 正文），原序切分、原注释保留。
+   桌面端适配（基准的假体系不搬，见用户铁律：假 useState / 假演示一律不搬）：
+   ① 容器类名：基准 .chat-stream → 桌面 .chat（webview 祖先链 golden 要求
+      .chat 名逐字节不变，不许改）；基准的 `top:64px !important`（它嵌在
+      workbench 三列布局里绝对定位）不搬——桌面 .chat 是 .middle 的普通
+      flex 流子，只取视觉参数（padding 16/18/22、gap 14）+ 保留桌面布局
+      硬需求（flex:1 / overflow:auto / flex column）;
+   ②  基准 .msg-row 包装层（气泡+头像一行）不搬——桌面消息流是裸 .msg
+      直接做 flex 子（对齐用 align-self，等价效果）；
+   ③  .msg-avatar 头像不搬——桌面会话流没有头像位（发言人换人靠
+      .msg__speaker 名字牌，批次 J 真数据）；
+   ④  V20 像素复刻段（img-14.png 气泡底图 / 42px 头像 / 28px 大圆角）
+      不搬——那是基准里对 ZIP 图的复刻演示，桌面没有该素材;
+   ⑤  .msg.ai.thinking 三圆点动画不搬——桌面「正在想…/打字机」是真
+      streamText + .caret，不是假动画;
+   ★ 顺手修基准的 .msg 双定义：基准文件里 .msg 基础规则出现两处
+      （第 59 行基础 + V20 段 .msg-row.ai .msg 整段重定义），迁移时
+      合并为**单一** .msg 基础规则 + .msg.user / .msg.assistant 各一处
+      覆写（smoke ⑫-4 有"定义处数 = 1"的静态断言守着）。
+   桌面自有的真聊天元素（searchHint / chatNote / sources / welcomeCard /
+   .msg__speaker / .caret）基准没有对应物，随组件一起收进本文件，
+   样式值照搬旧 styles.css 规则（原注释保留）。 */
+
+/* ---- 会话滚动容器（布局硬需求 + 基准 .chat-stream 视觉参数） ---- */
+.chat {
+  flex: 1;
+  padding: 16px 18px 22px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* 层级：会话层 z-index 10（压不过全屏浏览器层 z 20，
+     与旧 styles.css 分层注释 ①/② 一致） */
+  position: relative;
+  z-index: 10;
+}
+
+/* ---- 消息气泡（基准 V19 微信式；.msg 全文件仅此一处定义） ---- */
+.msg {
+  position: relative;
+  align-self: flex-start;
+  min-height: 38px;
+  max-width: min(72%, 520px);
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: var(--fw-regular);
+  word-break: break-word;
+  color: #111111;
+  background: #ececec;
+}
+
+/* 左侧（AI）气泡小尾巴 */
+.msg.assistant::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 12px;
+  width: 10px;
+  height: 10px;
+  background: #ececec;
+  clip-path: polygon(100% 0, 100% 100%, 0 50%);
+}
+
+/* 右侧（用户）绿色气泡 + 小尾巴 */
+.msg.user {
+  align-self: flex-end;
+  background: #95ec69;
+}
+
+.msg.user::after {
+  content: "";
+  position: absolute;
+  right: -5px;
+  top: 12px;
+  width: 10px;
+  height: 10px;
+  background: #95ec69;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+
+/* 窄一些时自动适应（基准两个 @media 段合并为一处） */
+@media (max-width: 760px) {
+  .chat {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .msg {
+    max-width: 78%;
+    font-size: 14px;
+  }
+}
+
+/* ---- 批次 J · 发言人名字牌（只在换人的那句上挂；真 speaker 数据） ----
+   旧版是 JSX 内联 style，批次 M-5' 收进本文件（版式值不变）。 */
+.msg__speaker {
+  font-size: 11px;
+  opacity: 0.72;
+  margin: 2px 0;
+  text-align: right;
+}
+
+/* ---- 打字机光标（真 streamText 之后跟的那个 ▍） ---- */
+.caret {
+  display: inline-block;
+  margin-left: 1px;
+  color: #6b7280;
+  animation: caretBlink 1s steps(1) infinite;
+}
+@keyframes caretBlink {
+  50% { opacity: 0; }
+}
+
+/* ---- 聊天提示条（tidy 回执 / 出错说明等，真 chatNote state） ---- */
+.chatNote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 4px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+}
+.chatNote__x {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: #92400e;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* ---- 第 26 步：联网搜索的过程提示 ----------------------------------------
+   刻意做得"轻"：一行灰色小字 + 一道细左边线，不抢聊天气泡的注意力。
+   它对应的是**轻量搜索**（不打开任何网页），所以绝不能长得像浏览器卡片或任务条。 */
+.searchHint {
+  margin: 4px 4px 2px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #6b7280;
+  border-left: 2px solid #cbd5e1;
+}
+
+/* ---- 第 26 步：来源标注（助手气泡下方的可点链接）----
+   设计意图：回答正文照旧是"话"，来源单独一行小字挂在下面，
+   像 ChatGPT 那样"看得出出处"，但不把网址揉进正文。
+   每行 = 标题 + 域名；点一条跳原始网页（走系统默认浏览器）。
+   没搜过的回复整块不渲染，所以这里不需要"空态"样式。 */
+.sources {
+  display: flex;
+  gap: 6px;
+  margin: 2px 4px 4px;
+  padding-top: 6px;
+  border-top: 1px dashed #e5e7eb;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.sources__label {
+  flex: none;
+  color: #9ca3af;
+  user-select: none;
+}
+
+.sources__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+}
+
+.sources__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  color: #2563eb;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sources__item:hover .sources__title {
+  text-decoration: underline;
+}
+
+.sources__title {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sources__domain {
+  flex: none;
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+/* ---- 空会话时的欢迎卡（真 welcomeCard：按钮是真 setInput / 真快捷指令） ---- */
+.welcomeCard {
+  background: linear-gradient(135deg, #f0f7ff 0%, #fafafa 100%);
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  padding: 20px;
+  margin: 16px 8px;
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.04);
+}
+
+.welcomeCard__title {
+  margin: 0 0 8px 0;
+  font-size: 16px;
+  color: #1e3a8a;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.welcomeCard__desc {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.6;
+  margin-bottom: 14px;
+}
+
+.welcomeCard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.welcomeCard__btn {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  color: #1e293b;
+  padding: 7px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.welcomeCard__btn:hover {
+  border-color: #3b82f6;
+  color: #2563eb;
+  background: #f8faff;
+  transform: translateY(-1px);
+}
+
+.welcomeCard__btn--primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.welcomeCard__btn--primary:hover {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: #ffffff;
+}

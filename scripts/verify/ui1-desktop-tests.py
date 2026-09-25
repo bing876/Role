@@ -1125,8 +1125,8 @@ def main():
     # 用假页面 URL 起一个耗时浏览器任务（走既有渲染层入口，不改后端）
     t_start = now_ms()
     evf("""
-      const inp = document.querySelector('.inputBar input');
-      const btn = document.querySelector('.inputBar button');
+      const inp = document.querySelector('.inputbar input');
+      const btn = document.querySelector('.inputbar button');
       if (!inp || !btn) return 'NO_INPUT';
       const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
       setter.call(inp, %s);

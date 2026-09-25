@@ -241,6 +241,17 @@ def click_checked(sel, settle=0.8):
     return ok, h
 
 
+
+def click_add_agent(settle=3.0):
+    """批次 M-2'：「＋ 添加」从单按钮(.agentList__add)改为两步：
+    顶栏「＋」钮(.add-btn) → 弹层「新建智能体」(.add-popup .opt)。
+    返回 (ok, 命中信息)，语义与 click_checked 一致（以最后一步为准）。"""
+    ok1, h1 = click_checked('.add-btn', settle=0.8)
+    if not ok1:
+        return False, h1
+    return click_checked('.add-popup .opt', settle=settle)
+
+
 def expect(ok, msg, detail=''):
     check(msg, ok, detail)
     if not ok:
@@ -292,7 +303,7 @@ def wait_input_ready(timeout=45):
     """输入框在 streaming 时是 disabled 的（React 的 disabled={streaming}）——
     不等它可用就打字，字会打在沙箱里，然后「发出去」的消息是空的。"""
     ok, _, dt = wait_until(
-        lambda: not ev("(() => { const b = document.querySelector('.inputBar button');"
+        lambda: not ev("(() => { const b = document.querySelector('.inputbar button');"
                        " return b ? b.disabled : true; })()"),
         timeout=timeout, interval=0.4)
     return ok, dt
@@ -301,8 +312,8 @@ def wait_input_ready(timeout=45):
 def say(text, settle=1.4):
     """在聊天输入框里**真敲**一句话并点发送；返回实测值，证据里能看到到底发出去的是什么。"""
     ready, dt = wait_input_ready()
-    typed = type_into('.inputBar input', text)
-    hit, geom = click_checked_soft('.inputBar button', settle=settle)
+    typed = type_into('.inputbar input', text)
+    hit, geom = click_checked_soft('.inputbar button', settle=settle)
     return {'ready': ready, 'readyMs': dt, 'typed': typed, 'typedOk': typed == text, 'sendHit': hit,
             'geom': geom}
 
@@ -320,20 +331,20 @@ def click_checked_soft(sel, settle=0.6):
 
 UI_JS = r"""
 (() => {
-  const rows = [...document.querySelectorAll('.agentList .contact')];
+  const rows = [...document.querySelectorAll('.agentList .contact-item')];
   const projCur = document.querySelector('.projectBox__cur');
   const projRows = [...document.querySelectorAll('.projectBox__row')].map((b) => ({
     id: Number(b.getAttribute('data-project-id')),
-    name: (b.querySelector('.contact__name') || {}).textContent || '',
+    name: (b.querySelector('.contact-name') || {}).textContent || '',
     on: b.className.includes('contact--on'),
   }));
-  const on = document.querySelector('.agentList .contact--on');
+  const on = document.querySelector('.agentList .contact-item.active');
   return {
-    names: rows.map((b) => ((b.querySelector('.contact__name') || {}).textContent || '')),
+    names: rows.map((b) => ((b.querySelector('.contact-name') || {}).textContent || '')),
     ids: rows.map((b) => Number(b.getAttribute('data-agent-id'))),
     projCur: projCur ? projCur.textContent : null,
     projRows,
-    selected: on ? (on.querySelector('.contact__name') || {}).textContent : null,
+    selected: on ? (on.querySelector('.contact-name') || {}).textContent : null,
     selectedId: on ? Number(on.getAttribute('data-agent-id')) : null,
     note: (() => { const n = document.querySelector('.agentList__note'); return n ? n.textContent : ''; })(),
   };
@@ -373,7 +384,7 @@ def click_project(pid):
 def select_agent_by_id(aid):
     """点某一行智能体（按 data-agent-id 精确点 —— 两个「新智能体」重名，按名字挑会点错）。"""
     return ev("""(() => {
-      const rows = [...document.querySelectorAll('.agentList .contact')];
+      const rows = [...document.querySelectorAll('.agentList .contact-item')];
       const hit = rows.find(b => Number(b.getAttribute('data-agent-id')) === %d);
       if (!hit) return 'NO_ROW';
       hit.click();
@@ -748,7 +759,7 @@ def main():
 
         # 项目 A 里连点两次「＋ 添加」→ A1、A2
         for label in ('A1', 'A2'):
-            hit, geom = click_checked('.agentList__add', settle=3.5)
+            hit, geom = click_add_agent(settle=3.5)
             check('项目 A 里「＋ 添加」点得到（%s）' % label, hit, json.dumps(geom, ensure_ascii=False))
         a_agents = http_json('/agents?projectId=%d' % pa_id, token=TOKEN)[1]['agents']
         customs_a = [a for a in a_agents if a['kind'] == 'custom']
@@ -764,7 +775,7 @@ def main():
         pb_id = pb[0]['id']
         ok, _, _ = wait_until(lambda: any(r['id'] == pb_id and r['on'] for r in ui()['projRows']), timeout=15)
         check('建完自动切到项目 B', ok, 'projCur=%s' % ui()['projCur'])
-        hit, geom = click_checked('.agentList__add', settle=3.5)
+        hit, geom = click_add_agent(settle=3.5)
         check('项目 B 里「＋ 添加」点得到', hit, json.dumps(geom, ensure_ascii=False))
         b_agents = http_json('/agents?projectId=%d' % pb_id, token=TOKEN)[1]['agents']
         customs_b = [a for a in b_agents if a['kind'] == 'custom']

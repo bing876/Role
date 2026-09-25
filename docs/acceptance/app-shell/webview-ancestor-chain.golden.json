@@ -1,11 +1,10 @@
 {
-  "note": "M0 冒烟网：<webview> 的祖先链 golden。除三条有意卸载路径外必须逐字节不变。",
+  "note": "M0 冒烟网：<webview> 的祖先链 golden。除三条有意卸载路径外必须逐字节不变。BEM 修饰符（--bg/--embed/--off）不算结构，已归一化。",
   "chain": [
     "webview.browserPanel__view",
     "div.browserPanel__stage",
     "div.browserPanel",
     "div.browserLayer",
-    "main.middle",
     "div.app",
     "div",
     "body",

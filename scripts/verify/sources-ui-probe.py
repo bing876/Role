@@ -376,16 +376,16 @@ def send_and_wait(text, timeout=200):
         before_msgs = c.js("document.querySelectorAll('.msg').length")
         before_asst = c.js("document.querySelectorAll('.msg.assistant').length")
 
-        c.click_rect('.inputBar input')
+        c.click_rect('.inputbar input')
         time.sleep(0.3)
         if c.js("document.activeElement ? document.activeElement.tagName : ''") != 'INPUT':
-            c.js("document.querySelector('.inputBar input').focus()")
+            c.js("document.querySelector('.inputbar input').focus()")
             time.sleep(0.2)
         c.type_text(text)
-        val = c.js("document.querySelector('.inputBar input').value")
+        val = c.js("document.querySelector('.inputbar input').value")
         if val != text:
             return {'ok': False, 'why': '输入框内容不是期望文本：%r' % val}
-        c.js("document.querySelector('.inputBar button').click()")
+        c.js("document.querySelector('.inputbar button').click()")
 
         # ① 这一轮开始了：列表里多了一条（用户那句）
         ok1, _, ms1 = wait_until(
@@ -553,7 +553,7 @@ def main():
     # 等页面**加载完**再注入（不然注入可能落在尚未挂载的 window/localStorage 上）
     wait_until(lambda: ev('document.readyState') == 'complete', timeout=60, interval=0.5)
     time.sleep(2)
-    ok, last, ms = wait_until(lambda: bool(ev("Boolean(document.querySelector('.inputBar input'))")),
+    ok, last, ms = wait_until(lambda: bool(ev("Boolean(document.querySelector('.inputbar input'))")),
                               timeout=90, interval=1.0)
     if not ok:
         # 失败时把"卡在哪"打出来：URL + 可见文字 + 有没有报错提示
@@ -657,7 +657,7 @@ def main():
     hrefs_before = [it.get('href') for it in items]
     ev('location.reload()')
     okr, _, msr = wait_until(
-        lambda: bool(ev("Boolean(document.querySelector('.inputBar input'))")),
+        lambda: bool(ev("Boolean(document.querySelector('.inputbar input'))")),
         timeout=90, interval=1.0)
     check('刷新后应用重新起来（输入框回来了）', okr, '耗时 %dms' % msr)
     if okr:
@@ -762,7 +762,7 @@ def main():
 
         # ④ 应用内不许被顶掉（will-navigate / deny 生效）
         after = ev("({href: location.href,"
-                   "  input: Boolean(document.querySelector('.inputBar input')),"
+                   "  input: Boolean(document.querySelector('.inputbar input')),"
                    "  msgs: document.querySelectorAll('.msg').length})") or {}
         stayed = bool(after.get('input')) and ('localhost:%d' % VITE_PORT) in str(after.get('href'))
         check('★ 点完之后应用没被顶掉（仍在应用里，说明 will-navigate / deny 生效）',

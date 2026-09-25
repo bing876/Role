@@ -3,7 +3,9 @@ import React, { Component, StrictMode } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import './styles.css';
+// 批次 M-9' 收口：styles.css 已整体删除,设计 CSS（design/index.css）是唯一样式入口
+// （迁移期规矩「设计 CSS 在 styles.css 之前」随旧表删除而退场）
+import './design/index.css';
 
 interface ErrorBoundaryProps {
   children: ReactNode;

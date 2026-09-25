@@ -15,6 +15,7 @@
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { sameNode } from './lib/dom-assert.mts';
 
@@ -191,7 +192,7 @@ const PROJECT = { id: 7, name: '默认项目', isCurrent: true, isDefault: true,
 /** 第二个项目 + 它自己的名单/资料：用来验「切项目 = 名单与资料一起换」 */
 const PROJECT_B = { id: 8, name: '实验项目', isCurrent: false, isDefault: false, henAgentId: 88 };
 const AGENTS = [
-  { id: 97, name: '小助', kind: 'assistant', deletable: false, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
+  { id: 97, name: '小助', kind: 'assistant', deletable: false, canCreateAgents: true, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
 ];
 const AGENTS_B = [
   { id: 98, name: '卡布', kind: 'worker', deletable: true, projectId: 8, personaStatus: 'ready', persona: null, conversationId: 502, status: 'idle' },
@@ -219,6 +220,8 @@ const bridgeMode = { getTaskState: 'ok' as 'ok' | 'missing' | 'null', backendDow
 /** 会话那一节要用的两个开关：让 /auth/me 失败、密码是否已经设过 */
 let authMeFails = false;
 let hasPassword = false;
+/** ★ F4（M-6'）：/auth/me 延迟 300ms 返回 —— 让「正在恢复」占位态真实可见、可断言 */
+let slowAuthMe = false;
 /** ★ F2：把 `activate` 打成失败（验"失败提示带 ⚠ 前缀"这条），默认关着 */
 let activateFails = false;
 /** 任务快照（默认"完成了但没读" → 红点亮着） */
@@ -226,6 +229,11 @@ let TASK: { id: number; status: string; goal: string; steps: string[]; unread: b
   id: 55, status: 'done', goal: '整理季度数据', steps: ['读表', '算数'], unread: true,
   summary: '一共 12 张表，结论在第 3 页', docTitle: '季度数据整理', unreadHint: '结果文档已生成', outline: ['目标', '过程', '结论'],
 };
+/** ★ M-6' ⑬-2：冒烟期间真新建的智能体（引导确认 = 真 POST 回写 persona） */
+const createdAgents: Array<Record<string, unknown>> = [];
+const createdAgentIds: number[] = [];
+let createdSeq = 1;
+
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
@@ -272,7 +280,9 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   }
   if (path === '/auth/me') {
     if (authMeFails) return new Response(JSON.stringify({ error: 'token 过期' }), { status: 401, headers: { 'content-type': 'application/json' } });
-    return json({ user: { id: 1, phone: '13800000000', xyz: '', has_password: hasPassword }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
+    const meBody = { user: { id: 1, phone: '13800000000', xyz: '', has_password: hasPassword }, project: PROJECT, agents: [{ id: 97, name: '小助' }] };
+    if (slowAuthMe) return new Promise<Response>((resolve) => setTimeout(() => resolve(json(meBody)), 300));
+    return json(meBody);
   }
   if (path === '/auth/password/set') {
     const b = JSON.parse(String(init?.body ?? '{}')) as { old_password?: string; new_password?: string };
@@ -301,11 +311,29 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     currentProjectId = Number(path.split('/')[2]);
     return json({ ok: true, currentProjectId });
   }
+  if (path === '/agents' && init?.method === 'POST') {
+    const a = {
+      id: 990 + createdSeq, name: `新员丙${createdSeq}`, kind: 'worker', deletable: true,
+      canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null,
+      conversationId: 900 + createdSeq, status: 'idle',
+    };
+    createdSeq += 1;
+    createdAgents.push(a);
+    createdAgentIds.push(a.id as number);
+    return json({ agent: a });
+  }
+  const personaM = /^\/agents\/(\d+)\/persona$/.exec(path);
+  if (personaM && init?.method === 'POST') {
+    const b = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    const target = createdAgents.find((a) => a.id === Number(personaM![1]));
+    if (target) { target.persona = b; target.personaStatus = 'ready'; }
+    return json({ agent: target ?? { id: Number(personaM![1]), persona: b, personaStatus: 'ready' } });
+  }
   if (path === '/agents') {
     const pid = Number(new URLSearchParams(url.split('?')[1] ?? '').get('projectId') ?? currentProjectId);
     if (pid === 8) return json({ agents: AGENTS_B });
     if (pid === 9) return json({ agents: [{ ...AGENTS_B[0], id: 99, name: '小鸡', projectId: 9 }] });
-    return json({ agents: AGENTS });
+    return json({ agents: [...AGENTS, ...createdAgents] });
   }
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
   /**
@@ -452,12 +480,12 @@ async function ensure(name: string, pred: () => boolean): Promise<void> {
   }
 }
 /**
- * ★ 「在登录页」不能用 `.authWrap` 判定 —— **"正在恢复登录状态…"那个占位页也是 `.authWrap`**，
- *   两者混在一起就会出现"身份卡在检查中也算回到登录页"的假绿（片 5 的反证 A2 当场抓到）。
- *   真登录页（`AuthScreen`）有 `.authTabs`，占位页没有。
+ * ★ F4（批次 M-6' 已修）：「正在恢复登录状态…」占位页与真登录页（AuthScreen）
+ *   各带修饰类 .authWrap--checking / .authWrap--login —— 判据简化为单一选择器，
+ *   不再靠"占位页里没有 .authTabs"这种间接判据（片 5 的假绿就是这么抓到的）。
  */
-const onLoginScreen = (): boolean => !!q('.authWrap .authTabs');
-const onCheckingScreen = (): boolean => (q('.authWrap')?.textContent ?? '').includes('正在恢复登录状态');
+const onLoginScreen = (): boolean => !!q('.authWrap--login');
+const onCheckingScreen = (): boolean => !!q('.authWrap--checking');
 const doc = dom.window.document;
 const q = (sel: string): Element | null => doc.querySelector(sel);
 const qa = (sel: string): Element[] => Array.from(doc.querySelectorAll(sel));
@@ -837,20 +865,22 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
    *   这条断言原来钉的是"note 现在是空的"（把既有行为钉住，等用户拍）；
    *   现在**反过来**：成功文案必须留在屏幕上。反证 P4 把清空那句加回去 → 这条立刻红。
    */
-  const note = q('.projectBox__note');
+  const note = q('.projectBox__note:not(.projectBox__note--err)');
   assert.ok(note, '新建项目成功后没有确认文案（提示又被刷新清掉了 —— F1 复发）');
   assert.match(note?.textContent ?? '', /建好了/, `确认文案不对：${note?.textContent}`);
-  /** ★ F2：成功是**朴素**的（前缀只属于失败）—— 成功后还挂个 ⚠ 会让用户以为坏了 */
+  /** ★ F2：成功是**朴素**的（失败才走红色 err 槽）—— 成功后还挂个 ⚠ 会让用户以为坏了 */
   assert.ok(!/⚠/.test(note?.textContent ?? ''), `成功文案不该带 ⚠：${note?.textContent}`);
+  assert.ok(q('.projectBox__note--err') === null, '成功时错误槽不该亮（F2-③ 两槽串了）');
 });
 
 /**
- * ★ F2（2026-09-25，用户拍板方案 ②）：失败与成功**共用同一行** `projectNote`，
- *   所以失败必须一眼能看出"坏了" —— 统一 `⚠ ` 前缀，成功保持朴素。
+ * ★ F2-③（2026-09-25 批次 M-7' 升级方案 ③）：失败与成功**各用一个槽** ——
+ *   失败写 `projectErr`，渲染成 `.projectBox__note--err` 红色槽（一眼看出坏了，
+ *   不用读句子）；成功槽（.projectBox__note 朴素）必须同时保持干净。
  *   这一条走的是**真实的失败路径**：服务端回 400 → `authFetchJson` 抛错 → catch 里写提示。
- *   反证 P5 把前缀去掉 → 这条立刻红（屏幕上少了那个符号）。
+ *   反证 P5 把失败写回成功槽（两槽合一）→ 这条立刻红。
  */
-await check('★ F2：切换项目失败时，那行提示带 ⚠ 前缀（一眼看出坏了，不用读句子）', async () => {
+await check('★ F2-③：切换项目失败时，失败进专门的红色槽（成功槽保持干净）', async () => {
   activateFails = true;
   const before = requestsTo('/projects/7/activate').length;
   const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '7');
@@ -859,11 +889,13 @@ await check('★ F2：切换项目失败时，那行提示带 ⚠ 前缀（一�
   await waitFor('发出 activate（失败那一次）', () => requestsTo('/projects/7/activate').length > before);
   await flush(4);
   activateFails = false;
-  const note = q('.projectBox__note');
-  assert.ok(note, '切换失败后那一行什么都没写（用户不知道刚才那一下成没成）');
-  assert.match(note?.textContent ?? '', /^\s*⚠/, `失败提示没有 ⚠ 前缀（成功失败又看不出区别了）：「${note?.textContent}」`);
-  assert.match(note?.textContent ?? '', /切换项目没成/, `失败提示文案不对：${note?.textContent}`);
-  assert.match(note?.textContent ?? '', /项目不存在或无权访问/, `没把服务端那句话带给用户：${note?.textContent}`);
+  const errNote = q('.projectBox__note--err');
+  assert.ok(errNote, '切换失败后错误槽是空的（失败被写去了成功槽？F2-③ 两槽合一回归）');
+  assert.match(errNote?.textContent ?? '', /^\s*⚠/, `失败提示没有 ⚠ 字形（视觉信号丢了）：「${errNote?.textContent}」`);
+  assert.match(errNote?.textContent ?? '', /切换项目没成/, `失败提示文案不对：${errNote?.textContent}`);
+  assert.match(errNote?.textContent ?? '', /项目不存在或无权访问/, `没把服务端那句话带给用户：${errNote?.textContent}`);
+  const okNote = q('.projectBox__note:not(.projectBox__note--err)');
+  assert.ok(okNote === null || (okNote?.textContent ?? '').trim() === '', `失败文案串进了成功槽：「${okNote?.textContent}」`);
   /**
    * 而且**没进**那个项目（失败就是没切）：侧栏名单还是新项目里的「小鸡」。
    * （不拿 `.contact--on` 判：桩里 `GET /projects` 只回 7/8 两条，新建出来的 9 号
@@ -1095,7 +1127,7 @@ await check('聊天（片 7a）：切智能体 → 按 agentId 拉历史，气�
   await ensure('当前智能体的历史拉回来了', () => (doc.body.textContent ?? '').includes('九七号的历史'));
   assert.match(doc.body.textContent ?? '', /九七号的历史/, '97 号的历史没渲染出来');
   // 切到 98 号（8 号项目里的「卡布」）→ 应当拉它的历史，且**不串**成 97 号的
-  const other = qa('.contact[data-agent-id]').find((n) => n.getAttribute('data-agent-id') === '98');
+  const other = qa('.contact-item[data-agent-id]').find((n) => n.getAttribute('data-agent-id') === '98');
   if (other) {
     click(other, '卡布');
     await flush(5);
@@ -1319,8 +1351,8 @@ log('--- ⑦ 发送：上屏 / 打字机 / 步骤 / 任务卡（片 7b）---');
 
 /** 往输入框打字（React 受控组件：必须走原生 setter + input 事件，否则 state 不动） */
 async function typeIntoInput(text: string): Promise<void> {
-  const el = q('.inputBar input');
-  assert.ok(el, '输入框不见了（.inputBar input）');
+  const el = q('.inputbar input');
+  assert.ok(el, '输入框不见了（.inputbar input）');
   const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
   await act(async () => {
     setter.call(el, text);
@@ -1331,7 +1363,7 @@ async function typeIntoInput(text: string): Promise<void> {
 
 /** 点「发送」（文案有 发送 / 发送补充 / 打字中… 三种） */
 const clickSend = (): void =>
-  click(qa('.inputBar button').find((b) => /发送/.test(b.textContent ?? '')) ?? null, '发送');
+  click(qa('.inputbar button').find((b) => /发送/.test(b.textContent ?? '')) ?? null, '发送');
 
 /**
  * 聊天区里那条**正在打字**的助手气泡（`.caret` 是它的标志）。
@@ -1559,7 +1591,7 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
    *   jsdom 的环形巨图会 OOM 137，连哪条红了都看不到）。`?.textContent` 这种可选链
    *   不在门禁的值取值白名单里，所以这里先落到局部变量，别跟门禁绕。
    */
-  const preBtnText = q('.inputBar button')?.textContent ?? '';
+  const preBtnText = q('.inputbar button')?.textContent ?? '';
   assert.equal(preBtnText, '发送补充', '前置不成立：输入框没进「发送补充」');
 
   // 流还开着就登出
@@ -1591,14 +1623,180 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
     !(q('.chat')?.textContent ?? '').includes('AI 任务执行中'),
     '上一轮的「AI 任务执行中」卡片露出来了（F5 复发：登出没清循环号）',
   );
-  const btnText = q('.inputBar button')?.textContent ?? '';
+  const btnText = q('.inputbar button')?.textContent ?? '';
   assert.equal(btnText, '发送', `输入框按钮还停在上一轮（F5 复发：登出没清流式态）：${btnText}`);
-  assert.ok(!(q('.inputBar input') as HTMLInputElement | null)?.disabled, '输入框是禁用的（上一轮的「打字中」把用户锁在外面了）');
+  assert.ok(!(q('.inputbar input') as HTMLInputElement | null)?.disabled, '输入框是禁用的（上一轮的「打字中」把用户锁在外面了）');
   const hintLine = q('.searchHint') === null ? '（没有）' : (q('.searchHint')?.textContent ?? '');
   assert.equal(hintLine, '（没有）', `上一轮的「正在搜索：…」那行露出来了（F5 复发：登出没清搜索提示）：${hintLine}`);
 });
 
 await act(async () => rootSend.unmount());
+
+// ---------------------------------------------------------------------------
+// ⑬ 模态（批次 M-6'）—— 登录页 / 人设引导 / 人设编辑：真登录、真引导、真人设
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑬ 模态（批次 M-6'）：登录页 / 人设引导 / 人设编辑 —— 真登录、真引导、真人设 ---`);
+
+/** 往任意 React 受控输入框打字（与 typeIntoInput 同机制，参数化元素） */
+async function typeInto(el: Element | null, text: string, label: string): Promise<void> {
+  assert.ok(el, `找不到输入框：${label}`);
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(el as HTMLInputElement, text);
+    el!.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  });
+  await flush(2);
+}
+
+await check('⑬-1 F4：恢复占位态与真登录页各带类（--checking / --login 真迁移）', async () => {
+  // 阶段 A：慢桩 300ms —— /auth/me 没回来之前必须是占位态（且不被判成真登录页）
+  slowAuthMe = true;
+  const root = await mountApp(true);
+  assert.ok(q('.authWrap--checking'), '恢复中应显示 .authWrap--checking 占位页');
+  assert.ok(!q('.authWrap--login'), '恢复中被误判成登录页（--login 不该在 —— F4 没修?）');
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  assert.ok(!q('.authWrap--checking'), '登录完成后 checking 态没消失（两个态又混在一起了）');
+  await act(async () => root.unmount());
+  // 阶段 B：token 失效 —— 占位态过去后必须落到**真登录页**（--login 在、--checking 走）
+  authMeFails = true;
+  const root2 = await mountApp(true);
+  await waitFor('回到登录页', onLoginScreen);
+  assert.ok(!q('.authWrap--checking'), '登录页上还留着 checking 态（一名两义又回来了）');
+  await act(async () => root2.unmount());
+  slowAuthMe = false;
+  authMeFails = false;
+});
+
+await check('⑬-2 AgentGuide：新建智能体的人设是真填的（确认 = 真 POST /agents/:id/persona）', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  // 项目 7 的名单 = 小助（98 卡布是项目 8 的，不在这条名单里）
+  await waitFor('名单就绪', () =>
+    qa('.contact-item').some((r) => (r.textContent ?? '').includes('小助')), 60);
+  // 顶部快捷 ＋ = 真 POST /agents（personaStatus pending → 会话流挂人设引导）
+  await act(async () => {
+    click(q('.rail .rail-quick-add'), '＋ 快捷创建');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('人设引导出现', () => q('.guide') !== null, 60);
+  assert.ok(q('.guide'), '新智能体 persona pending 却没挂 .guide 人设引导');
+  const inputs = qa('.guide input.guide__input');
+  assert.equal(inputs.length, 4, `引导表应 4 个输入框（实际 ${inputs.length}）`);
+  const vals = ['猎户座', '一个只懂供应链的老手', '直来直去，不绕弯', '盯库存、写补货单'];
+  for (let i = 0; i < 4; i += 1) await typeInto(inputs[i], vals[i], `引导第 ${i + 1} 格`);
+  await act(async () => {
+    click(q('.guide .guide__ok'), '引导确认');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const aid = createdAgentIds[createdAgentIds.length - 1];
+  await waitFor('persona POST 发出', () =>
+    requests.some((r) => r.method === 'POST' && r.path === `/agents/${aid}/persona`), 60);
+  // 原话逐字带给服务端（真数据，不是渲染时写死）
+  const body = JSON.parse(String(
+    requests.filter((r) => r.method === 'POST' && r.path === `/agents/${aid}/persona`).pop()!.body,
+  )) as Record<string, unknown>;
+  assert.equal(body.who, '一个只懂供应链的老手', 'persona 没把原话逐字带给服务端');
+  // 服务端把 personaStatus 置 ready → 引导撤掉 + 真回执进 chatNote
+  await waitFor('引导消失', () => q('.guide') === null, 60);
+  assert.ok((q('.chatNote')?.textContent ?? '').includes('已就位'), '真 savePersona 的回执没显示');
+  await act(async () => root.unmount());
+});
+
+await check('⑬-3 personaEdit：编辑浮层 draft = 当前智能体真 persona；取消不发请求', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  // 复用 ⑬-2 建好的智能体（persona 已 ready、kind worker → 顶栏有「编辑人设」）
+  const row = qa('.contact-item').find((r) => (r.textContent ?? '').includes('新员丙')) as Element | undefined;
+  assert.ok(row, '⑬-2 建的智能体不在名单里');
+  await act(async () => {
+    click(row, '切到新员丙');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const tab = q('.tab--persona');
+  assert.ok(tab, '「编辑人设」入口（.tab--persona）缺失');
+  const reqsBefore = requests.length;
+  await act(async () => {
+    click(tab, '编辑人设');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const overlay = q('.personaEditOverlay');
+  assert.ok(overlay, '人设编辑浮层没打开');
+  const inputs = qa('.personaEditOverlay input.guide__input');
+  assert.equal(inputs.length, 4, `编辑浮层应 4 个输入框（实际 ${inputs.length}）`);
+  // draft 必须等于 ⑬-2 填的真 persona（不是占位符、不是空）
+  assert.equal((inputs[1] as HTMLInputElement).value, '一个只懂供应链的老手', '浮层 draft 不是该智能体的真 persona');
+  // 取消 = 只关浮层，一个请求都不许发
+  const cancelBtn = [...overlay!.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('取消')) as Element;
+  await act(async () => {
+    click(cancelBtn, '取消');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(q('.personaEditOverlay') === null, '取消后浮层没关');
+  assert.equal(requests.length, reqsBefore, '取消不该发任何请求');
+  await act(async () => root.unmount());
+});
+
+await check('⑬-4 样式红线：09-modal.css 在场且挂入口；.authCard h3 / .guide__table th/td 随组件搬走；旧规则消失', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '09-modal.css'), 'utf8');
+  assert.ok(/\.authWrap\s*\{/.test(css), '09-modal.css 缺 .authWrap 规则');
+  assert.ok(/\.authWrap--login\s*\{/.test(css) && /\.authWrap--checking\s*\{/.test(css), 'F4 的 --login/--checking 修饰类缺失');
+  assert.ok(/\.authCard h3\s*\{/.test(css), '后代选择器 .authCard h3 没随组件搬走');
+  assert.ok(/\.guide__table th\s*\{/.test(css) && /\.guide__table td\s*\{/.test(css), '后代选择器 .guide__table th/td 没随组件搬走');
+  assert.ok(/\.personaEditOverlay\s*\{/.test(css) && /\.guide\s*\{/.test(css), '缺 .guide / .personaEditOverlay 规则');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./09-modal.css'), '模态 CSS 没挂进设计入口');
+  // M9'：文件级红线 —— styles.css 已整体删除（.auth*/.guide*/.personaEdit* 全在 09-modal.css）
+  assert.ok(
+    !existsSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css')),
+    'styles.css 又出现了（M9\' 已删；.authWrap/.authCard h3/.guide__table th 旧规则不许回来）',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ⑮ 逻辑收尾（批次 M-8'）—— AuthScreen / AgentGuide / SETTINGS_FALLBACK 离开 App.tsx
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑮ 逻辑收尾（批次 M-8'）：带 JSX 的组件与兜底配置离开 App.tsx,行为一字未变 ---`);
+
+await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.tsx 不再定义它们）', () => {
+  const app = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'App.tsx'), 'utf8');
+  assert.ok(!app.includes('function AuthScreen('), 'AuthScreen 还定义在 App.tsx（M8\' 没搬?）');
+  assert.ok(!app.includes('function AgentGuide('), 'AgentGuide 还定义在 App.tsx（M8\' 没搬?）');
+  assert.ok(!/const SETTINGS_FALLBACK/.test(app), 'SETTINGS_FALLBACK 还定义在 App.tsx（M8\' 没搬?）');
+  assert.ok(app.includes("AuthScreen, useAuth } from './features/auth'"), 'App 没从 features/auth 引 AuthScreen');
+  assert.ok(app.includes("AgentGuide, useChat } from './features/chat'"), 'App 没从 features/chat 引 AgentGuide');
+  assert.ok(app.includes("from './shared/settings'"), 'App 没从 shared/settings 引 SETTINGS_FALLBACK');
+  const asrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'auth', 'AuthScreen.tsx'), 'utf8');
+  assert.ok(asrc.includes('export function AuthScreen(') && asrc.includes('authWrap--login'), 'AuthScreen.tsx 不完整（缺 F4 的 --login 修饰类?）');
+  assert.ok(asrc.includes('localStorage.setItem(TOKEN_KEY, sess.token)'), 'AuthScreen.tsx 丢了登录成功存 token 那步');
+  const gsrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'AgentGuide.tsx'), 'utf8');
+  assert.ok(gsrc.includes('export function AgentGuide(') && gsrc.includes('guide__table'), 'AgentGuide.tsx 不完整（缺引导表?）');
+  const ssrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'shared', 'settings.ts'), 'utf8');
+  assert.ok(ssrc.includes('export const SETTINGS_FALLBACK'), 'shared/settings.ts 缺 SETTINGS_FALLBACK');
+});
+
+await check('⑮-2 M8\' 行为：登录页搬走后 ⚡ 快捷登录照旧走真两跳（sms/send + login/sms）进工作台', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
+  await flush(4);
+  assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
+  const before = requestsTo('/auth/sms/send').length;
+  await act(async () => {
+    click(qa('.authWrap button').find((b) => (b.textContent ?? '').includes('快捷登录')) ?? null, '⚡ 快捷登录');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('发出 /auth/sms/send（快捷登录第一跳）', () => requestsTo('/auth/sms/send').length > before, 60);
+  await waitFor('发出 /auth/login/sms（第二跳）', () => requestsTo('/auth/login/sms').length > 0, 60);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen(), 60);
+  assert.ok(q('.app') !== null, '快捷登录后工作台没出来（搬走的登录页接线断了?）');
+  assert.ok(dom.window.localStorage.getItem('workbench.token'), '快捷登录后 token 没存本地（搬动丢了登录那步?）');
+  await act(async () => root.unmount());
+});
 
 log('');
 log('=== 结论 ===');

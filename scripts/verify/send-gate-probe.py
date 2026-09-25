@@ -152,12 +152,12 @@ for _ in range(45):
     time.sleep(1)
 c = Cdp(target["webSocketDebuggerUrl"])
 for _ in range(60):
-    if c.js("!!document.querySelector('.inputBar input')"):
+    if c.js("!!document.querySelector('.inputbar input')"):
         break
     time.sleep(1)
 
 log("=== 界面体检 ===")
-log("  主界面:", c.js("!!document.querySelector('.inputBar input')"))
+log("  主界面:", c.js("!!document.querySelector('.inputbar input')"))
 log("  token:", c.js("!!localStorage.getItem('workbench.token')"))
 # 智能体卡片数（左栏）—— 0 个的话 curAgentRef 就是 null
 log("  左栏智能体卡片:", c.js("""
@@ -175,7 +175,7 @@ log(f"  发送前：文字长度={before_txt} llmCalls={b0}")
 
 log("")
 log("=== 填值 + 发送 ===")
-c.js("document.querySelector('.inputBar input').focus()")
+c.js("document.querySelector('.inputbar input').focus()")
 # ★ 关键：直接调 React 自己的 onChange，而不是"派发 input 事件碰运气"。
 #   派发事件要 React 认为"值真的变了"才会走 onChange —— 而受控组件里
 #   React 自己维护 value 跟踪，手写 setter 有时会被判成"没变"而丢弃。
@@ -184,7 +184,7 @@ c.js("document.querySelector('.inputBar input').focus()")
 #   原生 value setter 写入目标值 + 派发 input —— 关键是**写入目标值那一步**，
 #   而不是先清空。清空后必须立刻写回，两步都要派发事件。
 setres = c.js(f"""
-(()=>{{const el=document.querySelector('.inputBar input');
+(()=>{{const el=document.querySelector('.inputbar input');
  if(!el) return 'NO_EL';
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,{json.dumps(TASK)});
@@ -193,13 +193,13 @@ setres = c.js(f"""
 """)
 log("  写值:", setres)
 st = c.js("""
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  const k=Object.keys(el).find(k=>k.startsWith('__reactProps$'));
  return JSON.stringify({dom:el.value,react:k?el[k].value:'?'});})()
 """)
 log("  输入状态:", st)
 r = c.js("""
-(()=>{const b=Array.from(document.querySelectorAll('.inputBar button'))
+(()=>{const b=Array.from(document.querySelectorAll('.inputbar button'))
    .find(x=>/发送/.test(x.innerText||''));
  if(!b) return 'NO_BTN'; if(b.disabled) return 'DISABLED'; b.click(); return 'CLICKED';})()
 """)
@@ -214,7 +214,7 @@ log(f"  发送后：文字长度={after_txt} llmCalls={b1}")
 log("")
 log("=== 判定：哪一道闸拦住了 ===")
 log("  用户消息有没有进聊天区（文字变长 / 输入框被清空）:")
-log("    输入框现值:", repr(c.js("document.querySelector('.inputBar input').value")))
+log("    输入框现值:", repr(c.js("document.querySelector('.inputbar input').value")))
 log("    chatNote:", repr(c.js("document.querySelector('.chatNote')?.innerText || '(无)'")))
 log("    projectNote:", repr(c.js("document.querySelector('.projectBox__note')?.innerText || '(无)'")))
 log("    项目框全文:", repr(c.js("document.querySelector('[class*=projectBox]')?.innerText || '(无)'")))
@@ -222,7 +222,7 @@ log("    界面尾部:", str(c.js("document.body.innerText.slice(-200)"))[-200:]
 log("")
 if b1 > b0:
     log("  ✓ 送达服务端")
-elif c.js("document.querySelector('.inputBar input').value") == "":
+elif c.js("document.querySelector('.inputbar input').value") == "":
     log("  → 输入框被清空但没送达：可能是未知站点闸/被拦下并写了 chatNote")
 else:
     log("  → 输入框没被清空、也没送达：sendChat 在最前面就 return 了")

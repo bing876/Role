@@ -16,7 +16,7 @@
   D2 跳过等库 + 删掉 migrate 断言  → 逼出"库没就绪、migrate 失败"的真实场景
   D3 跳过等库 + 有 token 就跳过登录 → 逼出"登录态被清、界面是登录页"的真实场景
   D4 送达判据退回「看界面文案含『标题』」（不复合，靠文案误判即可复现）
-  D5 发送按钮取 .inputBar 第一个（复合：先打乱按钮顺序假设，见下）
+  D5 发送按钮取 .inputbar 第一个（复合：先打乱按钮顺序假设，见下）
 
 跑法：python scripts/verify/e2e-revert-tests.py
 """
@@ -120,19 +120,19 @@ def d4(s):
 def d5(s):
     """复合：把发送按钮选择改成"取第一个 button"，**并同时在前面插一个干扰按钮**。
 
-    ★ 为什么必须复合：inputBar 里按钮顺序恰好是 [发送, 结束]，
+    ★ 为什么必须复合：inputbar 里按钮顺序恰好是 [发送, 结束]，
       所以"取第一个"**碰巧是对的** —— 单删不改会得出"断言无效"的错误结论。
       真正要验的是："当发送按钮不在第一位时，断言拦不拦得住"。
       这里通过在 DOM 上人为前插一个按钮来构造那个条件。
     """
     pat = re.compile(
-        r"const bs=Array\.from\(document\.querySelectorAll\('\.inputBar button'\)\);\s*\n"
+        r"const bs=Array\.from\(document\.querySelectorAll\('\.inputbar button'\)\);\s*\n"
         r"\s*const b=bs\.find\(x=>/发送\|发\\\\s\*送/\.test\(x\.innerText\|\|''\)\);")
     m = pat.search(s)
     if not m:
         return None
     # 注入 1：改成取第一个；注入 2：在 sleep 前插一个干扰按钮，让"第一个"不再是发送
-    injected = ("const bs=Array.from(document.querySelectorAll('.inputBar button'));\n"
+    injected = ("const bs=Array.from(document.querySelectorAll('.inputbar button'));\n"
                 " const b=bs[0];  // [注入] 取第一个")
     s2 = s[:m.start()] + injected + s[m.end():]
     # 在点击之前插入干扰按钮
@@ -141,7 +141,7 @@ def d5(s):
     if anchor not in s2:
         return None
     s2 = s2.replace(anchor,
-                    "c.js(\"(()=>{const bar=document.querySelector('.inputBar');"
+                    "c.js(\"(()=>{const bar=document.querySelector('.inputbar');"
                     "const fake=document.createElement('button');fake.innerText='结束';"
                     "bar.insertBefore(fake, bar.firstChild);return 'INJECTED';})()\")\n"
                     + anchor, 1)

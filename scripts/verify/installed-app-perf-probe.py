@@ -207,8 +207,8 @@ FRAME_JS = r"""
 
 TYPE_BURST_JS = r"""
 (async () => {
-  const el = document.querySelector('.inputBar input');
-  if (!el) return { err: 'no .inputBar input' };
+  const el = document.querySelector('.inputbar input');
+  if (!el) return { err: 'no .inputbar input' };
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const times = [];
   for (let i = 0; i < %d; i++) {

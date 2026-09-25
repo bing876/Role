@@ -10,7 +10,10 @@
   A. 全屏浏览器能正常显示、能正常操作（真点真输入）
   B. 给一个**真实任务**（搜索下单：9 步，含 2 次真点击）→ **退出全屏** →
      用时间戳 + 页内 DOM 变化证明任务在后台**照常往下跑**（不是"没报错"，是"步骤真的完成了"）
-  C. 点右下角小图标重新展开 → 能看到最新状态、画面没卡死
+  C. 点「🌐 启用」重新展开 → 能看到最新状态、画面没卡死
+批次 M-2 适配（2026-09-25）:隐藏机制从 opacity:0 小图标 改为 第四列 transform 移出视野;
+触发从小图标改为第一列 rail 的「启用」tab(.tab--browser,批次 M-3' 顶栏钮迁到 rail);
+A 段开页后要显式点「启用」(列由用户触发,AI 开页不再自动弹列)。
   D. 全程断言 webview **尺寸与挂载不变**（这条是硬约束：尺寸归零会让驾驶坐标全失效）
 
 用法： python scripts/verify/fullscreen-browser-tests.py
@@ -274,7 +277,7 @@ def first_existing(*cands):
 LAYER_JS = r"""
 (() => {
   const layer = document.querySelector('.browserLayer');
-  const float = document.querySelector('.browserFloating');
+  const enableBtn = document.querySelector('.tab--browser');
   const panel = document.querySelector('.browserPanel');
   const toggle = document.querySelector('.browserPanel__toggle');
   const middle = document.querySelector('.middle');
@@ -284,11 +287,13 @@ LAYER_JS = r"""
   let wc = null;
   try { wc = wv ? wv.getWebContentsId() : null; } catch (e) { wc = 'ERR'; }
   const cs = (e, k) => e ? getComputedStyle(e)[k] : null;
+  const appEl = document.querySelector('.app');
   return {
     hasLayer: !!layer, layerCls: layer ? layer.className : null,
     layerOpacity: cs(layer, 'opacity'), layerDisplay: cs(layer, 'display'),
-    layerZ: cs(layer, 'zIndex'), layerRect: rect(layer), middleRect: rect(middle),
-    hasFloating: !!float, floatingText: float ? (float.textContent || '').trim() : null,
+    layerTransform: cs(layer, 'transform'), layerZ: cs(layer, 'zIndex'),
+    layerRect: rect(layer), middleRect: rect(middle), appRect: rect(appEl),
+    hasEnable: !!enableBtn, enableText: enableBtn ? (enableBtn.textContent || '').trim() : null,
     hasPanel: !!panel, hasToggle: !!toggle,
     toggleText: toggle ? (toggle.textContent || '').trim() : null,
     wvRect: rect(wv), wvWc: wc, wvDisplay: cs(wv, 'display'), wvVisibility: cs(wv, 'visibility'),
@@ -338,10 +343,10 @@ def exit_fullscreen():
             pass
 
 
-def click_floating():
+def click_enable():
     c = P.Cdp()
     try:
-        return c.click_rect('.browserFloating')
+        return c.click_rect('.tab--browser')
     finally:
         try:
             c.ws.close()
@@ -443,18 +448,24 @@ def main():
     ok, _, ms = wait_until(lambda: len([w for w in webviews() if isinstance(w.get('wcId'), int)]) >= 1, timeout=90)
     expect(ok, '内嵌页建起来了', '耗时 %dms' % ms)
 
+    # 批次 M-2:列由用户触发 —— 点顶栏「🌐 启用」把第四列弹出
+    click_enable()
+    ok, _, ms = wait_until(lambda: '--hidden' not in (layer().get('layerCls') or ''), timeout=15)
+    expect(ok, '「启用」后列可见（层不带 --hidden）', '耗时 %dms' % ms)
+
     L = layer()
     print('  层状态：%s' % json.dumps(L, ensure_ascii=False))
     expect(L.get('hasLayer') is True, '浏览器层已挂载')
-    check('① 默认就是全屏（层没有 --bg 类）', '--bg' not in (L.get('layerCls') or ''), L.get('layerCls'))
+    check('① 启用后列可见（层没有 --hidden 类）', '--hidden' not in (L.get('layerCls') or ''), L.get('layerCls'))
     check('② 层是可见的（opacity=1、display 不是 none）',
           L.get('layerOpacity') == '1' and L.get('layerDisplay') != 'none',
           'opacity=%s display=%s' % (L.get('layerOpacity'), L.get('layerDisplay')))
-    mr, lr = L.get('middleRect') or {}, L.get('layerRect') or {}
-    check('③ 层铺满中栏会话区（宽高与 .middle 一致）',
-          mr.get('w') == lr.get('w') and mr.get('h') == lr.get('h'),
-          'middle=%s layer=%s' % (mr, lr))
-    check('④ 全屏时没有「后台运行」小图标', L.get('hasFloating') is False)
+    lr, ar = L.get('layerRect') or {}, L.get('appRect') or {}
+    check('③ 层是第四列（右缘与 .app 右缘一致、宽度在合法范围）',
+          lr and ar and abs(lr.get('x', 0) + lr.get('w', 0) - (ar.get('x', 0) + ar.get('w', 0))) <= 1
+          and 320 <= lr.get('w', 0) <= ar.get('w', 0),
+          'layer=%s app=%s' % (lr, ar))
+    check('④ 顶栏「启用」按钮在场', L.get('hasEnable') is True, L.get('enableText'))
     check('⑤ 退出按钮文案是「退出全屏」', L.get('toggleText') == '退出全屏', L.get('toggleText'))
     w0 = L.get('wvRect') or {}
     check('⑥ webview 有真实尺寸（宽高都 > 100）',
@@ -516,13 +527,13 @@ def main():
     t_exit = int(time.time() * 1000)
     clicked = exit_fullscreen()
     print('  已点「退出全屏」：%s' % clicked)
-    ok, _, ms = wait_until(lambda: '--bg' in (layer().get('layerCls') or ''), timeout=15)
-    expect(ok, '已进入后台态（层带上 --bg）', '耗时 %dms' % ms)
+    ok, _, ms = wait_until(lambda: '--hidden' in (layer().get('layerCls') or ''), timeout=15)
+    expect(ok, '已进入隐藏态（层带上 --hidden）', '耗时 %dms' % ms)
 
     after_exit = layer()
     print('  退出后：%s' % json.dumps(after_exit, ensure_ascii=False))
-    check('⑩ 退出后出现「后台运行」小图标', after_exit.get('hasFloating') is True,
-          after_exit.get('floatingText'))
+    check('⑩ 退出后列在隐藏形态（--hidden）', '--hidden' in (after_exit.get('layerCls') or ''),
+          after_exit.get('layerCls'))
     check('⑪ 退出后面板**仍在挂载**（不是卸载）', after_exit.get('hasPanel') is True)
     check('⑫ 退出后 webview 的 webContentsId **没变**（还是同一个实例）',
           after_exit.get('wvWc') == wc_id, '%s → %s' % (wc_id, after_exit.get('wvWc')))
@@ -534,9 +545,10 @@ def main():
           (after_exit.get('wvRect') or {}).get('w', 0) > 100
           and (after_exit.get('wvRect') or {}).get('h', 0) > 100,
           after_exit.get('wvRect'))
-    check('⑮ 退出后层是「不可见但仍在渲染」（opacity=0，display 仍不是 none）',
-          after_exit.get('layerOpacity') == '0' and after_exit.get('layerDisplay') != 'none',
-          'opacity=%s display=%s' % (after_exit.get('layerOpacity'), after_exit.get('layerDisplay')))
+    check('⑮ 退出后层是「移出视野但仍在渲染」（transform 平移，display 仍不是 none）',
+          after_exit.get('layerTransform') not in (None, 'none', 'matrix(1, 0, 0, 1, 0, 0)')
+          and after_exit.get('layerDisplay') != 'none',
+          'transform=%s display=%s' % (after_exit.get('layerTransform'), after_exit.get('layerDisplay')))
 
     # 等后台把剩下的步骤跑完 —— 关键证据：**退出之后**页面 DOM 又被改变了
     print('  退出全屏后观察最多 %d 秒，等任务在后台继续推进…' % OBSERVE_SECS)
@@ -569,14 +581,15 @@ def main():
         check('⑲ 后台态页面 JS 仍在跑（心跳计数器增长）', hb2 > hb1, '%s → %s' % (hb1, hb2))
 
     # ---------------------------------------------------------------- C
-    section('C. 点右下角小图标 → 重新展开，看到最新状态')
+    section('C. 点「🌐 启用」→ 重新展开，看到最新状态')
     before_re = layer()
-    click_floating()
-    ok, _, ms = wait_until(lambda: '--bg' not in (layer().get('layerCls') or ''), timeout=15)
-    expect(ok, '已回到全屏（层不再带 --bg）', '耗时 %dms' % ms)
+    click_enable()
+    ok, _, ms = wait_until(lambda: '--hidden' not in (layer().get('layerCls') or ''), timeout=15)
+    expect(ok, '列已弹出（层不再带 --hidden）', '耗时 %dms' % ms)
     re_open = layer()
     print('  重新展开后：%s' % json.dumps(re_open, ensure_ascii=False))
-    check('⑳ 重新展开后小图标消失', re_open.get('hasFloating') is False)
+    check('⑳ 重新展开后列可见（不带 --hidden）', '--hidden' not in (re_open.get('layerCls') or ''),
+          re_open.get('layerCls'))
     check('㉑ 重新展开后 webview 还是同一个实例（wcId 未变）',
           re_open.get('wvWc') == wc_id, '%s → %s' % (wc_id, re_open.get('wvWc')))
     check('㉒ 重新展开后 webview 尺寸与退出前一致（没被压扁）',
@@ -602,10 +615,10 @@ def main():
 
     # ---------------------------------------------------------------- D
     section('D. 决定1：AI 自己开新页不打扰用户；只有「需要用户亲自处理」才拉回全屏')
-    # C 段最后把用户带回了全屏，D 段从后台态起步
+    # C 段最后把列弹出来了，D 段从隐藏态起步
     exit_fullscreen()
-    ok, _, ms = wait_until(lambda: '--bg' in (layer().get('layerCls') or ''), timeout=15)
-    expect(ok, 'D 段前置：已回到后台态', '耗时 %dms' % ms)
+    ok, _, ms = wait_until(lambda: '--hidden' in (layer().get('layerCls') or ''), timeout=15)
+    expect(ok, 'D 段前置：已回到隐藏态', '耗时 %dms' % ms)
 
     # ---- D1：页面里点开 target=_blank 链接 —— 这就是「AI 自己开新网页」----
     # 链路：主进程 setWindowOpenHandler 命中 http → 推 opentab → 渲染层 openFromPage 真开一条 tab。
@@ -661,10 +674,10 @@ def main():
     time.sleep(1.2)
     d1 = layer()
     print('  新开页后：%s' % json.dumps(d1, ensure_ascii=False))
-    check('㉕ ★AI 自己开新页**不把用户拽回全屏**（层仍带 --bg）',
-          '--bg' in (d1.get('layerCls') or ''), d1.get('layerCls'))
-    check('㉖ 后台态下小图标仍在（用户随时能自己回去看）',
-          d1.get('hasFloating') is True, d1.get('floatingText'))
+    check('㉕ ★AI 自己开新页**不把用户拽回**（列仍带 --hidden）',
+          '--hidden' in (d1.get('layerCls') or ''), d1.get('layerCls'))
+    check('㉖ 隐藏态下「启用」钮仍在（用户随时能自己回去看）',
+          d1.get('hasEnable') is True, d1.get('enableText'))
     act1 = ev(ACTIVE_WV_JS) or {}
     check('㉗ 后台态下这张页照样是活的、有真实尺寸（不是 0 尺寸，驾驶坐标才有意义）',
           isinstance(act1.get('wcId'), int) and (act1.get('rect') or {}).get('w', 0) > 100
@@ -675,14 +688,14 @@ def main():
     # 渲染层两个分支（带 wcId → focusByWebContents；不带 → focusActive）最终都落到
     # activate() → setView('fullscreen')，所以这条断言覆盖「敏感等待会把人拉回来」。
     ev('window.workbench.focusBrowser(); "ok"')
-    ok, _, ms = wait_until(lambda: '--bg' not in (layer().get('layerCls') or ''), timeout=15)
-    expect(ok, '主进程「把视线给这张页」（敏感字段等待那条通道）→ 已拉回全屏', '耗时 %dms' % ms)
+    ok, _, ms = wait_until(lambda: '--hidden' not in (layer().get('layerCls') or ''), timeout=15)
+    expect(ok, '主进程「把视线给这张页」（敏感字段等待那条通道）→ 列已弹出', '耗时 %dms' % ms)
     d2 = layer()
-    print('  拉回全屏后：%s' % json.dumps(d2, ensure_ascii=False))
-    check('㉘ ★需要用户亲自处理时**会**拉回全屏（层不再带 --bg）',
-          '--bg' not in (d2.get('layerCls') or ''), d2.get('layerCls'))
-    check('㉙ 拉回全屏后小图标消失（用户已经看到浏览器了）',
-          d2.get('hasFloating') is False, d2.get('floatingText'))
+    print('  列弹出后：%s' % json.dumps(d2, ensure_ascii=False))
+    check('㉘ ★需要用户亲自处理时**会**把列弹出（层不再带 --hidden）',
+          '--hidden' not in (d2.get('layerCls') or ''), d2.get('layerCls'))
+    check('㉙ 列弹出后「启用」钮仍在（用户已经看到浏览器了）',
+          d2.get('hasEnable') is True, d2.get('enableText'))
     act2 = ev(ACTIVE_WV_JS) or {}
     check('㉚ 拉回全屏后当前页仍是活的、尺寸没被压扁',
           isinstance(act2.get('wcId'), int) and (act2.get('rect') or {}).get('w', 0) > 100

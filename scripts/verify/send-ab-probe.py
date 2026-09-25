@@ -164,13 +164,13 @@ if not target:
     sys.exit(1)
 c = Cdp(target["webSocketDebuggerUrl"])
 for _ in range(60):
-    if c.js("!!document.querySelector('.inputBar input')"):
+    if c.js("!!document.querySelector('.inputbar input')"):
         break
     time.sleep(1)
-log("主界面就绪:", c.js("!!document.querySelector('.inputBar input')"))
+log("主界面就绪:", c.js("!!document.querySelector('.inputbar input')"))
 
 READ = """
-(()=>{const el=document.querySelector('.inputBar input');
+(()=>{const el=document.querySelector('.inputbar input');
  if(!el) return JSON.stringify({err:'NO_EL'});
  const k=Object.keys(el).find(k=>k.startsWith('__reactProps$'));
  if(!k) return JSON.stringify({err:'NO_REACT_PROPS',keys:Object.keys(el).slice(0,15)});
@@ -183,7 +183,7 @@ results = []
 
 def try_send(label, fill_js):
     c.js("""
-    (()=>{const el=document.querySelector('.inputBar input');
+    (()=>{const el=document.querySelector('.inputbar input');
      const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
      s.call(el,''); el.dispatchEvent(new Event('input',{bubbles:true})); return 'CLEARED';})()
     """)
@@ -193,7 +193,7 @@ def try_send(label, fill_js):
     state = c.js(READ)
     before = llm_calls()
     r = c.js("""
-    (()=>{const b=Array.from(document.querySelectorAll('.inputBar button'))
+    (()=>{const b=Array.from(document.querySelectorAll('.inputbar button'))
        .find(x=>/发送/.test(x.innerText||''));
      if(!b) return 'NO_BTN'; if(b.disabled) return 'DISABLED'; b.click(); return 'CLICKED';})()
     """)
@@ -209,7 +209,7 @@ def try_send(label, fill_js):
 log("")
 log("=== A：原生 setter 写 value + dispatchEvent('input') ===")
 try_send("A 原生setter", lambda: c.js(f"""
-(()=>{{const el=document.querySelector('.inputBar input');
+(()=>{{const el=document.querySelector('.inputbar input');
  const s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
  s.call(el,{json.dumps(TASK)}); el.dispatchEvent(new Event('input',{{bubbles:true}})); return 'SET';}})()
 """))

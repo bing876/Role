@@ -1,0 +1,79 @@
+/* 99-theme.css —— 项目级主题覆盖（始终最后导入，优先级最高）
+   ============================================================================
+   相对设计基准 workbench.work.html 的定制项，全部收敛到本文件的变量里：
+
+   · 工作台描边：原 inset 4px rgba(255,255,255,0.2) → #2F2F2F
+   · 三列背景：原半透明玻璃 + 渐变 → 统一 #1A1A1A 实色
+
+   还原设计稿 / 换配色，只动这一组变量即可，不必碰上面 13 个切分文件。
+   ★ 合并适配（2026-09-25，M1'）：.rail / .sidebar / .main-area /
+     .frame-internal-stroke 四条列规则加了 `.frame ` 前缀。原因：迁移期
+     旧结构里 `aside.sidebar` 已存在（白底），不加前缀它的背景会被本文件的
+     !important 直接改色 —— 违反 M1'「零视觉改动」。frame 结构就位后
+     （div.app 带 frame 类），`.frame .sidebar` 命中的元素与原型完全一致，
+     视觉效果零差异。:root 变量与 .frame 自身规则不涉及旧 DOM，原样保留。
+*/
+
+:root{
+  /* 画布尺寸：去掉「桌面模拟器外壳」后，工作台直接铺满视口。
+     想按设计稿原始尺寸（1200×770）做 1:1 比对，改回 1200px / 770px 即可。 */
+  --frame-w: 100vw;
+  --frame-h: 100vh;
+
+  --rail-bg:      #1A1A1A;
+  --sidebar-bg:   #1A1A1A;
+  --main-bg:      #1A1A1A;
+  --frame-stroke: #2F2F2F;
+  --frame-stroke-w: 4px;
+}
+
+/* .frame 从 1440×900 画布里居中 → 直接铺满视口 */
+.frame{ left:0 !important; top:0 !important; }
+
+/* 三列实色背景 —— 用 !important 压过切分文件里的 background / backdrop-filter */
+.frame .rail{
+  background:var(--rail-bg) !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+.frame .sidebar{
+  background:var(--sidebar-bg) !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+.frame .main-area{
+  background:var(--main-bg) !important;
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+
+/* 工作台描边：.frame-internal-stroke 已是 .frame 子元素（z:100 压在列之上） */
+.frame .frame-internal-stroke{
+  box-shadow:inset 0 0 0 var(--frame-stroke-w) var(--frame-stroke) !important;
+}
+/* ============ 批次 M-7'：桌面浅色基座（styles.css 即将整体删除，M-9'） ============
+   旧 styles.css 的 :root 变量 / 盒模型 reset / body 字体背景，是项目级基座，
+   按 99 文件头注释的规矩收进本文件（项目定制统一处，始终最后导入）。 */
+:root{
+  --bg: #fafafa;
+  --panel: #ffffff;
+  --sidebar: #ffffff;
+  --border: #eeeeee;
+  --text: #222222;
+  --text-weak: #666666;
+  --accent: #2f6fed;
+  color-scheme: light;
+}
+
+*{ box-sizing: border-box; }
+
+html, body, #root{ height: 100%; margin: 0; }
+
+body{
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}

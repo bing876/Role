@@ -28,7 +28,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 APP = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
-CSS = REPO / 'apps' / 'desktop' / 'src' / 'styles.css'
+CSS = REPO / 'apps' / 'desktop' / 'src' / 'design' / '14-browser-column.css'  # M9'：.browserLayer 三态规则从 styles.css 逐字节搬进 14
 GOLDEN = REPO / 'docs' / 'acceptance' / 'app-shell' / 'webview-ancestor-chain.golden.json'
 
 BROWSER_PANEL_JSX = """            <BrowserPanel
@@ -54,8 +54,8 @@ MUTATIONS = [
         'id': 'R2',
         'name': '把浏览器层挂到 browser.view === \'fullscreen\' 上（切到后台就卸载）',
         'file': APP,
-        'anchor': '        {browser.allTabs.length > 0 && (',
-        'replace': "        {browser.allTabs.length > 0 && browser.view === 'fullscreen' && (",
+        'anchor': '      {browser.allTabs.length > 0 && (',
+        'replace': "      {browser.allTabs.length > 0 && browser.view === 'fullscreen' && (",
         'expect': '不换 webview 元素',
     },
     {
@@ -74,11 +74,42 @@ MUTATIONS = [
         'replace': '.browserLayer {\n  display: none;\n  position: absolute;',
         'expect': '没有 display:none',
     },
+    {
+        'id': 'R5',
+        'name': '抽掉 06-sidebar.css 里在用的 .agentList__note 规则（搬家时把在用类弄丢）',
+        'file': REPO / 'apps' / 'desktop' / 'src' / 'design' / '06-sidebar.css',
+        'anchor': '.agentList__note {\n  margin-top: 2px;\n  line-height: 1.45;\n  color: #b45309;\n  word-break: break-word;\n}',
+        'replace': '',
+        'expect': '零残留审计',
+    },
+    {
+        'id': 'R6',
+        'name': "复活 styles.css（M9' 已删,文件级红线）",
+        'file': REPO / 'apps' / 'desktop' / 'src' / 'styles.css',
+        'materialize_git': 'ac75d63:apps/desktop/src/styles.css',
+        'expect': '零残留：styles.css 文件不在场',
+    },
 ]
 
 
 def md5(p: Path) -> str:
     return hashlib.md5(p.read_bytes()).hexdigest()
+
+
+def judge(rc: int, out: str, mut: dict) -> bool:
+    hit = [ln.strip() for ln in out.splitlines() if ln.strip().startswith('✗')]
+    stats = re.search(r'(\d+) PASS / (\d+) FAIL', out)
+    print(f'  注入后：退出码={rc}  {stats.group(0) if stats else ""}')
+    for h in hit[:4]:
+        print(f'    {h}')
+    if rc == 0:
+        print('  ★★ 假绿：注入错误之后冒烟网仍然全绿！')
+        return False
+    if not any(mut['expect'] in h for h in hit):
+        print(f"  ★ 变红了，但不是期望的断言（期望命中「{mut['expect']}」）")
+        return False
+    print(f"  ✓ 变红，且命中的是「{mut['expect']}」")
+    return True
 
 
 def run_smoke() -> tuple[int, str]:
@@ -110,6 +141,31 @@ def main() -> int:
         rel = target.relative_to(REPO)
         print('')
         print(f"--- {mut['id']} {mut['name']}")
+        if 'materialize_git' in mut:
+            if target.exists():
+                print(f'  ★ 目标文件已在场（{rel}）—— 文件级红线只删态才有靶子。')
+                failures += 1
+                continue
+            git_proc = subprocess.run(['git', 'show', mut['materialize_git']],
+                                      cwd=REPO, capture_output=True, text=True)
+            if git_proc.returncode != 0:
+                print(f'  ★ 从 git 物化失败（{mut["materialize_git"]}），反证脚本自身要跟着改。')
+                failures += 1
+                continue
+            try:
+                target.write_text(git_proc.stdout, encoding='utf8')
+                rc, out = run_smoke()
+                if not judge(rc, out, mut):
+                    failures += 1
+            finally:
+                if target.exists():
+                    target.unlink()
+                if target.exists():
+                    print(f'  ★★ 还原失败，{rel} 还在场！')
+                    failures += 1
+                else:
+                    print(f'  ✓ 已还原（文件删除），{rel} 不在场')
+            continue
         original = target.read_text(encoding='utf8')
         count = original.count(mut['anchor'])
         if count != 1:
@@ -121,19 +177,8 @@ def main() -> int:
         try:
             target.write_text(original.replace(mut['anchor'], mut['replace']), encoding='utf8')
             rc, out = run_smoke()
-            hit = [ln.strip() for ln in out.splitlines() if ln.strip().startswith('✗')]
-            stats = re.search(r'(\d+) PASS / (\d+) FAIL', out)
-            print(f'  注入后：退出码={rc}  {stats.group(0) if stats else ""}')
-            for h in hit[:4]:
-                print(f'    {h}')
-            if rc == 0:
-                print('  ★★ 假绿：注入错误之后冒烟网仍然全绿！')
+            if not judge(rc, out, mut):
                 failures += 1
-            elif not any(mut['expect'] in h for h in hit):
-                print(f"  ★ 变红了，但不是期望的断言（期望命中「{mut['expect']}」）")
-                failures += 1
-            else:
-                print(f"  ✓ 变红，且命中的是「{mut['expect']}」")
         finally:
             target.write_text(backup, encoding='utf8')
             if md5(target) != before:
