@@ -485,11 +485,15 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         page: body?.taskMode === true && taskWcId !== null ? { wcId: taskWcId, userId: claims.sub, agentId } : null,
       });
 
-      // 批次 E 修 4 | 对话式建智能体：先确认再建，无关键词回落 LLM，问句不建
+      // 批次 E | 对话式建智能体:说一次就**立刻建好**,不挡你、不二次确认。
+      // (2026-09-25 用户重拍 QA-02:修 4 的"先确认再建"撤掉 —— 那是折中,既不立刻也不三问;
+      //  三问引导表留阶段 2,但"不挡你、立刻建"现在就要。)
+      // detectBuildIntent 命中 → buildAgentImmediately 立刻建 → 回一句"已建好…";
+      // 无关键词/问句 → null,回落 LLM(问句不建的防线在 agentBuilder,有验收钉住)。
       try {
         const abMod = await import('../orchestrator/agentBuilder');
-        const pending = abMod.getPendingBuildIntent(convId);
-        if (pending && abMod.isConfirmMessage(message)) {
+        const buildIntent = abMod.detectBuildIntent(message);
+        if (buildIntent) {
           const projForBuild = await currentProjectId(pool, claims.sub);
           if (projForBuild !== null) {
             const creatorRow = await pool.query<{ id: string }>(
@@ -500,19 +504,13 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
             const fallbackRow = creatorId === null ? await pool.query<{ id: string }>(`SELECT id FROM agents WHERE project_id=$1 ORDER BY id ASC LIMIT 1`, [projForBuild]) : null;
             const finalCreatorId = creatorId ?? (fallbackRow?.rows[0] ? Number(fallbackRow.rows[0].id) : null);
             if (finalCreatorId !== null) {
-              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, pending);
-              abMod.clearPendingBuildIntent(convId);
-              const builtMsg = `已建好「${built.name}」：${pending.duty}。直接和TA聊就行，对话里说"建一个XXX"就能继续建同事，不挡你。`;
+              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, buildIntent);
+              const builtMsg = `已建好「${built.name}」：${buildIntent.duty}。直接和TA聊就行，对话里说"建一个XXX"就能继续建同事，不挡你。`;
               const umTmp = await pool.query<{ id: string }>(
                 "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
                 [convId, cipher.encryptText(message)],
               );
-              /**
-               * 批次 J：这句也是**某个智能体说的** → 记 speaker_agent_id。
-               * 顺手修两处老毛病：① 原来 `done.messageId` 塞的是 `Date.now()`（假 id，与库里那行对不上，
-               * 桌面刷新后按真 id 重拉就会错位）→ 改成 RETURNING 出来的真 id，与主路径一致；
-               * ② 原来这里抄了一份 `sseLocal`，把 `\n` 写成 `\\n`（帧永不结束，桌面收不到）→ 统一走 `sse()`。
-               */
+              /** 批次 J：这句也是**某个智能体说的** → 记 speaker_agent_id（真 id + 统一 sse()，同建 routine 口径） */
               const amTmp = await pool.query<{ id: string }>(
                 "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
                 [convId, cipher.encryptText(builtMsg), turnSpeakerId],
@@ -544,45 +542,6 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
               return;
             }
           }
-        }
-        const buildIntent = abMod.detectBuildIntent(message);
-        if (buildIntent) {
-          abMod.setPendingBuildIntent(convId, buildIntent);
-          const confirmMsg = `要建一个「${buildIntent.name}」，职责：${buildIntent.duty}，确认就建？（回"确认/可以/建吧"）`;
-          const umTmp = await pool.query<{ id: string }>(
-            "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
-            [convId, cipher.encryptText(message)],
-          );
-          // 批次 J：确认句同样记发言人（见上面同一处注释：真 id + 统一 sse()）
-          const amTmp2 = await pool.query<{ id: string }>(
-            "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
-            [convId, cipher.encryptText(confirmMsg), turnSpeakerId],
-          );
-          reply.hijack();
-          const res = reply.raw;
-          res.writeHead(200, {
-            'content-type': 'text/event-stream; charset=utf-8',
-            'cache-control': 'no-cache, no-transform',
-            connection: 'keep-alive',
-            'x-accel-buffering': 'no',
-            'access-control-allow-origin': req.headers.origin ?? '*',
-          });
-          sse(res, 'meta', {
-            conversationId: convId,
-            userMessageId: Number(umTmp.rows[0].id),
-            agentId: turnSpeakerId,
-            mention: mentionMeta,
-          });
-          sse(res, null, { delta: confirmMsg });
-          sse(res, 'done', {
-            conversationId: convId,
-            messageId: Number(amTmp2.rows[0].id),
-            contentLength: confirmMsg.length,
-            searches: 0,
-            sources: [],
-          });
-          res.end();
-          return;
         }
       } catch (e) {
         console.warn('[chat] 对话式建智能体失败，回落到普通聊天：', (e as Error).message);

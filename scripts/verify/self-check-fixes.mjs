@@ -110,9 +110,11 @@ console.log('修3 去重逻辑模拟 PASS（未做真实 kill→重启测试）'
 console.log('\n=== 修4 对话式建智能体兜底 ===');
 let ab = fs.readFileSync('apps/server/src/orchestrator/agentBuilder.ts','utf8');
 assert(ab.includes('isQuestionAboutBuilding'), '应有问句过滤');
-assert(ab.includes('isConfirmMessage'), '应有确认消息检测');
-assert(ab.includes('pendingBuildIntents'), '应有 pendingBuildIntents');
+// 2026-09-25 用户重拍(QA-02):二次确认撤掉,说一次就建好 → pending 机制必须不存在
+assert(!ab.includes('isConfirmMessage'), 'isConfirmMessage 应已删除(二次确认已撤)');
+assert(!ab.includes('pendingBuildIntents'), 'pendingBuildIntents 应已删除(二次确认已撤)');
 assert(ab.includes('detectBuildIntent'), '应有 detectBuildIntent');
+assert(ab.includes('buildAgentImmediately'), '应有 buildAgentImmediately(立刻建好的真建函数)');
 
 // 测试 detectBuildIntent 逻辑（简化版，复用文件中的正则思路）
 function isQuestionAboutBuilding(msg) {
@@ -154,17 +156,21 @@ assert(detectBuildIntentSimple('怎么建一个智能体？') === null, '问句�
 assert(detectBuildIntentSimple('建一个智能体吗？') === null, '问句不应建');
 console.log('修4 反证2 PASS: 含建一个的问句不建');
 
-// 正向：匹配到应先确认再建
+// 正向：匹配到 → 立刻建好(不确认)
 const intent = detectBuildIntentSimple('建一个销售助手，负责跟进客户');
 assert(intent !== null, '应匹配到建意图');
 assert(intent.name.includes('销售'), '名称应含销售');
-console.log('修4 正向 PASS: 匹配到意图，待确认');
+console.log('修4 正向 PASS: 匹配到意图，立刻建好');
 
 let chat = fs.readFileSync('apps/server/src/routes/chat.ts','utf8');
-assert(chat.includes('getPendingBuildIntent'), 'chat.ts 应接入 pending 逻辑');
-assert(chat.includes('isConfirmMessage'), 'chat.ts 应检测确认消息');
-assert(chat.includes('先确认再建') || chat.includes('确认就建'), 'chat.ts 应有确认话术');
-console.log('修4 chat.ts 接入 PASS');
+// 二次确认流不许回来(反证 build-agent-revert-proof.py 会试着把它注回来,验收必须红)
+assert(!chat.includes('getPendingBuildIntent'), 'chat.ts 不许再有 pending 逻辑');
+assert(!chat.includes('setPendingBuildIntent'), 'chat.ts 不许再有 pending 逻辑');
+assert(!chat.includes('isConfirmMessage'), 'chat.ts 不许再检测确认消息');
+assert(!chat.includes('确认就建'), 'chat.ts 不许再有"确认就建"话术');
+assert(chat.includes('buildAgentImmediately'), 'chat.ts 应直接调 buildAgentImmediately 立刻建好');
+assert(chat.includes('已建好'), 'chat.ts 应有"已建好"回话');
+console.log('修4 chat.ts 接入 PASS(立刻建好,无二次确认)');
 
 console.log('\n=== 修5 board.md 锁与白板/记忆关系 ===');
 let handoff = fs.readFileSync('apps/server/src/orchestrator/handoff.ts','utf8');

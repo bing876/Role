@@ -1,9 +1,12 @@
 /**
  * 批次 E | 前端引导：对话式建智能体、立刻建好不挡你、第一个智能体自己提议该建哪些同事
- * 修 4：对话式建智能体加兜底——无关键词匹配必须回落 LLM 正常路径;匹配到先确认再建
- * 反证两条:不含关键词的描述必须走 LLM;含「建一个」的普通问句不能建出 agent
+ * 修 4：对话式建智能体加兜底——无关键词匹配必须回落 LLM 正常路径
+ * 反证:不含关键词的描述必须走 LLM;含「建一个」的普通问句不能建出 agent
+ * 2026-09-25 用户重拍(QA-02):修 4 的"先确认再建"撤掉——用户说"建一个销售助手"
+ * **一次就建好**,回一句"已建好…",不挡你(二次确认是折中:既不立刻也不三问;
+ * 三问引导表留阶段 2)。
  *
- * - 对话式建智能体：用户说"建一个销售助手"→先确认→再建好，不阻塞聊天
+ * - 对话式建智能体：用户说"建一个销售助手"→ 立刻建好，不阻塞聊天
  * - 兜底：无关键词匹配回落 LLM；含「建一个」的问句（是什么/怎么建）不建
  * - 第一个智能体提议同事：新项目只有母鸡时，母鸡自动提议该建哪些同事
  * - 砍掉一切仪表盘：不做仪表盘/指派板，协同进对话流
@@ -23,25 +26,11 @@ export interface BuildIntent {
   raw: string;
 }
 
-// 待确认的建智能体意图（内存，进程内，跨重启会丢，但重建走正常路径不影响）
-const pendingBuildIntents = new Map<number, BuildIntent>(); // conversationId -> intent
-
-export function getPendingBuildIntent(convId: number): BuildIntent | null {
-  return pendingBuildIntents.get(convId) ?? null;
-}
-export function setPendingBuildIntent(convId: number, intent: BuildIntent): void {
-  pendingBuildIntents.set(convId, intent);
-}
-export function clearPendingBuildIntent(convId: number): void {
-  pendingBuildIntents.delete(convId);
-}
-
-export function isConfirmMessage(message: string): boolean {
-  const t = message.trim();
-  if (/^(确认|可以|好的|好|建吧|创建吧|就建|建|可以建|确认建|是的|对|ok|OK|yes)$/i.test(t)) return true;
-  if (/^(继续|可以|确认)/.test(t) && t.length <= 10) return true;
-  return false;
-}
+/**
+ * (2026-09-25 撤)修 4 曾在这里放"待确认意图"内存表 + 确认消息检测的两步确认流;
+ * 用户重拍后**说一次就建好**,那套机制整段删除——留着就是死代码。
+ * (注释里不写旧函数名:self-check-fixes 按字符串钉"不许回来")
+ */
 
 /**
  * 修 4 反证：含「建一个」的普通问句不能建出 agent
@@ -122,7 +111,7 @@ export function detectBuildIntent(message: string): BuildIntent | null {
 
 /**
  * 立刻建好不挡你：对话式建智能体，立即创建，不阻塞
- * 修 4：匹配到先确认再建，此函数只在确认后调用
+ * (2026-09-25 起:命中 detectBuildIntent 就直接调这个,没有中间确认)
  */
 export async function buildAgentImmediately(
   pool: Pool,
