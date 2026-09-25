@@ -1,0 +1,163 @@
+/* 09-modal —— 批次 M-6'：模态/覆盖层组件搬入设计基准 workbench-ui 的编号位。
+   基准 09-modal.css 本体（.config-modal / .settings-modal 对话框体系）
+   **不搬**：那是 workbench-ui 演示里的配置/设置对话框，桌面没有对应真组件
+   （桌面「设置」是侧栏面板不是模态；配置走服务端），按铁律假演示一律不搬。
+   本文件按编号规矩收桌面的真模态体系，样式值照搬旧 styles.css（原注释保留）：
+   · 登录页 AuthScreen（.authWrap 一族）—— 真登录（/auth/* 真端点、
+     手机验证码 / XYZ+密码 / 微信三 tab）；
+   · 人设引导 AgentGuide（.guide 一族）—— 新建智能体（persona pending）
+     时挂在会话流里，确认 = 真 POST /agents/:id/persona；
+   · 人设编辑浮层（.personaEditOverlay）—— 真 draft = 当前智能体真 persona，
+     确认 = 真 POST /agents/:id/persona。
+   ★ F4 修复（批次 M-2' 起挂账，用户拍板阶段 2 修）：`.authWrap` 一名两义 ——
+     真登录页与「正在恢复登录状态…」占位页共用一个类名，靠"占位页里没有
+     .authTabs"区分（片 5 已踩过假绿：用 .authWrap 判"回到登录页"把"卡在
+     检查中"误判成"已回到登录页"）。拆成 .authWrap--login / .authWrap--checking
+     两个修饰类，验收网的 onLoginScreen()/onCheckingScreen() 随之简化为
+     单一选择器。 */
+
+/* ---- 登录页 / 恢复占位页外壳（F4：两个状态各带修饰类） ---- */
+.authWrap {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f4f6;
+}
+/* F4 拆分：占位页（「正在恢复登录状态…」）—— 选择器可单独命中 */
+.authWrap--checking {
+  /* 占位页比真登录页"轻"：卡片里只有一句话 */
+}
+/* F4 拆分：真登录页（AuthScreen）—— 选择器可单独命中 */
+.authWrap--login {
+  /* 真登录页视觉与占位页同壳，差异在内容（卡片 + tab + 表单） */
+}
+.authCard {
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 6%);
+}
+/* 后代选择器（M6' 必查项）：标题在 .authCard 内 —— 组件整体搬走，
+   规则随组件进本文件（不拆平级选择器，标签结构不变） */
+.authCard h3 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.authTabs {
+  display: flex;
+  gap: 6px;
+}
+.authTab {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #f9fafb;
+  cursor: pointer;
+}
+.authTab--on {
+  background: #111827;
+  color: #fff;
+  border-color: #111827;
+}
+.authRow {
+  display: flex;
+  gap: 8px;
+}
+.authInput {
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  outline: none;
+}
+.authInput:focus {
+  border-color: #6b7280;
+}
+.authErr {
+  color: #c0392b;
+  font-size: 12.5px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+/* ---- 人设引导（AgentGuide：新建智能体 persona pending 时挂会话流） ---- */
+.guide {
+  align-self: stretch;
+  flex: 0 0 auto;
+  margin: 4px 0 8px;
+  padding: 12px;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  background: #f8faff;
+}
+.guide__head {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.guide__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 2px;
+}
+/* 后代选择器（M6' 必查项）：th/td 在 .guide__table 内 —— 组件整体搬走，
+   规则随组件进本文件（引导表与人设编辑浮层共用这张表） */
+.guide__table th {
+  width: 84px;
+  padding: 4px 8px 4px 0;
+  text-align: left;
+  vertical-align: middle;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-weak);
+}
+.guide__table td {
+  padding: 3px 0;
+}
+.guide__input {
+  width: 100%;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  outline: none;
+}
+.guide__input:focus {
+  border-color: var(--accent);
+}
+.guide__ok {
+  width: auto;
+}
+.guide__del {
+  color: #b91c1c;
+}
+
+/* ---- 建完能改人设：编辑浮层（盖在中栏上，.middle 是定位上下文） ---- */
+.personaEditOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.35);
+}
+.personaEditCard {
+  width: 420px;
+  max-width: 90%;
+  padding: 16px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+}

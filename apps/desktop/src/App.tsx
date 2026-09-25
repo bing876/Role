@@ -418,7 +418,8 @@ function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void }) {
   );
 
   return (
-    <div className="authWrap">
+    // F4：真登录页带 --login 修饰类
+    <div className="authWrap authWrap--login">
       <div className="authCard">
         <h3>登录 AI 工作台</h3>
         <div className="authTabs">
@@ -1922,7 +1923,8 @@ export default function App() {
   // 第 5 步门控：未登录（或正在用存好的 JWT 换会话）时，工作台整体不渲染——不做“游客看假数据”
   if (checkingAuth) {
     return (
-      <div className="authWrap">
+      // F4：占位页与真登录页各带修饰类（不再共用裸 .authWrap 一名两义）
+      <div className="authWrap authWrap--checking">
         <div className="authCard">
           <h3>正在恢复登录状态…</h3>
         </div>

@@ -441,66 +441,9 @@ body {
  */
 
 /* ---- 第 5 步（重做版）：登录页 + 左栏账号小块 ---- */
-.authWrap {
-  height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f3f4f6;
-}
-.authCard {
-  width: 380px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 22px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 6%);
-}
-.authCard h3 {
-  margin: 0 0 4px;
-  font-size: 17px;
-}
-.authTabs {
-  display: flex;
-  gap: 6px;
-}
-.authTab {
-  flex: 1;
-  padding: 6px 0;
-  font-size: 13px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #f9fafb;
-  cursor: pointer;
-}
-.authTab--on {
-  background: #111827;
-  color: #fff;
-  border-color: #111827;
-}
-.authRow {
-  display: flex;
-  gap: 8px;
-}
-.authInput {
-  padding: 8px 10px;
-  font-size: 13px;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  outline: none;
-}
-.authInput:focus {
-  border-color: #6b7280;
-}
-.authErr {
-  color: #c0392b;
-  font-size: 12.5px;
-  line-height: 1.5;
-  word-break: break-all;
-}
+/* .authWrap / .authCard / .auth* —— 批次 M-6' 删除：登录页搬进
+   design/09-modal.css（含 F4 拆出的 --checking/--login 两个修饰类）。 */
+
 .btn--go {
   width: 100%;
   background: #111827;
@@ -643,56 +586,8 @@ body {
 /* ---- 第 15 步：聊天里的「引导表」。
    它不是后台配置页、也不是独立窗口，就是新会话里的一张四行小表（名称/它是谁/怎么说话/干什么）。
    宽度跟消息一样撑满中栏，不碰右栏宽度。 ---- */
-.guide {
-  align-self: stretch;
-  flex: 0 0 auto;
-  margin: 4px 0 8px;
-  padding: 12px;
-  border: 1px solid #c7d2fe;
-  border-radius: 10px;
-  background: #f8faff;
-}
-.guide__head {
-  font-weight: 700;
-  margin-bottom: 4px;
-}
-.guide__table {
-  width: 100%;
-  border-collapse: collapse;
-  margin: 8px 0 2px;
-}
-.guide__table th {
-  width: 84px;
-  padding: 4px 8px 4px 0;
-  text-align: left;
-  vertical-align: middle;
-  font-weight: 500;
-  font-size: 13px;
-  color: var(--text-weak);
-}
-.guide__table td {
-  padding: 3px 0;
-}
-.guide__input {
-  width: 100%;
-  padding: 6px 8px;
-  font: inherit;
-  font-size: 13px;
-  color: var(--text);
-  background: #fff;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  outline: none;
-}
-.guide__input:focus {
-  border-color: var(--accent);
-}
-.guide__ok {
-  width: auto;
-}
-.guide__del {
-  color: #b91c1c;
-}
+/* .guide / .guide__* —— 批次 M-6' 删除：人设引导搬进 design/09-modal.css。 */
+
 
 /* ---- 第 11 步：左栏知识库入口。只加在现有账户小块内，不改三栏和右侧 webview 宽度。 ---- */
 .knowledgePanel {
@@ -840,22 +735,6 @@ body {
 
 
 
-/* 建完能改人设：编辑浮层 */
-.personaEditOverlay {
-  position: absolute;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0,0,0,0.35);
-}
-.personaEditCard {
-  width: 420px;
-  max-width: 90%;
-  padding: 16px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid #c7d2fe;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.18);
-}
+/* .personaEditOverlay / .personaEditCard —— 批次 M-6' 删除：搬进 design/09-modal.css。 */
+
+
