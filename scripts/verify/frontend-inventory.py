@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """批次 M · 前端结构重构 —— 结构普查工具（**侦查用，不是验收闸**）。
 
-它只做一件事：把 App.tsx / styles.css 的现状数字**可复跑地**打出来，
+它只做一件事：把 App.tsx / design/*.css 的现状数字**可复跑地**打出来，
 让《docs/批次M-前端结构重构-侦查报告.md》里的每个数字都能被独立重算。
 
 为什么不写成断言式验收：这些数字（行数、类名数、死规则数）在重构过程中
@@ -22,7 +22,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / 'apps' / 'desktop' / 'src'
 APP = SRC / 'App.tsx'
-STYLES = SRC / 'styles.css'
+DESIGN = SRC / 'design'          # M9'：desktop 的样式 = design/*.css（styles.css 已删）
 BROWSER_STYLES = SRC / 'browser' / 'styles.css'
 CHANNELS_STYLES = SRC / 'channels' / 'styles.css'
 
@@ -46,12 +46,25 @@ def strip_comments(css: str) -> str:
     return re.sub(r'/\*.*?\*/', '', css, flags=re.S)
 
 
-def rules(css_path: Path) -> list[tuple[str, str]]:
+def rules_text(css: str) -> list[tuple[str, str]]:
     """返回 [(选择器, 声明块原文)]，跳过 @ 规则。"""
     out = []
-    for m in re.finditer(r'(?m)^([^@\n{}][^{}]*?)\{([^}]*)\}', strip_comments(read(css_path))):
+    for m in re.finditer(r'(?m)^([^@\n{}][^{}]*?)\{([^}]*)\}', strip_comments(css)):
         out.append((' '.join(m.group(1).split()), ' '.join(m.group(2).split())))
     return out
+
+
+def rules(css_path: Path) -> list[tuple[str, str]]:
+    return rules_text(read(css_path))
+
+
+def design_text() -> str:
+    """M9'：desktop 样式 = design/*.css 合并（编号 CSS 跟组件走）。"""
+    return '\n'.join(read(q) for q in sorted(DESIGN.glob('*.css')))
+
+
+def design_rules() -> list[tuple[str, str]]:
+    return rules_text(design_text())
 
 
 def tags(src: str, name: str) -> list[tuple[int, str]]:
@@ -86,11 +99,10 @@ def main() -> int:
 
     data: dict = {'files': {}, 'hooks': {}, 'elements': {}, 'classes': {}, 'css': {}}
 
-    for label, p in [
-        ('App.tsx', APP), ('styles.css', STYLES),
-        ('browser/styles.css', BROWSER_STYLES), ('channels/styles.css', CHANNELS_STYLES),
-    ]:
-        data['files'][label] = lines_of(p)
+    data['files']['App.tsx'] = lines_of(APP)
+    data['files']['design/*.css（M9\' 起 styles.css 已删）'] = design_text().count('\n') + 1
+    data['files']['browser/styles.css'] = lines_of(BROWSER_STYLES)
+    data['files']['channels/styles.css'] = lines_of(CHANNELS_STYLES)
 
     # ---- hook 普查（按组件分段；M8' 后 AuthScreen/AgentGuide 已搬进 features/）----
     def fn_span(text: str, head: str) -> tuple[int, int]:
@@ -145,7 +157,7 @@ def main() -> int:
     for e in exprs:
         for lit in re.findall(r"'([^']+)'", e) + re.findall(r'"([^"]+)"', e):
             tokens.update(x for x in lit.split() if re.match(r'^[a-zA-Z][\w-]*$', x))
-    defined = set(css_classes(' '.join(r[0] for r in rules(STYLES))))
+    defined = set(css_classes(' '.join(r[0] for r in design_rules())))
     data['classes'] = {
         'className_attrs': len(re.findall(r'className\s*=', app)),
         'static_strings': len(static),
@@ -156,33 +168,36 @@ def main() -> int:
     }
 
     # ---- CSS 结构 + 死规则 ----
+    dtext = design_text()
     each = {}
-    for label, p in [('styles.css', STYLES), ('browser/styles.css', BROWSER_STYLES),
-                     ('channels/styles.css', CHANNELS_STYLES)]:
-        rs = rules(p)
+    for label, text, rs in [
+        ('design/*.css', dtext, design_rules()),
+        ('browser/styles.css', read(BROWSER_STYLES), rules(BROWSER_STYLES)),
+        ('channels/styles.css', read(CHANNELS_STYLES), rules(CHANNELS_STYLES)),
+    ]:
         each[label] = {
-            'lines': lines_of(p),
+            'lines': text.count('\n') + 1,
             'rules': len(rs),
-            'media': len(re.findall(r'@media', read(p))),
-            'keyframes': len(re.findall(r'@keyframes', read(p))),
-            'important': len(re.findall(r'!important', read(p))),
-            'custom_props': sorted(set(re.findall(r'(--[\w-]+)\s*:', read(p)))),
+            'media': len(re.findall(r'@media', text)),
+            'keyframes': len(re.findall(r'@keyframes', text)),
+            'important': len(re.findall(r'!important', text)),
+            'custom_props': sorted(set(re.findall(r'(--[\w-]+)\s*:', text))),
         }
     dead = []
-    for sel, _body in rules(STYLES):
+    for sel, _body in design_rules():
         cls = css_classes(sel)
         if cls and not any(re.search(r'\b' + re.escape(c) + r'\b', all_src) for c in cls):
             dead.append(sel)
-    each['styles.css']['dead_selectors'] = dead
-    each['styles.css']['dead_count'] = len(dead)
+    each['design/*.css']['dead_selectors'] = dead
+    each['design/*.css']['dead_count'] = len(dead)
 
-    def sel_set(p: Path) -> set[str]:
-        return {s for s, _ in rules(p) if s.startswith('.')}
+    def sel_set(rs: list[tuple[str, str]]) -> set[str]:
+        return {s for s, _ in rs if s.startswith('.')}
 
     each['overlap'] = {
-        'styles.css ∩ browser/styles.css': sorted(sel_set(STYLES) & sel_set(BROWSER_STYLES)),
-        'styles.css ∩ channels/styles.css': sorted(sel_set(STYLES) & sel_set(CHANNELS_STYLES)),
-        'browser ∩ channels': sorted(sel_set(BROWSER_STYLES) & sel_set(CHANNELS_STYLES)),
+        'design ∩ browser/styles.css': sorted(sel_set(design_rules()) & sel_set(rules(BROWSER_STYLES))),
+        'design ∩ channels/styles.css': sorted(sel_set(design_rules()) & sel_set(rules(CHANNELS_STYLES))),
+        'browser ∩ channels': sorted(sel_set(rules(BROWSER_STYLES)) & sel_set(rules(CHANNELS_STYLES))),
     }
     data['css'] = each
 

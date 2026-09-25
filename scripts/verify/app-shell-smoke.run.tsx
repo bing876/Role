@@ -27,7 +27,7 @@
  *   npm run verify:shell -- --update-golden     # 只在你确认链变更是有意的时候用
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { JSDOM } from 'jsdom';
 
@@ -38,6 +38,9 @@ import { JSDOM } from 'jsdom';
  *   由 driver 通过环境变量传进来，兜底才用 cwd。
  */
 const REPO = process.env.SMOKE_REPO ?? process.cwd();
+const LEGACY_STYLES = join(REPO, 'apps', 'desktop', 'src', 'styles.css');
+// M9'：styles.css 已整体删除 —— 「旧规则消失」升级为「文件本身消失」（null = 已删,在场 = 回归）
+const legacyStyles = (): string | null => (existsSync(LEGACY_STYLES) ? readFileSync(LEGACY_STYLES, 'utf8') : null);
 const GOLDEN = join(REPO, 'docs', 'acceptance', 'app-shell', 'webview-ancestor-chain.golden.json');
 const UPDATE_GOLDEN = process.argv.includes('--update-golden');
 
@@ -590,9 +593,10 @@ await check('⑧-6 宽度记忆上次值（localStorage workbench.browserCol 有
 });
 
 await check('⑧-7 样式红线:--hidden 规则用 transform 移出视野（不是 display:none）', () => {
-  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+  // M9'：第四列规则已搬进 design/14-browser-column.css（旧 styles.css 已删）
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css'), 'utf8');
   const m = css.match(/\.browserLayer--hidden\s*\{([^}]*)\}/);
-  assert.ok(m, 'styles.css 里找不到 .browserLayer--hidden 规则');
+  assert.ok(m, '14-browser-column.css 里找不到 .browserLayer--hidden 规则');
   assert.ok(/transform\s*:\s*translateX/.test(m![1]), '隐藏态必须用 transform 移出视野');
   assert.ok(!/display\s*:\s*none/.test(m![1]), '隐藏态绝不允许 display:none');
 });
@@ -871,11 +875,9 @@ await check('⑪-4 样式红线:规则在 design/ 且已挂入口;旧 .inputBar 
   assert.ok(!/display\s*:\s*none/.test(barRule[1]), '.inputbar 壳规则里有 display:none（输入栏被藏掉了）');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./04-inputbar.css'), '输入栏 CSS 没挂进设计入口');
-  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
-  assert.ok(!/\.inputBar\s*\{/.test(styles), '旧 .inputBar 壳规则还留在 styles.css');
-  assert.ok(!/\.inputBar\s+input\s*\{/.test(styles), '旧后代选择器 .inputBar input 还留在 styles.css（组件已搬走）');
-  assert.ok(!/\.inputBar\s+button\s*\{/.test(styles), '旧后代选择器 .inputBar button 还留在 styles.css（组件已搬走）');
-  assert.ok(!/\.inputBar__end\s*\{/.test(styles), '旧 .inputBar__end 规则还留在 styles.css');
+  // M9'：文件级红线 —— styles.css 已删,任何旧规则想回来先得让文件复活
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.inputBar* 旧规则不许回来）');
 });
 
 log('');
@@ -967,11 +969,9 @@ await check('⑫-4 样式红线:11-chat-bubbles.css 在场且 .msg 单一 .msg �
   assert.ok(/\.msg\.user\s*\{/.test(css) && /\.msg\.assistant::before/.test(css), '缺 .msg.user / .msg.assistant 尾巴规则');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./11-chat-bubbles.css'), '聊天区 CSS 没挂进设计入口');
-  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
-  assert.ok(!/\.msg\s*\{/.test(styles), '旧 .msg 规则还留在 styles.css（组件已搬走）');
-  assert.ok(!/\.msg\.user\s*\{/.test(styles), '旧 .msg.user 规则还留在 styles.css');
-  assert.ok(!/\.searchHint\s*\{/.test(styles), '旧 .searchHint 规则还留在 styles.css');
-  assert.ok(!/\.welcomeCard\s*\{/.test(styles), '旧 .welcomeCard 规则还留在 styles.css');
+  // M9'：文件级红线（.msg 双定义修复 + 聊天区全家已搬进 11-chat-bubbles.css）
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.msg/.searchHint/.welcomeCard 旧规则不许回来）');
 });
 
 log('');
@@ -983,9 +983,9 @@ await check('⑭-1 框架/原语跟组件走:03-frame + 02-base 在场,旧规则
   assert.ok(/\.btn\s*\{/.test(base) && /\.buttons-row\s*\{/.test(base), '02-base.css 缺 .btn / .buttons-row 原语');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./03-frame.css') && idx.includes('./10-surface.css'), '新编号文件没挂进设计入口');
-  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
-  assert.ok(!/\.app\s*\{/.test(styles), '旧 .app 规则还留在 styles.css');
-  assert.ok(!/\.btn\s*\{/.test(styles), '旧 .btn 规则还留在 styles.css');
+  // M9'：文件级红线（.app 在 03-frame、.btn 原语在 02-base）
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.app/.btn 旧规则不许回来）');
 });
 await check('⑭-2 任务表面 + 侧栏家族在场;死代码（DOM 零引用）已清零', () => {
   const surf = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '10-surface.css'), 'utf8');
@@ -993,12 +993,9 @@ await check('⑭-2 任务表面 + 侧栏家族在场;死代码（DOM 零引用�
   assert.ok(/\.taskResult \.buttons-row\s*\{/.test(surf), '必查后代选择器 .taskResult .buttons-row 没随组件搬走');
   const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
   assert.ok(/\.projectBox\s*\{/.test(side) && /\.memList\s*\{/.test(side) && /\.knowledgePanel\s*\{/.test(side) && /\.contact--on\s*\{/.test(side), '06-sidebar.css 缺左栏家族规则');
-  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
-  for (const dead of ['.driveBar', '.status-running', '.memCard', '.agentSteps', '.demoOnly']) {
-    const deadRe = new RegExp(`^${dead}\\s*\\{`, 'm');
-    assert.ok(!deadRe.test(styles), `styles.css 还残留 ${dead} 规则（该搬的搬走,该删的死代码要删）`);
-  }
-  assert.ok(!/^\.right\s*\{/m.test(styles), '死代码 .right 规则还在 styles.css');
+  // M9'：文件级红线（死代码 M7' 已删,承载它们的 styles.css M9' 已删）
+  const styles = legacyStyles();
+  assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.driveBar/.memCard 等死代码不许回来）');
 });
 await check('⑭-3 F2-③ 两槽在场:成功槽朴素 + 失败槽红;演示行只藏不删（DOM 还在）', () => {
   const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
@@ -1039,8 +1036,9 @@ await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失
 
 log('');
 log('--- ⑦ 样式红线：宿主与舞台不许被 display:none / 尺寸归零 ---');
-await check('styles.css 里 .browserLayer / .browserPanel__stage 没有 display:none / 0 尺寸', () => {
-  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+await check('14-browser-column + browser/styles.css 里 .browserLayer / .browserPanel__stage 没有 display:none / 0 尺寸', () => {
+  // M9'：第四列三态规则在 design/14-browser-column.css（旧 styles.css 已删）
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css'), 'utf8');
   const browser = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'browser', 'styles.css'), 'utf8');
   const stripped = (css + browser).replace(/\/\*[\s\S]*?\*\//g, '').replace(/min-height\s*:\s*0/g, '');
   for (const sel of ['.browserLayer', '.browserPanel__stage', '.browserPanel']) {
@@ -1060,6 +1058,220 @@ await check('styles.css 里 .browserLayer / .browserPanel__stage 没有 display:
     const inline = layerEl.getAttribute('style') ?? '';
     assert.ok(!/display\s*:\s*none/.test(inline), `.browserLayer 上出现了内联 display:none：${inline}`);
     assert.ok(!/(?<!min-)height\s*:\s*0/.test(inline), `.browserLayer 上出现了内联 height:0：${inline}`);
+  }
+});
+
+function stripFor16(t: string): string {
+  return t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+const esc16 = (c: string): string => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+log('');
+log(`--- ⑯ M9' 收口：styles.css 整体删除,零残留 ---`);
+
+const DESKTOP_SRC = join(REPO, 'apps', 'desktop', 'src');
+function walkTs(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkTs(full));
+    else if (/\.(ts|tsx)$/.test(e.name)) out.push(full);
+  }
+  return out;
+}
+
+await check('⑯-1 零残留：styles.css 文件不在场,main.tsx 唯一入口,第四列规则在 14-browser-column.css', () => {
+  assert.ok(!existsSync(LEGACY_STYLES), 'styles.css 文件还在（M9\' 要删）');
+  const main = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'main.tsx'), 'utf8');
+  assert.ok(!main.includes("import './styles.css'"), 'main.tsx 还在 import styles.css');
+  assert.ok(main.includes("import './design/index.css'"), 'main.tsx 没引 design 入口');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./14-browser-column.css'), '14-browser-column.css 没挂进设计入口');
+  const col = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css'), 'utf8');
+  // 7 条规则全在（三态 + 拖拽手柄 + embed）
+  for (const sel of ['.browserLayer {', '.browserLayer--hidden {', '.browserLayer--overlay {',
+                     '.browserLayer--dragging {', '.browserCol__resizer {', '.browserCol__resizer:hover {', '.browserLayer--embed {']) {
+    assert.ok(col.includes(sel), `14-browser-column.css 缺 ${sel}`);
+  }
+  // 铁律：隐藏 = transform,绝不 display:none（规则搬家不许顺手改）
+  const hidden = col.match(/\.browserLayer--hidden\s*\{([^}]*)\}/);
+  assert.ok(hidden && /transform\s*:\s*translateX/.test(hidden[1]) && !/display\s*:\s*none/.test(hidden[1]),
+    '--hidden 规则被改坏了（必须是 transform 移出视野）');
+  // 14 只装第四列家族：不许混进别的组件的规则
+  const stripped14 = col.replace(/\/\*[\s\S]*?\*\//g, '');
+  const sels14 = [...stripped14.matchAll(/([{};,\s])(\.[A-Za-z][\w-]*(?:[:.-][\w-]+)?)/g)].map((m) => m[2]);
+  assert.ok(sels14.every((x) => x.startsWith('.browserLayer') || x.startsWith('.browserCol__resizer')),
+    `14-browser-column.css 混进了第四列之外的选择器：${sels14.filter((x) => !x.startsWith('.browserLayer') && !x.startsWith('.browserCol__resizer')).join(', ')}`);
+});
+
+/**
+ * ⑯-2 零残留审计 —— 基线 = 批次 M 之前（ac75d63）styles.css 的**全部 120 个类选择器**。
+ * 口径：原表里每个类，只要还在桌面源码的 className 语境里出现，就**必须**在
+ * （design/ ∪ browser/ ∪ channels/）里有规则 —— 旧表没有任何一块规则被悄悄弄丢。
+ * 唯一例外 agentList：M2' 有意让位（列表布局职责改由 .contact-list + .sidebar__body 承担，
+ * 见 06-sidebar.css;wrapper div 保留为纯容器,JSX 里 M2' 注释写明）。
+ */
+const ORIG_CLASSES = [
+    'account',
+    'agentList',
+    'agentList__add',
+    'agentList__del',
+    'agentList__note',
+    'agentSteps',
+    'app',
+    'assistant',
+    'authCard',
+    'authErr',
+    'authInput',
+    'authRow',
+    'authTab',
+    'authTab--on',
+    'authTabs',
+    'authWrap',
+    'avatar',
+    'avatar__face',
+    'browserFloating',
+    'browserLayer',
+    'browserLayer--bg',
+    'browserLayer--embed',
+    'btn',
+    'btn--go',
+    'btn--pending',
+    'buttons-row',
+    'card',
+    'caret',
+    'chat',
+    'chatNote',
+    'chatNote__x',
+    'contact',
+    'contact--on',
+    'contact__name',
+    'demoOnly',
+    'docDownload',
+    'driveBar',
+    'driveBar__go',
+    'driveBar__note',
+    'driveBar__tag',
+    'driveState',
+    'driveState--agent',
+    'driveState--none',
+    'driveState--user',
+    'driveState__icon',
+    'guide',
+    'guide__del',
+    'guide__head',
+    'guide__input',
+    'guide__ok',
+    'guide__table',
+    'inputBar',
+    'inputBar__end',
+    'keepalive',
+    'keepalive__btn',
+    'knowledgePanel',
+    'knowledgePanel__del',
+    'knowledgePanel__file',
+    'knowledgePanel__line',
+    'knowledgePanel__list',
+    'knowledgePanel__name',
+    'knowledgePanel__note',
+    'knowledgePanel__row',
+    'loopGone',
+    'loopGone__q',
+    'loopGone__warn',
+    'memCard',
+    'memList',
+    'memList--pending',
+    'memList__actions',
+    'memList__confirm',
+    'memList__forget',
+    'memList__reject',
+    'memList__row',
+    'memList__row--pending',
+    'memList__title',
+    'middle',
+    'msg',
+    'personaEditCard',
+    'personaEditOverlay',
+    'projectBox',
+    'projectBox__list',
+    'projectBox__note',
+    'projectBox__row',
+    'readTag',
+    'red-dot',
+    'right',
+    'searchHint',
+    'settingsRow',
+    'settingsRow__num',
+    'sidebar',
+    'sidebar__footer',
+    'small',
+    'sources',
+    'sources__domain',
+    'sources__item',
+    'sources__label',
+    'sources__list',
+    'sources__title',
+    'status-running',
+    'taskResult',
+    'taskState',
+    'taskSummary',
+    'unreadTag',
+    'user',
+    'welcomeCard',
+    'welcomeCard__actions',
+    'welcomeCard__btn',
+    'welcomeCard__btn--primary',
+    'welcomeCard__desc',
+    'welcomeCard__title',
+    'workbenchNav',
+    'workbenchNav__badge',
+    'workbenchNav__btn',
+    'workbenchNav__btn--active',
+    'workbenchNav__driving',
+    'workbenchNav__meta',
+    'workbenchNav__name',
+    'workbenchNav__status',
+    'workbenchNav__views',
+];
+await check('⑯-2 零残留审计：原表 120 类仍在用者,规则一个都不许丢（design/browser/channels 合并口径）', () => {
+  const designDir = join(DESKTOP_SRC, 'design');
+  const cssAll = readdirSync(designDir).filter((f) => f.endsWith('.css'))
+      .map((f) => readFileSync(join(designDir, f), 'utf8')).join('\n')
+    + '\n' + readFileSync(join(DESKTOP_SRC, 'browser', 'styles.css'), 'utf8')
+    + '\n' + readFileSync(join(DESKTOP_SRC, 'channels', 'styles.css'), 'utf8');
+  const definedRe = (c: string): RegExp => new RegExp('\\.' + esc16(c) + '(?![\\w-])');
+  assert.ok(definedRe('authWrap').test(cssAll), '自检失败：.authWrap 应该定义在 09-modal.css（审计器坏了）');
+  const srcText = walkTs(DESKTOP_SRC).map((f) => stripFor16(readFileSync(f, 'utf8'))).join('\n');
+  const classCtx = [...srcText.matchAll(/className="([^"]+)"/g)].map((m) => m[1]).join(' ')
+    + ' ' + [...srcText.matchAll(/className=\{([^}]*)\}/g)].map((m) => m[1]).join(' ');
+  assert.ok(classCtx.includes('app'), '自检失败：className 语境里应该有 .app（审计器坏了）');
+  const exceptions: Record<string, string> = {
+    agentList: 'M2\' 有意让位（布局职责 → .contact-list + .sidebar__body,见 06-sidebar.css）',
+  };
+  const lost: string[] = [];
+  for (const c of ORIG_CLASSES) {
+    const re = new RegExp('(?<![\\w.-])' + esc16(c) + '(?![\\w-])');
+    if (!re.test(classCtx)) continue;          // 源码里没人再用 → 规则随 UI 删除,合理
+    if (definedRe(c).test(cssAll)) continue;   // 规则在场（新家）→ OK
+    if (c in exceptions) continue;             // 文档化例外
+    lost.push(c);
+  }
+  assert.equal(lost.length, 0, `原表规则丢了:${lost.join(', ')}`);
+});
+
+await check('⑯-3 .agentList 家族去向钉死：__note 有规则,布局新东家在场,__add/__del 与 UI 一起消失', () => {
+  const side = readFileSync(join(DESKTOP_SRC, 'design', '06-sidebar.css'), 'utf8');
+  assert.ok(/\.agentList__note\s*\{/.test(side), '06-sidebar.css 缺 .agentList__note 规则（在用的类丢了样式）');
+  // 容器布局的新东家（M2' 接替旧 .agentList 的 flex 列 + 滚动职责）
+  const contactList = side.match(/\.contact-list\s*\{([^}]*)\}/);
+  assert.ok(contactList && /flex-direction:\s*column/.test(contactList[1]), '.contact-list 不再是 flex 列（列表布局没人管了）');
+  const body = side.match(/\.sidebar__body\s*\{([^}]*)\}/);
+  assert.ok(body && /overflow-y:\s*auto/.test(body[1]), '.sidebar__body 不再滚动（左栏超高时入口够不着,旧 .agentList 的坑回来了）');
+  // 旧「＋ 添加 / 删除」两钮 M2' 起已收进顶栏弹层 —— 若按钮回来,规则必须跟回来
+  const srcText = walkTs(DESKTOP_SRC).map((f) => stripFor16(readFileSync(f, 'utf8'))).join('\n');
+  for (const c of ['agentList__add', 'agentList__del']) {
+    const re = new RegExp('(?<![\\w.-])' + esc16(c) + '(?![\\w-])');
+    assert.ok(!re.test(srcText), `${c} 又出现在源码里（按钮回来了,规则必须跟着回来）`);
   }
 });
 

@@ -19,7 +19,7 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 OUTDIR = os.path.join(REPO, 'docs', 'acceptance', 'app-shell')
 PY = sys.executable
 
-STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'styles.css')
+STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css')  # M9'：第四列规则从 styles.css 逐字节搬进 14
 APP = os.path.join(REPO, 'apps', 'desktop', 'src', 'App.tsx')
 HOOK = os.path.join(REPO, 'apps', 'desktop', 'src', 'app', 'useBrowserColumn.ts')
 
@@ -38,14 +38,16 @@ DEFECTS = [
     {
         'name': 'C2 「🌐 启用」不再弹列（触发② 失效）',
         'file': APP,
-        'old': ("                browser.showFullscreen();\n"
-                "                col.openColumn();\n"
-                "              }}\n"
-                '              title="启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
-        'new': ("                browser.showFullscreen();\n"
-                "                /* 反证注入：不再 openColumn —— 点了启用列也不弹 */\n"
-                "              }}\n"
-                '              title="启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
+        'old': ("            browser.showFullscreen();\n"
+                "            col.openColumn();\n"
+                "          }}\n"
+                '          aria-label="启用浏览器"\n'
+                '          title="🌐 启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
+        'new': ("            browser.showFullscreen();\n"
+                "            /* 反证注入：不再 openColumn —— 点了启用列也不弹 */\n"
+                "          }}\n"
+                '          aria-label="启用浏览器"\n'
+                '          title="🌐 启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
         'expect': ['「💬 对话」→ 隐藏形态'],
     },
     {

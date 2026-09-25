@@ -2570,7 +2570,7 @@ export default function App() {
 
               ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
                 children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
-                驾驶的点击坐标也全废（`styles.css` 里 `.browserLayer--bg` 的注释写的就是这个坑）。
+                驾驶的点击坐标也全废（`design/14-browser-column.css` 里 `.browserLayer--hidden` 的注释写的就是这个坑）。
                 组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
               ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
             */}

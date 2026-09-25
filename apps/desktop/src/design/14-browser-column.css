@@ -1,17 +1,16 @@
 /* ==========================================================================
-   styles.css —— 批次 M-7' 后只剩两样东西：
-   ① 第四列（浏览器层）三态 CSS —— 用户定稿 d5f974e「不碰第四列」，规则
-      一行不动留在这里，M-9' 删本文件时**逐字节**搬进 design/14-browser-column.css；
-   ② 各批次的删除标记（审计痕迹）。
-   其余全部已搬进 design/（编号 CSS 跟组件走）：
-     01-tokens/99-theme：:root 变量 + reset + body 基座
-     02-base：.btn 系 / .small / .buttons-row 原语
-     03-frame：.app / .middle
-     06-sidebar：.contact 系 / .projectBox / .account / .memList / .knowledgePanel …
-     07-rail：.workbenchNav__badge / __driving / pulse-dot
-     10-surface：.taskState / .taskResult / .driveState / .loopGone / .demoOnly …
-   死代码（DOM 零引用，M-7' 删）：.right / .driveBar* / .status-running /
-   .card / .memCard / .agentSteps
+   14-browser-column.css —— 桌面第四列（浏览器层）三态 CSS
+   --------------------------------------------------------------------------
+   批次 M-9' 收口：从旧 styles.css **逐字节搬入**（旧文件已删,本目录是桌面
+   样式的唯一来源）。编号 14 = 第四列,桌面专属,workbench-ui 设计基准里没有。
+
+   ★ 用户定稿（批次 M-2 / d5f974e）「不碰第四列」的规矩随文件延续：
+     三形态 隐藏 / 第四列 / 覆盖 + 正交 embed（求助卡）态,
+     隐藏 = transform 移出视野（**绝不 display:none / 尺寸归零 / 卸载**——
+     驾驶坐标依赖 webview 的真实尺寸）。改这里之前先读懂下方 ★★ 注释。
+
+   审计痕迹：M-7' 前本段与 .app/.btn 等旧规则同居 styles.css;
+   M-7' 起 styles.css 只剩本段 + 删除标记;M-9' 整体删除。
    ========================================================================== */
 
 /*
@@ -98,11 +97,3 @@
   z-index: 30;
   border-left: none;
 }
-
-/*
- * 第 27 步 · 「谁在等谁」状态条（渲染在聊天区顶部，**求助卡模式下也看得见**）。
- *
- * 它存在的唯一理由就是那条核心验收点：用户主动暂停 与 AI 主动求助
- * 必须在界面上一眼分得出来。两者都落在 `phase='paused'`，
- * 所以颜色/图标/文案**一律跟着 `pausedBy` 走**，不跟着 phase 走。
- */

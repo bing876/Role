@@ -27,7 +27,7 @@ TESTS = os.path.join(HERE, 'fullscreen-browser-tests.py')
 OUTDIR = os.path.join(REPO, 'docs', 'acceptance', 'fullscreen-browser')
 PY = sys.executable
 
-STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'styles.css')
+STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css')  # M9'：第四列规则从 styles.css 逐字节搬进 14
 WS = os.path.join(REPO, 'apps', 'desktop', 'src', 'browser', 'useBrowserWorkspace.ts')
 PANEL = os.path.join(REPO, 'apps', 'desktop', 'src', 'browser', 'BrowserPanel.tsx')
 

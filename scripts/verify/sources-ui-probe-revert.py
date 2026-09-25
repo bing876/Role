@@ -11,7 +11,7 @@
 
 三处对照（同一支脚本内做 A/B）：
     ① 基线（不动代码）                              → 期望 0 FAIL
-    ② 注入 A：styles.css 给 .sources__item 加 pointer-events:none
+    ② 注入 A：design/11-chat-bubbles.css 给 .sources__item 加 pointer-events:none
                注入 B：chat.ts 的 /chat/history 不再回传 sources
                                                     → 期望 hit-test 1 条 + 刷新后 2 条变红
     ②b 注入 C（**单独一轮**）：App.tsx 把来源的 target="_blank" 改成 "_self"
@@ -47,7 +47,7 @@ PY = r"C:\Users\bing\.workbuddy-ai\binaries\python\envs\default\Scripts\python.e
 OUT_DIR = os.path.join(ROOT, "docs", "acceptance", "tavily")
 LOG_PATH = os.path.join(OUT_DIR, "sources-ui-probe-revert.log")
 
-STYLES = os.path.join(ROOT, "apps", "desktop", "src", "styles.css")
+STYLES = os.path.join(ROOT, "apps", "desktop", "src", "design", "11-chat-bubbles.css")  # M5' 起 .sources__ 规则跟聊天区走;M9' 确认 styles.css 已删
 CHAT_ROUTE = os.path.join(ROOT, "apps", "server", "src", "routes", "chat.ts")
 APP_TSX = os.path.join(ROOT, "apps", "desktop", "src", "App.tsx")
 
@@ -229,7 +229,7 @@ def main():
     log("      · ★ 每条来源的中心点真的点得到（hit-test 命中自己…）")
     log("      · ★ 刷新后来源块仍在（证明来源真的落了库…）")
     log("      · ★ 刷新后来源与刷新前逐条一致（同 url 同序）")
-    if not patch(STYLES, A_OLD, A_NEW, "styles.css pointer-events"):
+    if not patch(STYLES, A_OLD, A_NEW, "11-chat-bubbles.css pointer-events"):
         return 2
     if not patch(CHAT_ROUTE, B_OLD, B_NEW, "chat.ts history sources"):
         unpatch(STYLES, A_NEW, A_OLD)

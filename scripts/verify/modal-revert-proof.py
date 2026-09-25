@@ -21,13 +21,16 @@ OUTDIR = os.path.join(REPO, 'docs', 'acceptance', 'app-shell')
 
 STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'design', '09-modal.css')
 APP = os.path.join(REPO, 'apps', 'desktop', 'src', 'App.tsx')
+# M8'：引导确认 / 登录按钮随组件外迁（锚点跟组件走）
+GUIDE = os.path.join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'AgentGuide.tsx')
+AUTH = os.path.join(REPO, 'apps', 'desktop', 'src', 'features', 'auth', 'AuthScreen.tsx')
 
 # 每条缺陷：名字 / 文件 / 原文 / 改坏后 / 期望变红的断言关键字
 DEFECTS = [
     {
         # 用户点名的反证:引导确认必须把**用户真填的** persona 送服务端 —— 换成写死假值,⑬-2 必须变红。
         'name': 'M1 引导确认送写死的假 persona（不再是用户真填的）',
-        'file': APP,
+        'file': GUIDE,
         'old': "onSave({ name: name.trim(), who: who.trim(), tone: tone.trim(), duty: duty.trim() });",
         'new': "onSave({ name: '写死甲', who: '写死乙', tone: '写死丙', duty: '写死丁' } as AgentPersona);  // 反证注入",
         'expect': ['⑬-2'],
@@ -51,7 +54,7 @@ DEFECTS = [
     {
         # 登录按钮变假（不真发 /auth/login/sms）—— 既有的 F5 重新登录断言必须变红。
         'name': 'M4 登录按钮变假登录（不真发请求）',
-        'file': APP,
+        'file': AUTH,
         'old': "onClick={() => void login('/auth/login/sms', { phone: phone.trim(), code })}>",
         'new': "onClick={() => { /* 反证注入:假登录,不发请求 */ }}>",
         'expect': ['F5'],

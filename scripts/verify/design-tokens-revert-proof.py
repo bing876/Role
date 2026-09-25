@@ -3,7 +3,7 @@
 
   R1  99-theme 的 .sidebar 规则去掉 .frame 前缀(迁移期直接打中旧白底 sidebar)
       → 红在「列规则全部 scoped 在 .frame 下」。
-  R2  main.tsx 导入顺序对调(styles.css 先于 design)→ 红在「导入顺序」检查。
+  R2  main.tsx 重新加回 styles.css 的 import(M9' 收口后旧表已删)→ 红在「零残留」检查。
   R3  design/index.css 删掉 01-tokens 的 @import(令牌层悄悄缺失)→ 红在「严格按序」检查。
   R4  01-tokens 里 --sb-w 250px → 260px(与设计基准偷改一个值)→ 红在「逐字节一致」检查。
 
@@ -34,10 +34,10 @@ MUTATIONS = [
     {
         'id': 'R2',
         'file': MAIN,
-        'name': 'main.tsx 导入顺序对调(styles.css 先于 design)',
-        'anchor': "import './design/index.css';\nimport './styles.css';",
-        'replace': "import './styles.css';\nimport './design/index.css';",
-        'expect': '在 styles.css 之前',
+        'name': "main.tsx 重新加回 styles.css 的 import(M9' 收口:旧表已整体删除)",
+        'anchor': "import './design/index.css';\n",
+        'replace': "import './styles.css';\nimport './design/index.css';\n",
+        'expect': '还在 import styles.css',
     },
     {
         'id': 'R3',

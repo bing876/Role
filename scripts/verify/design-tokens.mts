@@ -5,16 +5,17 @@
  *   设计 CSS 里**唯一可能打中当前 DOM** 的规则只有三类，本脚本把它们逐条钉死：
  *   ① 99-theme 的四条列规则（.rail/.sidebar/.main-area/.frame-internal-stroke，都带 !important）
  *      → 必须全部 scoped 在 `.frame ` 之下；当前 DOM 没有 .frame 元素 → 打不中；
- *   ② 02-base 只有 `body.viewport` → 当前 body 没有 viewport 类 → 打不中；
+ *   ② 02-base 的选择器 ∈ {body.viewport（打不中）} ∪ M7' 桌面原语白名单（有意打中,值同旧规则）；
  *   ③ 01-tokens 只有 :root / * / 元素族 / @font-face，无类选择器 → 且 `*{box-sizing:border-box}`
- *      与 styles.css 既有规则同值 → 无变化。
- * 另钉：导入顺序（design 在 styles.css 之前）、与 workbench-ui 原版的逐字节保真（只许 M1' 文档化的
- * 那一个机械适配：99-theme 的 .frame 前缀 + 头部说明）、字体文件与原版同 sha256。
+ *      与 99-theme M7' 基座块同值 → 盒模型单一来源。
+ * M9' 收口后另钉：零残留（styles.css 已删,design/index.css 是唯一入口）、原版部分的逐字节保真
+ * （M1' 机械适配：99-theme 的 .frame 前缀 + 头部说明;M7' 文件尾文档化扩展块）、
+ * 字体文件与原版同 sha256。
  *
  * 用法：npx tsx scripts/verify/design-tokens.mts
  */
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,15 +52,22 @@ const index = read(join(DG, 'index.css'));
 const tokens = read(join(DG, '01-tokens.css'));
 const base = read(join(DG, '02-base.css'));
 const theme = read(join(DG, '99-theme.css'));
-const legacy = read(join(REPO, 'apps', 'desktop', 'src', 'styles.css'));
 
 // ---------------------------------------------------------------- 入口与顺序
-check('main.tsx：design/index.css 在 styles.css 之前导入（迁移期同权重旧规则赢）', () => {
+/**
+ * M9' 收口：styles.css 已整体删除 —— 设计 CSS 是唯一入口。
+ * 检查升级为**零残留**：main.tsx 不许再 import 它、文件不许再存在
+ * （任何一块旧规则想回来，都得先让文件复活 → 这里立刻红）。
+ */
+check('main.tsx：design/index.css 是唯一 CSS 入口,styles.css 零残留（M9\' 收口）', () => {
   const iDesign = main.indexOf("import './design/index.css'");
   const iStyles = main.indexOf("import './styles.css'");
   assert(iDesign >= 0, 'main.tsx 没有 import design/index.css');
-  assert(iStyles >= 0, 'main.tsx 没有 import styles.css（旧表不能丢）');
-  assert(iDesign < iStyles, `导入顺序错了：design(${iDesign}) 必须在 styles.css(${iStyles}) 之前`);
+  assert(iStyles < 0, 'main.tsx 还在 import styles.css（M9\' 没删干净?）');
+  assert(
+    !existsSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css')),
+    'styles.css 文件又出现了（M9\' 已删;旧规则想回来先得让文件复活）',
+  );
 });
 
 check('design/index.css：01-tokens → 02-base → 99-theme 严格按序（与设计基准一致，禁止重排）', () => {

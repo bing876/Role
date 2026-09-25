@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { sameNode } from './lib/dom-assert.mts';
 
@@ -1749,10 +1749,11 @@ await check('⑬-4 样式红线：09-modal.css 在场且挂入口；.authCard h3
   assert.ok(/\.personaEditOverlay\s*\{/.test(css) && /\.guide\s*\{/.test(css), '缺 .guide / .personaEditOverlay 规则');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./09-modal.css'), '模态 CSS 没挂进设计入口');
-  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
-  assert.ok(!/\.authWrap\s*\{/.test(styles), '旧 .authWrap 规则还留在 styles.css');
-  assert.ok(!/\.authCard h3\s*\{/.test(styles), '旧 .authCard h3 规则还留在 styles.css（组件已搬走）');
-  assert.ok(!/\.guide__table th\s*\{/.test(styles), '旧 .guide__table th 规则还留在 styles.css（组件已搬走）');
+  // M9'：文件级红线 —— styles.css 已整体删除（.auth*/.guide*/.personaEdit* 全在 09-modal.css）
+  assert.ok(
+    !existsSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css')),
+    'styles.css 又出现了（M9\' 已删；.authWrap/.authCard h3/.guide__table th 旧规则不许回来）',
+  );
 });
 
 // ---------------------------------------------------------------------------

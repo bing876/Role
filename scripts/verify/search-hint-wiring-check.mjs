@@ -18,7 +18,7 @@
  * 跑法：node scripts/verify/search-hint-wiring-check.mjs
  */
 
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -28,7 +28,7 @@ const SERVER_CHAT = path.join(ROOT, 'apps', 'server', 'src', 'routes', 'chat.ts'
 const APP = path.join(ROOT, 'apps', 'desktop', 'src', 'App.tsx');
 /** ★ 2026-09-25（片 7b）：`search` 事件的处理随 `sendChat` 搬进 features/chat（探针跟着代码走） */
 const CHAT_SRC = path.join(ROOT, 'apps', 'desktop', 'src', 'features', 'chat', 'useChat.ts');
-const CSS = path.join(ROOT, 'apps', 'desktop', 'src', 'styles.css');
+const LEGACY_CSS = path.join(ROOT, 'apps', 'desktop', 'src', 'styles.css');
 
 let pass = 0;
 let fail = 0;
@@ -50,7 +50,12 @@ const app = readFileSync(APP, 'utf8') + '\n' + readFileSync(CHAT_SRC, 'utf8');
  * 类名↔CSS 一致性检查的对象改为「设计系统整体」（design/*.css 合并 + styles.css）。
  */
 const designDir = path.join(ROOT, 'apps', 'desktop', 'src', 'design');
-const css = readFileSync(CSS, 'utf8') + '\n' +
+// M9'：styles.css 已删（若有人复活它,合并进来只会让旧规则假绿 —— 直接断言它不在场）
+if (existsSync(LEGACY_CSS)) {
+  console.log('★ 失败项：styles.css 又出现了（M9\' 已删）');
+  process.exit(1);
+}
+const css = '' + '\n' +
   readdirSync(designDir)
     .filter((f) => f.endsWith('.css'))
     .map((f) => readFileSync(path.join(designDir, f), 'utf8'))

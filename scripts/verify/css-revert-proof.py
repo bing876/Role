@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """批次 M-7'「其余 CSS + F2-③」反证：把关键代码改坏 → verify:shell / verify:logic 必须变红 → 立刻还原。
-S1 是用户点名的回归：**F2-③ 两槽合一**（失败写回成功槽，成功/失败又分不开）。
+S1 是用户点名的回归：**F2-③ 两槽合一**（失败写回成功槽，成功/失败又分不开）；
+S5 是 **M9' 零残留**的回归：styles.css 已删,谁让它复活谁当场红。
 
 用法： python3 scripts/verify/css-revert-proof.py
 原理： 每条"改坏"都对应验收里的一条断言（⑭-x 或 logic 的 F2-③）。
@@ -70,15 +71,16 @@ DEFECTS = [
         'run': 'shell',
     },
     {
-        # 编号 CSS 跟组件走 打回:.app 旧规则加回 styles.css,⑭-1 必须变红。
-        'name': 'S5 旧 .app 规则加回 styles.css（组件搬走了规则没跟走）',
+        # M9' 收口 打回:styles.css 已整体删除,有人把它**复活**并写回旧 .app 规则 → ⑭-1 必须变红。
+        # 'create' 模式 = 注入前文件**不存在**（基线就是"已删"）,注入 = 创建,还原 = 删除。
+        'name': 'S5 styles.css 被复活且写回旧 .app 规则（M9\' 零残留打回）',
         'file': STYLES,
-        'old': "   ========================================================================== */\n\n",
-        'new': ("   ========================================================================== */\n\n"
-                ".app {\n"
-                "  display: flex;\n"
-                "  height: 100%;\n"
-                "}\n\n"),
+        'mode': 'create',
+        'content': ("/* 反证注入：styles.css 被复活,旧 .app 规则写回来了 */\n"
+                    ".app {\n"
+                    "  display: flex;\n"
+                    "  height: 100%;\n"
+                    "}\n"),
         'expect': ['⑭-1'],
         'run': 'shell',
     },
@@ -138,17 +140,26 @@ def main():
     print('\n[0] 源码指纹自检（防止把上一次中断留下的"已注入"状态当基线）')
     ok_all = True
     for d in DEFECTS:
-        txt = read_raw(d['file'])
-        hit = d['old'] in txt.replace('\r\n', '\n')
-        print('  [%s] 注入锚点在位：%s' % ('PASS' if hit else 'FAIL', d['name']))
+        if d.get('mode') == 'create':
+            hit = not os.path.exists(d['file'])
+            print('  [%s] 基线在场（文件已删）：%s' % ('PASS' if hit else 'FAIL', d['name']))
+        else:
+            txt = read_raw(d['file'])
+            hit = d['old'] in txt.replace('\r\n', '\n')
+            print('  [%s] 注入锚点在位：%s' % ('PASS' if hit else 'FAIL', d['name']))
         if not hit:
             ok_all = False
     if not ok_all:
         print('  ✗ 锚点不全 —— 源码不是预期状态，先手工检查再跑反证')
         return 2
 
-    orig = {d['file']: read_raw(d['file']) for d in DEFECTS}
-    orig_sha = {p: sha256(p) for p in orig}
+    orig = {}
+    for d in DEFECTS:
+        if d.get('mode') == 'create':
+            orig[d['file']] = None   # 基线 = 文件不存在
+        else:
+            orig[d['file']] = read_raw(d['file'])
+    orig_sha = {p: sha256(p) for p in orig if os.path.exists(p)}
 
     results = []
     try:
@@ -156,7 +167,9 @@ def main():
             print('\n' + '-' * 78)
             print('[反证 %d/%d] %s' % (i, len(DEFECTS), d['name']))
             print('  注入文件：%s' % os.path.relpath(d['file'], REPO))
-            if not inject(d['file'], d['old'], d['new']):
+            if d.get('mode') == 'create':
+                write_raw(d['file'], d['content'])
+            elif not inject(d['file'], d['old'], d['new']):
                 print('  ✗ 锚点未命中，跳过')
                 results.append((d['name'], False, 'anchor miss'))
                 continue
@@ -164,11 +177,17 @@ def main():
             try:
                 rc, fails, npass, log = run_verify(d['run'])
             finally:
-                # ★ 无论跑成什么样，先把文件按**原始字节**还原
-                write_raw(d['file'], orig[d['file']])
-                back = sha256(d['file'])
-                restored = (back == orig_sha[d['file']])
-                print('  已还原（sha256 %s）：%s' % (back[:12], '一致 ✔' if restored else '不一致 ✗'))
+                # ★ 无论跑成什么样，先把文件还原（create 模式 = 删回不存在）
+                if orig[d['file']] is None:
+                    if os.path.exists(d['file']):
+                        os.remove(d['file'])
+                    restored = not os.path.exists(d['file'])
+                    print('  已还原（文件已删回）：%s' % ('一致 ✔' if restored else '不一致 ✗'))
+                else:
+                    write_raw(d['file'], orig[d['file']])
+                    back = sha256(d['file'])
+                    restored = (back == orig_sha[d['file']])
+                    print('  已还原（sha256 %s）：%s' % (back[:12], '一致 ✔' if restored else '不一致 ✗'))
                 if not restored:
                     raise RuntimeError('还原失败，必须人工介入：%s' % d['file'])
             hit = [f for f in fails if any(k in f for k in d['expect'])]
@@ -182,9 +201,17 @@ def main():
             results.append((d['name'], passed, fails))
     finally:
         for p, t in orig.items():
-            write_raw(p, t)
-        for p in orig:
-            if sha256(p) != orig_sha[p]:
+            if t is None:
+                if os.path.exists(p):
+                    os.remove(p)
+            else:
+                write_raw(p, t)
+        for p, t in orig.items():
+            if t is None:
+                if os.path.exists(p):
+                    print('  ✗ 终检：文件未删回，必须人工介入：%s' % p)
+                    return 2
+            elif sha256(p) != orig_sha[p]:
                 print('  ✗ 终检：文件未还原，必须人工介入：%s' % p)
                 return 2
 
