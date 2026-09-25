@@ -1142,6 +1142,7 @@ export default function App() {
     setProjectsOpen,
     projectBusy,
     projectNote,
+    projectErr,
     newProjectName,
     setNewProjectName,
     loadProjects,
@@ -2182,7 +2183,9 @@ export default function App() {
                 </div>
               </div>
             )}
+            {/* F2-③：成功/失败两个槽 + 两套样式（失败槽 = 红，一眼看出坏没坏） */}
             {projectNote && <div className="small projectBox__note">{projectNote}</div>}
+            {projectErr && <div className="small projectBox__note projectBox__note--err">{projectErr}</div>}
           </div>
 
           <div className="agentList">

@@ -186,11 +186,11 @@ MUTATIONS = [
     {
         'file': PROJECTS,
         'id': 'P5',
-        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 失败提示没有 ⚠ 了
-        'name': '把 F2 打回去：切换失败的提示丢掉 ⚠ 前缀（成功/失败又长得一样）',
-        'anchor': "      setProjectNote(`⚠ 切换项目没成：${(e as Error).message}`);\n",
-        'replace': "      setProjectNote(`切换项目没成：${(e as Error).message}`);\n",
-        'expect': '失败提示没有 ⚠ 前缀',
+        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 失败没进红色错误槽
+        'name': '把 F2-③ 打回去：切换失败写回成功槽（两槽合一，成功失败又分不开）',
+        'anchor': "      setProjectErr(`⚠ 切换项目没成：${(e as Error).message}`);\n",
+        'replace': "      setProjectNote(`⚠ 切换项目没成：${(e as Error).message}`);  // 反证注入\n",
+        'expect': '错误槽是空的',
     },
     {
         'file': CHAT,

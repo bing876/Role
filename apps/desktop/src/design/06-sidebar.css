@@ -173,3 +173,253 @@
 /* hover / 键盘聚焦：极淡预览线（企业级 affordance，拖动前可发现可点） */
 .splitter:hover::after,
 .splitter:focus-visible::after { background: rgba(255, 255, 255, 0.18); }
+
+/* ============ 批次 M-7'：左栏其余块（旧 styles.css 迁入，值原样） ============
+   项目行 / 保活开关 / 错误提示 / 账号 / 记忆 / 知识库 / 页脚。
+   ★ F2-③（挂账自批次 M-2'，用户拍板阶段 2 做）：projectNote 拆成
+   **成功/失败两个槽 + 两套样式** —— 成功 .projectBox__note（朴素，原样），
+   失败 .projectBox__note--err（红）。失败文案仍保留 ⚠ 字形（视觉双信号），
+   但程序判据从"文案前缀嗅探"改为"槽位/类名"。 */
+
+/* 项目行：复用 .contact 系（左栏一行一个项目，行是 <button>） */
+.contact {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  position: relative;
+}
+
+.contact:hover {
+  background: #f6f7f9;
+}
+
+/* 当前使用中的项目行 */
+.contact--on {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.contact__name {
+  font-weight: 700;
+}
+
+/* 智能体列表的错误提示行 */
+.agentList__note {
+  margin-top: 2px;
+  line-height: 1.45;
+  color: #b45309;
+  word-break: break-word;
+}
+
+/* 第 16 步：「启动并保活」开关（左栏） */
+.keepalive {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.keepalive__btn {
+  width: 100%;
+}
+
+/* 子阶段 2-B：最简项目入口（左栏顶部） */
+.projectBox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.projectBox__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.projectBox__row {
+  padding: 3px 6px;
+}
+/* F2-③：成功槽（朴素） */
+.projectBox__note {
+  color: #b45309;
+  line-height: 1.45;
+  word-break: break-word;
+}
+/* F2-③：失败槽（红 —— 一眼看出坏了，不必读句子） */
+.projectBox__note--err {
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin-top: 4px;
+}
+
+/* 第 5 步（重做版）：左栏账号小块 */
+.account {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+}
+
+/* 第 22 步：浏览器可调配置（左栏账号块里那两行：标签 + 数字输入） */
+.settingsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.settingsRow__num {
+  width: 72px;
+  flex: 0 0 auto;
+}
+
+/* 第 8 步：任务 done 后的「下载文档」按钮 */
+.docDownload {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 10px 12px;
+  border-style: solid;
+  border-width: 2px;
+}
+
+/* 第 10 步：侧栏「我的记忆」（.memCard 旧规则是死代码，M-7' 删） */
+.memList {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  text-align: left;
+}
+.memList__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+  border-top: 1px dashed #eee;
+}
+.memList__forget {
+  border: none;
+  background: none;
+  color: #dc2626;
+  cursor: pointer;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.memList__title {
+  margin-bottom: 4px;
+  color: #6b7280;
+}
+/* 记忆合并第四批：待确认记忆确认卡 */
+.memList--pending {
+  border: 1px solid #fcd34d;
+  background: #fffbeb;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 6px;
+}
+.memList__row--pending {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 6px 0;
+}
+.memList__actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.memList__confirm {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.memList__reject {
+  padding: 2px 8px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* 第 11 步：左栏知识库入口 */
+.knowledgePanel {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px dashed #9ca3af;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+.knowledgePanel__file {
+  display: none;
+}
+.knowledgePanel__note {
+  margin-top: 6px;
+  line-height: 1.45;
+  color: #2563eb;
+  word-break: break-word;
+}
+.knowledgePanel__list {
+  margin-top: 7px;
+  max-height: 132px;
+  overflow-y: auto;
+  border-top: 1px dashed #e5e7eb;
+}
+.knowledgePanel__row {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 0;
+  border-bottom: 1px dashed #e5e7eb;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow: hidden;
+}
+/* 第 19 步：文件名 + 删除按钮同一行；名字过长省略号，按钮永远可见 */
+.knowledgePanel__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.knowledgePanel__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.knowledgePanel__del {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #dc2626;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.knowledgePanel__del:disabled {
+  color: #9ca3af;
+  cursor: default;
+}
+
+.sidebar__footer {
+  margin-top: auto;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text-weak);
+  word-break: break-all;
+}

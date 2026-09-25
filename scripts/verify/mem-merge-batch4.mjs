@@ -41,12 +41,20 @@ must(memLogic.includes("'/memories/reject'"), '记忆逻辑（features/memory）
 must(appContent.includes('待确认'), 'App.tsx 有待确认 UI');
 must(appContent.includes('memList--pending'), 'App.tsx 有 pending 样式类');
 
-const cssPath = path.join(root, 'apps/desktop/src/styles.css');
-const cssContent = fs.readFileSync(cssPath, 'utf8');
-must(cssContent.includes('.btn--pending'), 'styles.css 有 btn--pending');
-must(cssContent.includes('.memList--pending'), 'styles.css 有 memList--pending');
-must(cssContent.includes('.memList__row--pending'), 'styles.css 有 memList__row--pending');
-must(cssContent.includes('.memList__actions'), 'styles.css 有 memList__actions');
+/**
+ * 批次 M-7'：pending 样式类从 styles.css 迁进 design CSS（编号 CSS 跟组件走：
+ * .btn--pending → 02-base.css，.memList* → 06-sidebar.css）。
+ * 这里检查「设计系统整体」而不是钉死 styles.css —— 规则随组件走，位置会变。
+ */
+const designDir = path.join(root, 'apps/desktop/src/design');
+const cssContent = fs.readdirSync(designDir)
+  .filter((f) => f.endsWith('.css'))
+  .map((f) => fs.readFileSync(path.join(designDir, f), 'utf8'))
+  .join('\n');
+must(cssContent.includes('.btn--pending'), '设计 CSS 有 btn--pending');
+must(cssContent.includes('.memList--pending'), '设计 CSS 有 memList--pending');
+must(cssContent.includes('.memList__row--pending'), '设计 CSS 有 memList__row--pending');
+must(cssContent.includes('.memList__actions'), '设计 CSS 有 memList__actions');
 
 const memPath = path.join(root, 'apps/server/src/routes/memories.ts');
 const memContent = fs.readFileSync(memPath, 'utf8');

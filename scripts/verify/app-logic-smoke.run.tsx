@@ -865,20 +865,22 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
    *   这条断言原来钉的是"note 现在是空的"（把既有行为钉住，等用户拍）；
    *   现在**反过来**：成功文案必须留在屏幕上。反证 P4 把清空那句加回去 → 这条立刻红。
    */
-  const note = q('.projectBox__note');
+  const note = q('.projectBox__note:not(.projectBox__note--err)');
   assert.ok(note, '新建项目成功后没有确认文案（提示又被刷新清掉了 —— F1 复发）');
   assert.match(note?.textContent ?? '', /建好了/, `确认文案不对：${note?.textContent}`);
-  /** ★ F2：成功是**朴素**的（前缀只属于失败）—— 成功后还挂个 ⚠ 会让用户以为坏了 */
+  /** ★ F2：成功是**朴素**的（失败才走红色 err 槽）—— 成功后还挂个 ⚠ 会让用户以为坏了 */
   assert.ok(!/⚠/.test(note?.textContent ?? ''), `成功文案不该带 ⚠：${note?.textContent}`);
+  assert.ok(q('.projectBox__note--err') === null, '成功时错误槽不该亮（F2-③ 两槽串了）');
 });
 
 /**
- * ★ F2（2026-09-25，用户拍板方案 ②）：失败与成功**共用同一行** `projectNote`，
- *   所以失败必须一眼能看出"坏了" —— 统一 `⚠ ` 前缀，成功保持朴素。
+ * ★ F2-③（2026-09-25 批次 M-7' 升级方案 ③）：失败与成功**各用一个槽** ——
+ *   失败写 `projectErr`，渲染成 `.projectBox__note--err` 红色槽（一眼看出坏了，
+ *   不用读句子）；成功槽（.projectBox__note 朴素）必须同时保持干净。
  *   这一条走的是**真实的失败路径**：服务端回 400 → `authFetchJson` 抛错 → catch 里写提示。
- *   反证 P5 把前缀去掉 → 这条立刻红（屏幕上少了那个符号）。
+ *   反证 P5 把失败写回成功槽（两槽合一）→ 这条立刻红。
  */
-await check('★ F2：切换项目失败时，那行提示带 ⚠ 前缀（一眼看出坏了，不用读句子）', async () => {
+await check('★ F2-③：切换项目失败时，失败进专门的红色槽（成功槽保持干净）', async () => {
   activateFails = true;
   const before = requestsTo('/projects/7/activate').length;
   const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '7');
@@ -887,11 +889,13 @@ await check('★ F2：切换项目失败时，那行提示带 ⚠ 前缀（一�
   await waitFor('发出 activate（失败那一次）', () => requestsTo('/projects/7/activate').length > before);
   await flush(4);
   activateFails = false;
-  const note = q('.projectBox__note');
-  assert.ok(note, '切换失败后那一行什么都没写（用户不知道刚才那一下成没成）');
-  assert.match(note?.textContent ?? '', /^\s*⚠/, `失败提示没有 ⚠ 前缀（成功失败又看不出区别了）：「${note?.textContent}」`);
-  assert.match(note?.textContent ?? '', /切换项目没成/, `失败提示文案不对：${note?.textContent}`);
-  assert.match(note?.textContent ?? '', /项目不存在或无权访问/, `没把服务端那句话带给用户：${note?.textContent}`);
+  const errNote = q('.projectBox__note--err');
+  assert.ok(errNote, '切换失败后错误槽是空的（失败被写去了成功槽？F2-③ 两槽合一回归）');
+  assert.match(errNote?.textContent ?? '', /^\s*⚠/, `失败提示没有 ⚠ 字形（视觉信号丢了）：「${errNote?.textContent}」`);
+  assert.match(errNote?.textContent ?? '', /切换项目没成/, `失败提示文案不对：${errNote?.textContent}`);
+  assert.match(errNote?.textContent ?? '', /项目不存在或无权访问/, `没把服务端那句话带给用户：${errNote?.textContent}`);
+  const okNote = q('.projectBox__note:not(.projectBox__note--err)');
+  assert.ok(okNote === null || (okNote?.textContent ?? '').trim() === '', `失败文案串进了成功槽：「${okNote?.textContent}」`);
   /**
    * 而且**没进**那个项目（失败就是没切）：侧栏名单还是新项目里的「小鸡」。
    * （不拿 `.contact--on` 判：桩里 `GET /projects` 只回 7/8 两条，新建出来的 9 号

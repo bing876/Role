@@ -35,6 +35,8 @@ export interface ProjectsApi {
   setProjectsOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
   projectBusy: boolean;
   projectNote: string;
+  /** F2-③：失败专用槽（与成功槽 projectNote 分家，渲染两个槽 + 两套样式） */
+  projectErr: string;
   newProjectName: string;
   setNewProjectName: (v: string) => void;
   /** 读项目列表；把「当前使用中的项目」同步到 state 与 ref，并返回它 */
@@ -48,12 +50,11 @@ export interface ProjectsApi {
 }
 
 /**
- * ★ F2 修复（2026-09-25，用户拍板选方案 ②）：
- *   **失败一律带 `⚠ ` 前缀，成功保持朴素**（成功文案就一句人话，前面不加任何符号）。
- *   为什么是前缀而不是"成功也写一行字"：失败与成功**同用一行** `projectNote`，
- *   加符号能让"坏没坏"一眼看出来，不必去读句子。
- *   为什么不用"两个槽位 + 两套样式"（方案 ③）：那要动 CSS，属阶段 2（已记进缺陷清单）。
- *   注意：这个前缀是**文案约定**，不是状态标记 —— 别拿它当程序里的判据。
+ * ★ F2 修复（2026-09-25 方案 ②：失败带 `⚠ ` 前缀；2026-09-25 批次 M-7' 升级为方案 ③）：
+ *   **失败与成功各用一个槽** —— 成功写 `projectNote`（朴素），失败写 `projectErr`
+ *   （渲染成 `.projectBox__note--err` 红色槽）。程序判据是**槽位本身**，
+ *   不再是文案前缀嗅探；⚠ 字形保留在失败文案里，只是视觉双信号。
+ *   每个动作开始时两个槽一起清；登出（resetProjects）也一起清。
  */
 
 export function useProjects({
@@ -68,6 +69,7 @@ export function useProjects({
   const [newProjectName, setNewProjectName] = useState('');
   const [projectBusy, setProjectBusy] = useState(false);
   const [projectNote, setProjectNote] = useState('');
+  const [projectErr, setProjectErr] = useState('');
 
   /** 读项目列表；把「当前使用中的项目」同步到 state 与 ref，并返回它 */
   const loadProjects = async (): Promise<number | null> => {
@@ -97,7 +99,7 @@ export function useProjects({
        */
       return r.currentProjectId;
     } catch (e) {
-      setProjectNote(`⚠ 读不到项目列表：${(e as Error).message}`);
+      setProjectErr(`⚠ 读不到项目列表：${(e as Error).message}`);
       return null;
     }
   };
@@ -108,6 +110,7 @@ export function useProjects({
     if (!sess || projectBusy || id === curProjectRef.current) return;
     setProjectBusy(true);
     setProjectNote('');
+    setProjectErr('');
     try {
       await authFetchJson<ProjectUpdateResult>(`/projects/${id}/activate`, {
         method: 'POST',
@@ -118,7 +121,7 @@ export function useProjects({
       await onEnterProject(id);
       await loadProjects();
     } catch (e) {
-      setProjectNote(`⚠ 切换项目没成：${(e as Error).message}`);
+      setProjectErr(`⚠ 切换项目没成：${(e as Error).message}`);
     } finally {
       setProjectBusy(false);
     }
@@ -131,6 +134,7 @@ export function useProjects({
     if (!sess || projectBusy || !name) return;
     setProjectBusy(true);
     setProjectNote('');
+    setProjectErr('');
     try {
       const r = await authFetchJson<ProjectCreateResult>('/projects', {
         method: 'POST',
@@ -143,7 +147,7 @@ export function useProjects({
       await onEnterProject(r.project.id);
       await loadProjects();
     } catch (e) {
-      setProjectNote(`⚠ 建项目没成：${(e as Error).message}`);
+      setProjectErr(`⚠ 建项目没成：${(e as Error).message}`);
     } finally {
       setProjectBusy(false);
     }
@@ -156,6 +160,7 @@ export function useProjects({
     setProjectsOpen(false);
     setNewProjectName('');
     setProjectNote('');
+    setProjectErr('');
   };
 
   return {
@@ -164,6 +169,7 @@ export function useProjects({
     setProjectsOpen,
     projectBusy,
     projectNote,
+    projectErr,
     newProjectName,
     setNewProjectName,
     loadProjects,

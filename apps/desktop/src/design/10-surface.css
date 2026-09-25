@@ -1,0 +1,148 @@
+/* 10-surface —— 批次 M-7'：任务/驾驶「表面」规则收进设计基准编号位。
+   基准 10-surface.css 本体是 workbench-ui 的 .search-pill（搜索胶囊组件）——
+   桌面搜索已走 08-search.css 的基准体系，.search-pill 演示本体不搬；
+   本文件按编号规矩收桌面的任务/驾驶表面（聊天区里的状态行/结果卡/求助条），
+   样式值照搬旧 styles.css（原注释保留）。
+   ★ 顺序依赖：.demoOnly 必须压过 02-base.css 的 .buttons-row（同为单类选择器，
+     后导入者赢）。本文件在 index.css 里排在 02 之后 → 成立。 */
+
+/* 第 16 步：聊天顶部的会话状态行（当前任务 / 是否保活 / 是否已同意用浏览器） */
+.taskState {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* 第 17 步：任务结果行（右栏整栏不渲染了，结果挂这里） */
+.taskResult {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-radius: 8px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+/* 后代选择器（M-7' 必查项）：结果卡内的按钮行 —— 组件整体搬走，规则随组件 */
+.taskResult .buttons-row {
+  margin-top: 4px;
+}
+
+/* 任务未读红点（顶栏 tab 角上） */
+.red-dot {
+  position: absolute;
+  right: -1px;
+  top: -1px;
+  width: 10px;
+  height: 10px;
+  background: #ff3b30;
+  border: 2px solid #fff;
+  border-radius: 50%;
+}
+
+/* 第 27 步 ·「谁在等谁」状态条（本步核心验收点，颜色/图标/文案全跟着 pausedBy 走） */
+.driveState {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 2px 4px 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.driveState__icon {
+  flex: 0 0 auto;
+  font-size: 14px;
+  line-height: 1;
+}
+/* AI 主动求助 = 蓝（和求助卡同一套色） */
+.driveState--agent {
+  color: #3c3489;
+  background: #eeedfe;
+  border: 1px solid #afa9ec;
+}
+/* 用户主动接管 = 琥珀（沿用原来的告警色，用户已经认得） */
+.driveState--user {
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+}
+/* 分不清是谁发起的 = 中立灰（**绝不冒充任何一方**） */
+.driveState--none {
+  color: var(--text-weak);
+  background: #f1efe8;
+  border: 1px solid #e2e2e4;
+}
+
+/*
+ * ★ P0 止血（2026-09-21）：「这一轮的上下文没了」确认卡。
+ *
+ * 配色刻意**不用**警告黄（那是驾驶条自己的颜色）—— 这是一张要用户停下来读的卡，
+ * 用更重的红棕底 + 实心边框，让它在一堆黄里跳出来。
+ * 「重新开始」是**带代价**的那个选择，所以只有它加粗描边，另一颗保持普通按钮。
+ */
+.loopGone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 100%;
+  padding: 8px 10px;
+  border: 1px solid #b34a2e;
+  border-radius: 8px;
+  background: #fdecea;
+}
+
+.loopGone__q {
+  flex: 1 1 auto;
+  color: #7d2f18;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.loopGone__warn {
+  border-color: #b34a2e;
+  background: #f7c9bf;
+  color: #5c1f0c;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.loopGone__warn:hover {
+  background: #f2b3a5;
+}
+
+/* 第 8 步：任务收尾卡（红点标签/短结论） */
+.unreadTag {
+  color: #dc2626;
+  font-weight: 600;
+}
+.readTag {
+  color: #16a34a;
+}
+.taskSummary {
+  margin: 4px 0;
+  padding: 6px 8px;
+  background: #f8fafc;
+  border-left: 3px solid #94a3b8;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  text-align: left;
+}
+
+/*
+ * 第 18 步「工作区框架（治混乱）」：把左栏两个**纯演示 / 自检**的痕迹用样式藏掉
+ * （「切换红点（演示）」按钮、底部那行 preload 桥信息）。
+ * 只藏不删：DOM 还在，桥自检照跑，哪天要调试把这条规则去掉就能看见。
+ * ⚠️ 这条规则必须排在 .buttons-row 之后：两者都是单类选择器，谁在后面谁赢
+ * （本文件在 index.css 里位于 02-base.css 之后 → 成立，见文件头顺序依赖）。
+ */
+.demoOnly {
+  display: none;
+}

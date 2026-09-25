@@ -78,22 +78,38 @@ check('01-tokens.css 与 workbench-ui 原版逐字节一致', () => {
   assert(tokens === orig, "01-tokens.css 与原版不一致（M1' 不允许任何改动，含字体路径——相对路径两边同构）");
 });
 
-check('02-base.css 与 workbench-ui 原版逐字节一致', () => {
+/**
+ * 02-base 的 M7' 扩展是**有穷枚举**的：文件尾追加一段桌面共享 UI 原语
+ * （.btn 系 / .small / .buttons-row，从旧 styles.css 原值迁入）。
+ * 验收做法 = 剥掉 M7' 块后必须与原版逐字节一致 —— 原版部分多一个字节都红。
+ */
+const M7_BASE_MARKER = "/* ============ 批次 M-7'：桌面共享 UI 原语";
+check('02-base.css = 原版 + M7\u2019桌面原语块（剥块后逐字节一致）', () => {
   const orig = read(join(WB, 'styles', '02-base.css'));
-  assert(base === orig, "02-base.css 与原版不一致（M1' 不允许任何改动）");
+  const i = base.indexOf(M7_BASE_MARKER);
+  assert(i >= 0, '02-base 缺 M7\u2019 原语块标记（.btn/.small/.buttons-row 没随组件走?）');
+  // M7' 追加以单个空行开头 —— 只剥那一个 \n，原版尾部字节必须原样
+  const head = base.slice(0, i).replace(/\n$/, '');
+  assert(head === orig, "02-base 的原版部分与 workbench-ui 不一致（M1' 部分不许动）");
 });
 
 /**
  * 99-theme 的机械适配是**有穷枚举**的：头部加一段说明 + 四条列规则加 `.frame ` 前缀。
  * 验收做法 = 机械逆映射回去（剥说明、去前缀）后必须与原版逐字节一致 —— 多改一个字节都红。
  */
-check('99-theme.css 逆映射（去说明 + 去 4 个 .frame 前缀）后与原版逐字节一致', () => {
+const M7_THEME_MARKER = "/* ============ 批次 M-7'：桌面浅色基座";
+check('99-theme.css 逆映射（去说明 + 去 4 个 .frame 前缀 + 剥 M7\u2019基座块）后与原版逐字节一致', () => {
   const orig = read(join(WB, 'styles', '99-theme.css'));
+  // M7' 基座块（:root 变量 + reset + body）在文件尾 —— 先剥掉，再做 M1' 逆映射
+  const iT = theme.indexOf(M7_THEME_MARKER);
+  assert(iT >= 0, '99-theme 缺 M7\u2019 桌面基座块（:root 变量/reset/body 没归位?）');
+  // M7' 追加以单个空行开头 —— 只剥那一个 \n（原版 99-theme 尾无换行）
+  const themeM1 = theme.slice(0, iT).replace(/\n$/, '');
   // 头部注释块各自剥到第一个 */（M1' 只许在注释块内加说明）
-  const iMine = theme.indexOf('*/');
+  const iMine = themeM1.indexOf('*/');
   const iOrig = orig.indexOf('*/');
   assert(iMine >= 0 && iOrig >= 0, '99-theme 头部注释块找不到 */');
-  let back = theme.slice(iMine + 2);
+  let back = themeM1.slice(iMine + 2);
   const origBody = orig.slice(iOrig + 2);
   // 头部说明必须保留原版设计文档的三行核心（不许删设计信息）
   for (const line of ['· 工作台描边', '· 三列背景', '还原设计稿 / 换配色，只动这一组变量即可']) {
@@ -133,13 +149,24 @@ check('99-theme：.rail/.sidebar/.main-area/.frame-internal-stroke 规则全部 
   assert(offenders.length === 0, `存在未 scoped 的列规则（会直接打中旧 DOM）：${offenders.join(', ')}`);
 });
 
-check('02-base：只有 body.viewport 选择器（当前 body 无 viewport 类，打不中）', () => {
+/**
+ * 02-base 能命中当前 DOM 的选择器是**有穷枚举**的：
+ *   · body.viewport —— 当前 body 无 viewport 类 → 打不中；
+ *   · M7' 桌面原语（.btn 系 / .small / .buttons-row）—— 有意打中（值与旧
+ *     styles.css 相同，旧规则已删），白名单钉死，多一个选择器都红。
+ */
+const M7_BASE_SELECTORS = new Set([
+  'body.viewport',
+  '.btn', '.btn:hover', '.btn--go', '.btn--pending', '.btn--pending:hover',
+  '.small', '.buttons-row',
+]);
+check('02-base：选择器 ∈ {body.viewport} ∪ M7\u2019桌面原语白名单', () => {
   const stripped = base.replace(/\/\*[\s\S]*?\*\//g, '');
   const selRe = /([^{}]+)\{/g;
   let m: RegExpExecArray | null;
   while ((m = selRe.exec(stripped)) !== null) {
     for (const s of m[1].split(',').map((x) => x.trim()).filter(Boolean)) {
-      assert(s === 'body.viewport', `02-base 出现计划外选择器：${s}（会打中当前 DOM）`);
+      assert(M7_BASE_SELECTORS.has(s), `02-base 出现计划外选择器：${s}（M7' 白名单之外）`);
     }
   }
 });
@@ -155,9 +182,14 @@ check('01-tokens：无类选择器（只有 :root / * / 元素族 / @font-face�
   }
 });
 
-check('01-tokens 的 *{box-sizing:border-box} 与 styles.css 既有规则同值（盒模型无变化）', () => {
+/**
+ * M7' 后盒模型的单一来源：01-tokens 的 *{box-sizing} 与 99-theme M7' 基座块的
+ * *{box-sizing} 同值（border-box）。旧 styles.css 的那条已随基座块搬走（M9' 删文件）。
+ */
+check('01-tokens 与 99-theme 的 *{box-sizing} 同值 border-box（盒模型单一来源）', () => {
   assert(tokens.includes('box-sizing: border-box'), '01-tokens 缺 *{box-sizing:border-box}（与原版不符？）');
-  assert(/box-sizing\s*:\s*border-box/.test(legacy), 'styles.css 里没有 box-sizing:border-box —— 两者不再同值');
+  const themeM7 = theme.slice(theme.indexOf(M7_THEME_MARKER));
+  assert(/box-sizing\s*:\s*border-box/.test(themeM7), "99-theme M7\u2019基座块里没有 *{box-sizing:border-box} —— 盒模型来源断了");
 });
 
 // ---------------------------------------------------------------- 字体

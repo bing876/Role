@@ -975,6 +975,42 @@ await check('⑫-4 样式红线:11-chat-bubbles.css 在场且 .msg 单一 .msg �
 });
 
 log('');
+log(`--- ⑭ 其余 CSS（批次 M-7'）：编号 CSS 跟组件走,死代码清零,F2-③ 两槽在场 ---`);
+await check('⑭-1 框架/原语跟组件走:03-frame + 02-base 在场,旧规则消失', () => {
+  const frame = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '03-frame.css'), 'utf8');
+  assert.ok(/\.app\s*\{/.test(frame) && /\.middle\s*\{/.test(frame), '03-frame.css 缺 .app / .middle');
+  const base = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '02-base.css'), 'utf8');
+  assert.ok(/\.btn\s*\{/.test(base) && /\.buttons-row\s*\{/.test(base), '02-base.css 缺 .btn / .buttons-row 原语');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./03-frame.css') && idx.includes('./10-surface.css'), '新编号文件没挂进设计入口');
+  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+  assert.ok(!/\.app\s*\{/.test(styles), '旧 .app 规则还留在 styles.css');
+  assert.ok(!/\.btn\s*\{/.test(styles), '旧 .btn 规则还留在 styles.css');
+});
+await check('⑭-2 任务表面 + 侧栏家族在场;死代码（DOM 零引用）已清零', () => {
+  const surf = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '10-surface.css'), 'utf8');
+  assert.ok(/\.taskState\s*\{/.test(surf) && /\.driveState\s*\{/.test(surf) && /\.loopGone\s*\{/.test(surf), '10-surface.css 缺任务表面规则');
+  assert.ok(/\.taskResult \.buttons-row\s*\{/.test(surf), '必查后代选择器 .taskResult .buttons-row 没随组件搬走');
+  const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
+  assert.ok(/\.projectBox\s*\{/.test(side) && /\.memList\s*\{/.test(side) && /\.knowledgePanel\s*\{/.test(side) && /\.contact--on\s*\{/.test(side), '06-sidebar.css 缺左栏家族规则');
+  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+  for (const dead of ['.driveBar', '.status-running', '.memCard', '.agentSteps', '.demoOnly']) {
+    const deadRe = new RegExp(`^${dead}\\s*\\{`, 'm');
+    assert.ok(!deadRe.test(styles), `styles.css 还残留 ${dead} 规则（该搬的搬走,该删的死代码要删）`);
+  }
+  assert.ok(!/^\.right\s*\{/m.test(styles), '死代码 .right 规则还在 styles.css');
+});
+await check('⑭-3 F2-③ 两槽在场:成功槽朴素 + 失败槽红;演示行只藏不删（DOM 还在）', () => {
+  const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
+  assert.ok(/\.projectBox__note\s*\{/.test(side) && /\.projectBox__note--err\s*\{/.test(side), 'F2-③ 的两套样式没进 06-sidebar.css');
+  const surf = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '10-surface.css'), 'utf8');
+  assert.ok(/\.demoOnly\s*\{[^}]*display\s*:\s*none/.test(surf), '.demoOnly（演示行隐藏）规则丢了');
+  // 演示行 DOM 保留（只藏不删,桥自检照跑）
+  const demo = q('.demoOnly');
+  assert.ok(demo, '演示行 DOM 没了（第 18 步的"只藏不删"被破坏）');
+});
+
+log('');
 log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
 await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
   // 批次 M-2:tab 可能分布在多个智能体名下（⑧ 在会话里点链接开的页属于当时的智能体），

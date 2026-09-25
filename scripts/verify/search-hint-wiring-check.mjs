@@ -18,7 +18,7 @@
  * 跑法：node scripts/verify/search-hint-wiring-check.mjs
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -45,7 +45,16 @@ const chk = (id, ok, detail = '') => {
 
 const server = readFileSync(SERVER_CHAT, 'utf8');
 const app = readFileSync(APP, 'utf8') + '\n' + readFileSync(CHAT_SRC, 'utf8');
-const css = readFileSync(CSS, 'utf8');
+/**
+ * 批次 M-5'：.searchHint 规则随聊天区搬进 design/11-chat-bubbles.css（编号 CSS 跟组件走）。
+ * 类名↔CSS 一致性检查的对象改为「设计系统整体」（design/*.css 合并 + styles.css）。
+ */
+const designDir = path.join(ROOT, 'apps', 'desktop', 'src', 'design');
+const css = readFileSync(CSS, 'utf8') + '\n' +
+  readdirSync(designDir)
+    .filter((f) => f.endsWith('.css'))
+    .map((f) => readFileSync(path.join(designDir, f), 'utf8'))
+    .join('\n');
 
 // ---- ① 服务端真的发 search 事件，且事件名从一个地方取（避免多处写死） ----
 const srvEvent = server.match(/sse\([^,]+,\s*'([a-z_]+)',\s*e\)/);

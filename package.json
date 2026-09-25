@@ -66,7 +66,8 @@
     "verify:rail:revert": "python3 scripts/verify/rail-revert-proof.py",
     "verify:inputbar:revert": "python3 scripts/verify/inputbar-revert-proof.py",
     "verify:chat:revert": "python3 scripts/verify/chat-revert-proof.py",
-    "verify:modal:revert": "python3 scripts/verify/modal-revert-proof.py"
+    "verify:modal:revert": "python3 scripts/verify/modal-revert-proof.py",
+    "verify:css:revert": "python3 scripts/verify/css-revert-proof.py"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
