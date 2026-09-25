@@ -598,7 +598,9 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       try {
         const rcMod = await import('../orchestrator/routineCreate');
         const rcProjId = await currentProjectId(pool, claims.sub);
-        if (rcProjId !== null) {
+        // QA-01(2026-09-25 真机 QA 抓到):turnSpeakerId 可为 null —— 那时"没点名建给谁"没有
+        // 确定性落点,assistant 消息的 speaker 也填不了 → 不建,回落 LLM(正常路径能接住)。
+        if (rcProjId !== null && turnSpeakerId !== null) {
           const rc = await rcMod.createRoutineFromMessage(pool, {
             userId: claims.sub,
             projectId: rcProjId,
