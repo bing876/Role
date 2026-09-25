@@ -1,0 +1,174 @@
+/* 06-sidebar —— 批次 M-2'：第二列（侧栏）搬入设计基准 workbench-ui。
+   来源：workbench-ui/src/styles/03-frame.css（.sidebar 壳）+ 06-sidebar.css（行/头像/分隔条），
+   原规则照搬、原注释保留。
+   桌面端适配（本应用是满窗 app，不是基准里的浮动窗口 / 微信壳）：
+   ① .frame 浮动窗口不存在 → .sidebar 用 flex 流布局（.app 的孩子），不再 absolute 定位；
+   ② 第一列是顶部横栏不是竖 rail → .search-pill / .add-btn 改以 .sidebar 为参照物；
+   ③ .contact-list 不再 absolute 通栏（侧栏里还背着项目 / 保活 / 账号三个真数据块）；
+   ④ .splitter 的 left 只算 --sb-w（没有竖 rail 要躲）；
+   ⑤ 微信专属件不搬：QR 绑定、朋友圈/收藏/文件占位、上下文记忆进度环、frame 折叠态。
+   红线：本列任何状态都不许 display:none / 尺寸归零（隐藏由 M3' 起的独立列状态负责，第二列本身常驻）。 */
+
+.app {
+  position: relative;   /* .splitter / .browserLayer 的定位参照（此前是初始包含块，视觉等价） */
+}
+
+/* ---------- 第二列壳（基准 03-frame.css：107.76deg 深色磨砂玻璃，与 rail 统一） ---------- */
+.sidebar {
+  position: relative;
+  width: var(--sb-w, 250px);
+  flex: 0 0 auto;
+  height: 100%;
+  z-index: 5;   /* 基准图层序：第二列背景层（第一列背景之上、组件之下） */
+  background: linear-gradient(107.76deg, rgba(0, 0, 0, 0.34) -1.16%, rgba(0, 0, 0, 0.22) 100%);
+  -webkit-backdrop-filter: blur(30px) saturate(140%);
+  backdrop-filter: blur(30px) saturate(140%);
+  display: flex;
+  flex-direction: column;
+}
+
+/* 滚动主体：搜索胶囊（absolute，top:12 高 36）之下的一切真数据块都在这一个滚容器里。
+   旧版踩过的坑（子阶段 2-B 注释仍在 styles.css 的 .sidebar 旧规则里，删规则不删教训）：
+   flex 子项 min-height:auto 会拒绝收缩 → 内容超高时按钮「DOM 里有、点不到」。
+   这里 min-height:0 + 自身 overflow-y:auto，装得下时与基准一致，装不下时每个入口都够得着。 */
+.sidebar__body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 52px 0 12px;   /* 顶部让位搜索胶囊：12 + 36 + 4 */
+}
+.sidebar__body::-webkit-scrollbar { width: 6px; }
+.sidebar__body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); border-radius: 3px; }
+
+/* ---------- 智能体列表（基准 06-sidebar.css：Round 51/131/137/138 行秩序与交互，原序照搬） ---------- */
+/* 桌面端适配③：基准是 absolute top:56 通栏（微信壳里侧栏只有联系人）；
+   桌面侧栏在列表之上还有项目入口、之下有保活/账号 → 改静态流布局，其余照搬。 */
+.contact-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 2px 0;
+}
+.contact-list__empty {
+  padding: 18px 16px;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 13px;
+  text-align: center;
+}
+/* Round 131：左右边距固定 4px（等比自适应在宽度过阈值时整列跳 1px = 伸缩晃动根因） */
+.contact-item {
+  position: relative;                          /* 分隔线 ::before 的定位父级 */
+  display: flex; align-items: center; gap: 10px;
+  height: 58px; margin: 2px 4px; padding: 0 12px 0 8px;
+  border: 0; box-sizing: border-box; font-family: inherit; text-align: left;   /* <button> 复位 */
+  border-radius: 12px; cursor: pointer;
+  background: transparent;
+  flex: 0 0 auto;
+  /* Round 137：背景/位移/头像外环统一过渡；点击有微缩反馈 */
+  transition: background .18s ease, transform .12s ease;
+}
+/* Round 137：联系人入场级联（仅首次渲染，backwards 保持终态；30ms×n ≤ 195ms 快速扫过） */
+@keyframes contactEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.contact-list .contact-item {
+  animation: contactEnter .32s cubic-bezier(.22, .8, .24, 1) backwards;
+}
+.contact-list .contact-item:nth-child(1) { animation-delay: 0ms; }
+.contact-list .contact-item:nth-child(2) { animation-delay: 30ms; }
+.contact-list .contact-item:nth-child(3) { animation-delay: 60ms; }
+.contact-list .contact-item:nth-child(4) { animation-delay: 90ms; }
+.contact-list .contact-item:nth-child(5) { animation-delay: 120ms; }
+.contact-list .contact-item:nth-child(6) { animation-delay: 150ms; }
+.contact-list .contact-item:nth-child(7) { animation-delay: 180ms; }
+.contact-list .contact-item:nth-child(8) { animation-delay: 210ms; }
+/* Round 138：hover 底色 0.11 + 名字/预览提亮纯白 + 头像 brightness(1.08)；
+   active 底色 0.16 + 内嵌高光「卡入」；:active 整行 0.985 微缩（仅按下时）。 */
+.contact-item:hover { background: rgba(255, 255, 255, 0.11); }
+.contact-item:hover .contact-name { color: #FFFFFF; }
+.contact-item:hover .contact-msg { color: rgba(255, 255, 255, 0.82); }
+.contact-item:hover .contact-avatar { filter: brightness(1.08); }
+.contact-item:active { transform: scale(0.985); }
+.contact-item.active {
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);   /* 轻微内嵌高光，选中态「卡入」 */
+}
+.contact-item.active .contact-name { color: #FFFFFF; }
+.contact-item.active .contact-msg { color: rgba(255, 255, 255, 0.86); }
+
+/* 行分隔线：两端透明的极淡渐变，只占 1px —— 建立「行的秩序」。
+   选中态 / 刚创建 时：本行顶线 + 下一行顶线一起隐藏，避免线穿过胶囊。 */
+.contact-item + .contact-item::before {
+  content: ''; position: absolute; left: 14px; right: 14px; top: -2px; height: 1px;
+  background: linear-gradient(90deg,
+    transparent 0%, rgba(255, 255, 255, 0.12) 14%, rgba(255, 255, 255, 0.12) 86%, transparent 100%);
+  pointer-events: none;
+}
+.contact-item.active::before,
+.contact-item.just-added::before,
+.contact-item.active + .contact-item::before,
+.contact-item.just-added + .contact-item::before { opacity: 0; }
+/* 新创建的智能体：1.4s 脉冲高亮（配合 addAgent 成功后挂 just-added，真事件驱动） */
+@keyframes justAddedPulse {
+  0%   { background: rgba(124, 92, 255, 0.55); box-shadow: 0 0 0 0 rgba(124, 92, 255, 0.6); }
+  35%  { background: rgba(124, 92, 255, 0.35); box-shadow: 0 0 0 6px rgba(124, 92, 255, 0); }
+  100% { background: rgba(255, 255, 255, 0.13); box-shadow: 0 0 0 0 rgba(124, 92, 255, 0); }
+}
+.contact-item.just-added { animation: justAddedPulse 1.4s ease-out forwards; }
+
+/* Round 104/107/108：方形 r11 头像块；淡底（品牌色 c1 16%）+ 彩色首字。
+   桌面端：--c1 由行内 style 按智能体 id 确定性派生（纯呈现，非数据）。 */
+.contact-avatar {
+  position: relative; flex: 0 0 40px;
+  width: 40px; height: 40px; border-radius: 11px; overflow: visible; flex-shrink: 0;
+  background-color: color-mix(in srgb, var(--c1) 16%, #ffffff);
+  color: color-mix(in srgb, var(--c1) 70%, #1a1a22);
+  font-weight: var(--fw-medium); font-size: 14px; line-height: 1; font-family: inherit;
+  display: grid; place-items: center;
+  /* Round 138：头像仅保留 brightness 过渡（hover 提亮）；白外环已移除 */
+  transition: filter .18s ease;
+}
+
+/* 中间文字区域：两行 21 + 3 + 16 = 40 → 与头像 40 严格等高，垂直重心对齐。
+   桌面端：第二行 .contact-msg 放真实状态人话（服务端 statusDetail 优先，
+   否则 在线 / 等你填引导表 / 已就位）；.contact-time 不搬（智能体没有「最后消息时间」这真数据，不造假）。 */
+.contact-body { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
+.contact-line {
+  display: flex; align-items: center; gap: 8px;
+  height: 21px; line-height: 21px;
+}
+.contact-line + .contact-line { margin-top: 3px; height: 16px; line-height: 16px; }
+.contact-name {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 15px; font-weight: var(--fw-semibold); color: rgba(255, 255, 255, 0.94);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  letter-spacing: 0;                     /* 中文标题不加字间距，加了会散、发虚 → AI 感来源之一 */
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+}
+.contact-msg {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 12px; font-weight: var(--fw-regular); color: rgba(255, 255, 255, 0.46);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  letter-spacing: 0;
+}
+
+/* ---------- 第二↔第三列可拖动分隔条（基准 06-sidebar.css 尾段；桌面端适配④：left 只算 --sb-w） ---------- */
+.splitter {
+  position: absolute; top: 0; left: calc(var(--sb-w, 250px) - 4px); width: 8px; height: 100%;
+  cursor: col-resize; background: transparent; z-index: 6; touch-action: none;
+}
+.splitter::after {
+  content: ""; position: absolute; left: 50%; top: 0; bottom: 0;
+  width: 2px; transform: translateX(-50%);
+  background: transparent; transition: background .15s ease;
+}
+/* 拖动中：保留极淡引导线（平时完全透明 → 第二/三列视觉上贴合无缝隙） */
+.splitter.dragging::after { background: rgba(255, 255, 255, 0.35); }
+/* hover / 键盘聚焦：极淡预览线（企业级 affordance，拖动前可发现可点） */
+.splitter:hover::after,
+.splitter:focus-visible::after { background: rgba(255, 255, 255, 0.18); }

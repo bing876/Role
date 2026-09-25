@@ -1095,7 +1095,7 @@ await check('聊天（片 7a）：切智能体 → 按 agentId 拉历史，气�
   await ensure('当前智能体的历史拉回来了', () => (doc.body.textContent ?? '').includes('九七号的历史'));
   assert.match(doc.body.textContent ?? '', /九七号的历史/, '97 号的历史没渲染出来');
   // 切到 98 号（8 号项目里的「卡布」）→ 应当拉它的历史，且**不串**成 97 号的
-  const other = qa('.contact[data-agent-id]').find((n) => n.getAttribute('data-agent-id') === '98');
+  const other = qa('.contact-item[data-agent-id]').find((n) => n.getAttribute('data-agent-id') === '98');
   if (other) {
     click(other, '卡布');
     await flush(5);

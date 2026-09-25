@@ -165,7 +165,7 @@ const emitBridge = (channel: string, payload?: unknown): number => {
 const requestedPaths: string[] = [];
 const PROJECT = { id: 7, name: '默认项目', isCurrent: true, isDefault: true, henAgentId: null };
 const AGENTS = [
-  { id: 97, name: '小助', kind: 'assistant', deletable: false, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
+  { id: 97, name: '小助', kind: 'assistant', deletable: false, canCreateAgents: true, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
   { id: 98, name: '卡布', kind: 'worker', deletable: true, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 502, status: 'idle' },
 ];
 const STATE = {
@@ -175,12 +175,13 @@ const STATE = {
 const json = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
-globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : (input as Request).url;
   const path = raw.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
   requestedPaths.push(path);
   if (path === '/auth/me') return json({ user: { id: 1, phone: '13800000000', xyz: '' }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
   if (path === '/projects') return json({ projects: [PROJECT], currentProjectId: 7 });
+  if (path === '/agents' && init?.method === 'POST') return json({ agent: { id: 99, name: '新员', kind: 'worker', deletable: true, canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null, conversationId: 503, status: 'idle' } });
   if (path === '/agents') return json({ agents: AGENTS });
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
   // 批次 M-2:第四列触发①需要会话内链接 → 给当前智能体的历史一条带 sources 的助手消息
@@ -424,7 +425,7 @@ await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', as
    * `openNewTab()`，那会往舞台上再挂一张页，让后面「关光所有页」那一段变得不干净。
    */
   await act(async () => {
-    click(qa('aside.sidebar .contact')[0], '切回第一个智能体');
+    click(qa('aside.sidebar .contact-item')[0], '切回第一个智能体');
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   await flush(2);
@@ -457,7 +458,7 @@ await check('视图切换前后，.browserLayer 的 class 始终在文档化的�
 });
 
 await check('切智能体（换一个人）不换 webview 元素', async () => {
-  const contacts = qa('aside.sidebar .contact');
+  const contacts = qa('aside.sidebar .contact-item');
   assert.ok(contacts.length >= 2, `左栏智能体不足 2 个（${contacts.length} 个）`);
   for (const c of contacts) {
     await act(async () => {
@@ -568,11 +569,131 @@ await check('⑧-7 样式红线:--hidden 规则用 transform 移出视野（不�
 });
 
 log('');
+log('--- ⑨ 侧栏（批次 M-2）：真数据名单 / 真搜索 / 真创建 / 真拖宽 ---');
+
+const readVar = (name: string): string => {
+  const st = q('div.app')?.getAttribute('style') ?? '';
+  const m = st.match(new RegExp(`${name}\\s*:\\s*([^;]+)`));
+  return m ? m[1].trim() : '';
+};
+const setTextInput = async (el: Element | null, value: string, label: string): Promise<void> => {
+  assert.ok(el, `找不到输入框：${label}`);
+  const input = el as HTMLInputElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(input, value);
+    input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+};
+
+await check('⑨-1 屏幕上的是真名单（名字与 id 全部来自桥的真数据，行数一致）', () => {
+  const REAL: Record<string, string> = { 97: '小助', 98: '卡布' };
+  const rows = qa('.contact-item');
+  assert.equal(rows.length, 2, `智能体行应 2 行（实际 ${rows.length}）`);
+  for (const r of rows) {
+    const id = r.getAttribute('data-agent-id');
+    const name = r.querySelector('.contact-name')?.textContent ?? '';
+    assert.ok(id !== null && id in REAL, `出现名单外的智能体 id ${id}（写死假数据的信号）`);
+    assert.equal(name, REAL[id as string], `行 id=${id} 的名字是「${name}」，与真名单对不上`);
+  }
+});
+
+await check('⑨-2 真实选择：点哪行 active 落哪行', async () => {
+  const row98 = qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '98') as Element;
+  assert.ok(row98, '没有 98 号智能体的行');
+  await act(async () => {
+    click(row98, '智能体行 98');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const activeId = q('.contact-item.active')?.getAttribute('data-agent-id') ?? null;
+  assert.equal(activeId, '98', 'active 没落到 98 行');
+});
+
+await check('⑨-3 搜索是对真名单的实时过滤（打字 → 滤掉；清空 → 回来）', async () => {
+  const field = q('.search-field') as Element;
+  await setTextInput(field, '卡布', '搜索框');
+  const names1 = qa('.contact-item .contact-name').map((n) => n.textContent ?? '');
+  assert.deepEqual(names1, ['卡布'], `打「卡布」应只剩卡布：${JSON.stringify(names1)}`);
+  await setTextInput(field, 'zzz没有', '搜索框');
+  assert.equal(qa('.contact-item').length, 0, '匹配不到的词应是空列表');
+  assert.ok((q('.contact-list__empty')?.textContent ?? '').includes('zzz没有'), '空列表没有人话提示');
+  await act(async () => {
+    click(q('.search-clear'), '清空搜索');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.equal(qa('.contact-item').length, 2, '清空后应恢复全名单');
+});
+
+await check('⑨-4 「＋」弹层只有真操作：新建智能体 → 真 POST /agents，行出现且被选中', async () => {
+  await act(async () => {
+    click(q('.add-btn'), '＋ 按钮');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const popup = q('.add-popup') as Element;
+  assert.ok(popup, '＋ 弹层没出现');
+  assert.ok(popup.className.includes('open'), `弹层不是 open 态：${popup.className}`);
+  const opts = Array.from(popup.querySelectorAll('.opt')).map((o) => o.textContent ?? '');
+  assert.ok(opts.some((t) => t.includes('新建智能体')), `弹层里没有「新建智能体」：${JSON.stringify(opts)}`);
+  assert.ok(!opts.some((t) => t.includes('占位')), '设计基准的假「占位」动作被搬进来了');
+  await act(async () => {
+    click(popup.querySelector('.opt')!, '新建智能体');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('新智能体行 99 出现', () => !!qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '99'), 60);
+  const row99 = qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '99') as Element;
+  assert.ok(row99, '新智能体 99 没出现（POST 没真发 / 桩没接）');
+  assert.ok(row99.className.includes('active'), '新智能体应被自动选中（addAgent 既有行为）');
+});
+
+await check('⑨-5 分隔条拖宽是真好物：宽度夹在 [220,360] 且写进 localStorage', async () => {
+  const sp = q('.splitter') as Element;
+  assert.ok(sp, '分隔条 .splitter 不在');
+  assert.equal(readVar('--sb-w'), '250px', `初始宽度不是默认 250px：${readVar('--sb-w')}`);
+  await act(async () => {
+    sp.dispatchEvent(new dom.window.PointerEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 100 }));
+    sp.dispatchEvent(new dom.window.PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: 160 })); // +60 → 310
+    sp.dispatchEvent(new dom.window.PointerEvent('pointermove', { bubbles: true, cancelable: true, clientX: 4000 })); // 超界 → 夹到 360
+    sp.dispatchEvent(new dom.window.PointerEvent('pointerup', { bubbles: true, cancelable: true, clientX: 4000 }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.equal(readVar('--sb-w'), '360px', `拖超界应夹到 360px：${readVar('--sb-w')}`);
+  assert.equal(dom.window.localStorage.getItem('workbench:sb-w'), '360', '宽度没写进 localStorage');
+});
+
+await check('⑨-6 分隔条双击复位 250（也写回 localStorage）', async () => {
+  const sp = q('.splitter') as Element;
+  await act(async () => {
+    sp.dispatchEvent(new dom.window.MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.equal(readVar('--sb-w'), '250px', `双击后应复位 250px：${readVar('--sb-w')}`);
+  assert.equal(dom.window.localStorage.getItem('workbench:sb-w'), '250', '复位值没写回 localStorage');
+});
+
+await check('⑨-7 样式红线：第二列常驻（不许 display:none / 宽 0），选中态真 class 在位', () => {
+  const design = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
+  const m = design.match(/\.sidebar\s*\{([^}]*)\}/);
+  assert.ok(m, 'design/06-sidebar.css 里找不到 .sidebar 规则');
+  assert.ok(!/display\s*:\s*none/.test(m![1]), '第二列常驻，不许 display:none');
+  assert.ok(!/width\s*:\s*0/.test(m![1]), '第二列宽度不许归零');
+  assert.ok(/\.contact-item\.active\s*\{/.test(design), '选中态 .contact-item.active 规则缺失');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./06-sidebar.css') && idx.includes('./08-search.css'), '侧栏/搜索 CSS 没挂进设计入口');
+});
+
+log('');
 log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
 await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
   // 批次 M-2:tab 可能分布在多个智能体名下（⑧ 在会话里点链接开的页属于当时的智能体），
   // 顶栏只列**当前**智能体的 tab → 轮转每个智能体把可见 tab 关光,直到层消失。
-  const contacts = qa('aside.sidebar .contact');
+  const contacts = qa('aside.sidebar .contact-item');
   assert.ok(contacts.length >= 1, '没有可切的智能体行');
   for (let round = 0; round < contacts.length + 1 && q('.browserLayer') !== null; round++) {
     await act(async () => {

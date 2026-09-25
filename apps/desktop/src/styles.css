@@ -35,24 +35,8 @@ body {
   height: 100%;
 }
 
-/* ---------- 左栏 ---------- */
-.sidebar {
-  width: 220px;
-  flex: 0 0 220px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  border-right: 1px solid var(--border);
-  background: var(--sidebar);
-  /*
-   * 子阶段 2-B：左栏多了一个项目入口，760px 高的窗口下内容会更高。
-   * flex 子项默认 min-height:auto（不肯缩到内容以下），超出部分会被 body 的 overflow:hidden
-   * 直接切掉 —— 表现就是「按钮在 DOM 里、但点不到」（验收里真踩到了）。
-   * 这里让左栏自己能滚：内容装得下时完全没区别，装不下时至少每一个入口都够得着。
-   */
-  overflow-y: auto;
-}
+/* ---------- 左栏(批次 M-2':壳/列表/头像已迁 design/06-sidebar.css,此处只剩项目行还在用的 .contact 系) ---------- */
+
 
 .contact {
   /* 第 15 步：左栏一行一个智能体，这一行是 <button>——先把浏览器默认按钮样式清掉 */
@@ -82,28 +66,11 @@ body {
   border-color: #c7d2fe;
 }
 
-/* ---- 第 15 步：左栏智能体列表 + 「＋ 添加」 ---- */
-.agentList {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 44vh;
-  overflow-y: auto;
-  /*
-   * 子阶段 2-B：`overflow-y:auto` 让这个 flex 子项的 min-height:auto 解析成 0，
-   * 于是左栏内容一超高，它就被挤成 0 高（自身能滚、但「＋ 添加」整颗按钮被裁掉，
-   * elementFromPoint 命中到的是 .sidebar —— 表现同样是「DOM 里有、点不到」）。
-   * 明确不参与收缩：要滚由左栏滚（见 .sidebar 的 overflow-y），列表保持自然高度。
-   */
-  flex-shrink: 0;
-}
-.agentList__add {
-  margin-top: 4px;
-}
+/* ---- 第 15 步：左栏智能体列表(批次 M-2' 起:列表本体迁 design/06-sidebar.css 的 .contact-list,这里只剩错误提示行) ---- */
+
+
 /* 删自建智能体（「小助」不会出现这个按钮） */
-.agentList__del {
-  color: #b91c1c;
-}
+
 .agentList__note {
   margin-top: 2px;
   line-height: 1.45;
@@ -149,23 +116,9 @@ body {
   margin-top: 4px;
 }
 
-.avatar {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  border-radius: 50%;
-  background: #d9d9d9;
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #6b6b6b;
-  font-weight: 700;
-}
 
-.avatar__face {
-  font-size: 15px;
-}
+
+
 
 .red-dot {
   position: absolute;
