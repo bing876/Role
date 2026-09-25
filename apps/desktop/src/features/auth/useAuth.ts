@@ -13,7 +13,8 @@ import { API_BASE, TOKEN_KEY, authFetchJson } from '../../shared/api';
  *   App 里那个 `onLogout` 只写"顺序"（先 `signOutSession()`，再清各 feature），
  *   两半各归各位，**不需要注入回调**。
  *
- * ★ 本片**只搬逻辑，不动一行 JSX / 一行 CSS**（登录页那个 `AuthScreen` 组件本身带 JSX，原样留在 App.tsx）。
+ * ★ 本片**只搬逻辑，不动一行 JSX / 一行 CSS**（登录页那个 `AuthScreen` 组件本身带 JSX，
+ *   按当时纪律留在 App.tsx；批次 M-8' 已把它逐字收进本目录的 `AuthScreen.tsx`）。
  */
 
 export interface AuthApi {

@@ -1755,6 +1755,48 @@ await check('⑬-4 样式红线：09-modal.css 在场且挂入口；.authCard h3
   assert.ok(!/\.guide__table th\s*\{/.test(styles), '旧 .guide__table th 规则还留在 styles.css（组件已搬走）');
 });
 
+// ---------------------------------------------------------------------------
+// ⑮ 逻辑收尾（批次 M-8'）—— AuthScreen / AgentGuide / SETTINGS_FALLBACK 离开 App.tsx
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑮ 逻辑收尾（批次 M-8'）：带 JSX 的组件与兜底配置离开 App.tsx,行为一字未变 ---`);
+
+await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.tsx 不再定义它们）', () => {
+  const app = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'App.tsx'), 'utf8');
+  assert.ok(!app.includes('function AuthScreen('), 'AuthScreen 还定义在 App.tsx（M8\' 没搬?）');
+  assert.ok(!app.includes('function AgentGuide('), 'AgentGuide 还定义在 App.tsx（M8\' 没搬?）');
+  assert.ok(!/const SETTINGS_FALLBACK/.test(app), 'SETTINGS_FALLBACK 还定义在 App.tsx（M8\' 没搬?）');
+  assert.ok(app.includes("AuthScreen, useAuth } from './features/auth'"), 'App 没从 features/auth 引 AuthScreen');
+  assert.ok(app.includes("AgentGuide, useChat } from './features/chat'"), 'App 没从 features/chat 引 AgentGuide');
+  assert.ok(app.includes("from './shared/settings'"), 'App 没从 shared/settings 引 SETTINGS_FALLBACK');
+  const asrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'auth', 'AuthScreen.tsx'), 'utf8');
+  assert.ok(asrc.includes('export function AuthScreen(') && asrc.includes('authWrap--login'), 'AuthScreen.tsx 不完整（缺 F4 的 --login 修饰类?）');
+  assert.ok(asrc.includes('localStorage.setItem(TOKEN_KEY, sess.token)'), 'AuthScreen.tsx 丢了登录成功存 token 那步');
+  const gsrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'AgentGuide.tsx'), 'utf8');
+  assert.ok(gsrc.includes('export function AgentGuide(') && gsrc.includes('guide__table'), 'AgentGuide.tsx 不完整（缺引导表?）');
+  const ssrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'shared', 'settings.ts'), 'utf8');
+  assert.ok(ssrc.includes('export const SETTINGS_FALLBACK'), 'shared/settings.ts 缺 SETTINGS_FALLBACK');
+});
+
+await check('⑮-2 M8\' 行为：登录页搬走后 ⚡ 快捷登录照旧走真两跳（sms/send + login/sms）进工作台', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
+  await flush(4);
+  assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
+  const before = requestsTo('/auth/sms/send').length;
+  await act(async () => {
+    click(qa('.authWrap button').find((b) => (b.textContent ?? '').includes('快捷登录')) ?? null, '⚡ 快捷登录');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('发出 /auth/sms/send（快捷登录第一跳）', () => requestsTo('/auth/sms/send').length > before, 60);
+  await waitFor('发出 /auth/login/sms（第二跳）', () => requestsTo('/auth/login/sms').length > 0, 60);
+  await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen(), 60);
+  assert.ok(q('.app') !== null, '快捷登录后工作台没出来（搬走的登录页接线断了?）');
+  assert.ok(dom.window.localStorage.getItem('workbench.token'), '快捷登录后 token 没存本地（搬动丢了登录那步?）');
+  await act(async () => root.unmount());
+});
+
 log('');
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);

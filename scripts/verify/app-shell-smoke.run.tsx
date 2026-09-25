@@ -108,7 +108,7 @@ const bridge = new Proxy(
      * ★ 被**直接 await / .then** 的桥方法必须给真值，不能交给 Proxy 的兜底空实现：
      *   `bridge.getSettings().then(setSettings)` 返回 undefined 会把 settings 置空，
      *   下一次渲染读 settings.maxConcurrentAgentTasks 当场崩（第一次跑就是这么崩的）。
-     *   值抄自 App.tsx 的 SETTINGS_FALLBACK（主进程是权威，这里是首帧兜底）。
+     *   值抄自 shared/settings.ts 的 SETTINGS_FALLBACK（M8' 从 App.tsx 搬走；主进程是权威，这里是首帧兜底）。
      */
     getSettings: async () => ({
       maxConcurrentAgentTasks: 20,

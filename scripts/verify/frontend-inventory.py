@@ -92,29 +92,40 @@ def main() -> int:
     ]:
         data['files'][label] = lines_of(p)
 
-    # ---- hook 普查（按内嵌组件分段）----
+    # ---- hook 普查（按组件分段；M8' 后 AuthScreen/AgentGuide 已搬进 features/）----
+    def fn_span(text: str, head: str) -> tuple[int, int]:
+        """顶格 `function <head>(` 起到第一个顶格 `}`，返回 (起, 止) 1-based 行号。"""
+        ln_ = text.split('\n')
+        a = next(i for i, l in enumerate(ln_) if l.startswith(head))
+        b = next(i for i in range(a + 1, len(ln_)) if ln_[i] == '}')
+        return a + 1, b + 1
+
+    auth_ln = read(SRC / 'features' / 'auth' / 'AuthScreen.tsx').split('\n')
+    guide_ln = read(SRC / 'features' / 'chat' / 'AgentGuide.tsx').split('\n')
+    a_a, a_b = fn_span('\n'.join(auth_ln), 'export function AuthScreen(')
+    g_a, g_b = fn_span('\n'.join(guide_ln), 'export function AgentGuide(')
+    app_a, app_b = fn_span(app, 'export default function App()')
     regions = {
-        'AuthScreen': (361, 598),
-        'AgentGuide': (613, 683),
-        'App': (684, lines_of(APP)),
+        'AuthScreen': ('features/auth/AuthScreen.tsx', a_a, a_b),
+        'AgentGuide': ('features/chat/AgentGuide.tsx', g_a, g_b),
+        'App': ('App.tsx', app_a, app_b),
     }
-    ln = app.split('\n')
-    for name, (a, b) in regions.items():
-        seg = '\n'.join(ln[a - 1:b])
+    for name, (fname, a, b) in regions.items():
+        seg = '\n'.join(read(SRC / fname if fname != 'App.tsx' else APP).split('\n')[a - 1:b])
         data['hooks'][name] = {
+            'file': fname,
             'useState': len(re.findall(r'useState[<(]', seg)),
             'useRef': len(re.findall(r'useRef[<(]', seg)),
             'useEffect': len(re.findall(r'useEffect\(', seg)),
             'useCallback': len(re.findall(r'useCallback\(', seg)),
             'useMemo': len(re.findall(r'useMemo\(', seg)),
         }
-    # App 的 JSX 占比：从 App 段里第一个顶格 return ( 开始
-    app_start = 684
+    # App 的 JSX 占比：从 App 段里第一个缩进两格的 `  return (` 开始
     jsx_from = next(
-        i + 1 for i in range(app_start - 1, len(ln)) if ln[i].startswith('  return (')
+        i + 1 for i in range(app_a - 1, app_b) if app.split('\n')[i].startswith('  return (')
     )
-    data['hooks']['App']['logic_lines'] = jsx_from - app_start
-    data['hooks']['App']['jsx_lines'] = lines_of(APP) - jsx_from + 1
+    data['hooks']['App']['logic_lines'] = jsx_from - app_a
+    data['hooks']['App']['jsx_lines'] = app_b - jsx_from + 1
 
     # ---- 元素普查（含裸元素 = 没有 className 也没有内联 style）----
     for name in PREFLIGHT_SENSITIVE:

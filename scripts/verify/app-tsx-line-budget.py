@@ -11,13 +11,17 @@
 
 分桶：
   imports          模块级 import / export 语句
-  module_types     模块级的 type / interface / const / function（含它们上方的文档注释）
-  auth_screen      `function AuthScreen(...)` 整块
-  agent_guide      `function AgentGuide(...)` 整块
-  other_top        其它模块级块（`App` 之前的其它函数 / 常量）
+  module_types     模块级的 type / interface / const / function 的**正文与文档注释**
+  other_top        其它模块级块的**声明行**（`App` 之前的顶层 const / function 等）
   app_logic        `export default function App()` 起、到它的 `return (` 之前（含这一行）
   app_jsx          `App` 的 `return (` 起，到 App 结尾
   tail             文件末尾落单的收尾行（`}` 等）
+
+★ 批次 M-8'：`AuthScreen` / `AgentGuide`（带 JSX 的组件）已从 App.tsx 逐字搬进
+  `features/auth` / `features/chat`，本脚本**断言它们不再出现在 App.tsx**
+  （回归 = 非零退出）。
+★ 留在 App 的顶层块都是**纯展示派生**（driveStateView / agentGlyph 等）——
+  按用户拍板「跨 feature 协调与纯展示派生留 App」，它们有留因，不算漏抽。
 
 用法：python3 scripts/verify/app-tsx-line-budget.py [--json]
 """
@@ -32,7 +36,7 @@ REPO = Path(__file__).resolve().parents[2]
 APP = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
 lines = APP.read_text(encoding='utf8').splitlines()
 
-# ---- 先找几个锚点行号 ----
+# ---- 先找锚点行号 ----
 def find_line(pred, start=0):
     for i in range(start, len(lines)):
         if pred(lines[i]):
@@ -40,45 +44,38 @@ def find_line(pred, start=0):
     return -1
 
 app_i = find_line(lambda l: l.startswith('export default function App()'))
-auth_i = find_line(lambda l: l.startswith('function AuthScreen('))
-guide_i = find_line(lambda l: l.startswith('function AgentGuide('))
-assert app_i > 0 and auth_i > 0 and guide_i > 0, (app_i, auth_i, guide_i)
+assert app_i > 0, app_i
+
+# M8'：带 JSX 的组件不许再住回 App.tsx（回归哨兵）
+assert not any(l.startswith('function AuthScreen(') for l in lines), \
+    'AuthScreen 又回到 App.tsx 了（M8\' 已把它搬进 features/auth）'
+assert not any(l.startswith('function AgentGuide(') for l in lines), \
+    'AgentGuide 又回到 App.tsx 了（M8\' 已把它搬进 features/chat）'
+assert not any(l.startswith('const SETTINGS_FALLBACK') for l in lines), \
+    'SETTINGS_FALLBACK 又回到 App.tsx 了（M8\' 已把它搬进 shared/settings.ts）'
 
 # App 的 return（App 体内，缩进两格的 `  return (`）
 app_return_i = find_line(lambda l: l == '  return (', app_i + 1)
 # App 函数体结束：从文件末尾往上找第一个顶格的 `}`
 app_end_i = len(lines) - 1 - next(i for i, l in enumerate(reversed(lines)) if l == '}')
 
-def block_end(start: int) -> int:
-    """顶格开始的函数块结束行（第一个顶格 `}`）"""
-    for i in range(start + 1, len(lines)):
-        if lines[i] == '}':
-            return i
-    return len(lines) - 1
-
-auth_end = block_end(auth_i)
-guide_end = block_end(guide_i)
-
 buckets: dict[str, list[int]] = {
     'imports': [],
     'module_types': [],
-    'auth_screen': list(range(auth_i, auth_end + 1)),
-    'agent_guide': list(range(guide_i, guide_end + 1)),
     'other_top': [],
     'app_logic': list(range(app_i, min(app_return_i, app_end_i))),  # 到 `return (` 之前（不含）
     'app_jsx': list(range(app_return_i, app_end_i + 1)),
     'tail': list(range(app_end_i + 1, len(lines))),
 }
 
-# 预留给 auth/guide/app 的行，其余按内容归类
-taken = set(buckets['auth_screen']) | set(buckets['agent_guide']) | set(buckets['app_logic']) | set(buckets['app_jsx']) | set(buckets['tail'])
+taken = set(buckets['app_logic']) | set(buckets['app_jsx']) | set(buckets['tail'])
 for i in range(len(lines)):
     if i in taken:
         continue
     l = lines[i]
     if re.match(r'^(import|export)\b', l) or re.match(r'^(import|export)\s+\{', l) or l.startswith('import ') or l.startswith('} from'):
         buckets['imports'].append(i)
-    elif auth_i > i and re.match(r'^(type|interface|const|function|async function|class)\b', l):
+    elif re.match(r'^(type|interface|const|function|async function|class)\b', l):
         buckets['other_top'].append(i)
     else:
         buckets['module_types'].append(i)
@@ -120,7 +117,7 @@ assert all_idx == list(range(len(lines))), (
 
 cc = content_counts()
 rows = []
-for k in ['imports', 'module_types', 'other_top', 'auth_screen', 'agent_guide', 'app_logic', 'app_jsx', 'tail']:
+for k in ['imports', 'module_types', 'other_top', 'app_logic', 'app_jsx', 'tail']:
     idx = buckets[k]
     rows.append({'bucket': k, 'total': len(idx), 'content': cc[k]})
 
