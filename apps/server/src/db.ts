@@ -37,7 +37,12 @@ export function makePool(connectionString: string): Pool {
         const res = await pglite.query(sql, p);
         return {
           rows: res.rows ?? [],
-          rowCount: res.rows ? res.rows.length : (res.affectedRows ?? 0),
+          // P-3 修复（2026-09-25 主动发现）：pglite 对 UPDATE/DELETE/INSERT 也返回
+          // rows=[]（空数组是 truthy），旧写法 `res.rows ? res.rows.length : affectedRows`
+          // 让所有写语句的 rowCount 恒为 0 → 删定时任务/开关/忘白板全部误 404、
+          // changed/extracted 计数恒 0。pglite 自己就带正确的 rowCount（SELECT=返回行数,
+          // 写语句=影响行数），优先用它。
+          rowCount: res.rowCount ?? res.affectedRows ?? (res.rows?.length ?? 0),
           fields: res.fields ?? [],
         };
       },

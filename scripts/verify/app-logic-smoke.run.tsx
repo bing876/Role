@@ -1976,6 +1976,41 @@ await check('⑰-2 C3 样式红线：16-collab-card.css 在场且挂入口；一
 });
 
 log('');
+// ---------------------------------------------------------------------------
+// ⑱ 资源·浏览器页数闸（2026-09-25 主动发现 F 类）：全局上限（默认 4 张,设置可调）
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑱ 资源·浏览器页数闸（2026-09-25 主动发现 F 类）：全局上限（默认 4 张,设置可调） ---`);
+
+await check('⑱-1 F:连开页到全局上限 → 拒绝新开+话说明白,已有页绝不被偷偷关/换', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  const countTabs = () => qa('.browserTab').length;
+  // 不同站各开一张（同站会复用,开不出新页）,直到到顶
+  const urls = ['fa.example.com', 'fb.example.com', 'fc.example.com', 'fd.example.com', 'fe.example.com', 'ff.example.com'];
+  for (const u of urls) {
+    if (countTabs() >= 4) break;
+    await act(async () => {
+      assert.equal(emitBridge('open', `https://${u}/`), 1, 'bridge.on("open") 没注册处理函数');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(2);
+  }
+  const atCap = countTabs();
+  assert.ok(atCap >= 4, `上限应该是 4 张,实际只开出了 ${atCap} 张（复用逻辑或开页坏了?）`);
+  // 到顶后再开一张 → 必须被拒:数量不变、已有页原样、话说清楚
+  const before = qa('.browserTab').map((t) => t.textContent);
+  await act(async () => {
+    emitBridge('open', 'https://fz.example.com/');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(3);
+  assert.equal(countTabs(), atCap, '到上限还开出了新页（页数闸失效 = 越开越卡的口子）');
+  assert.deepEqual(qa('.browserTab').map((t) => t.textContent), before, '到顶时已有页被改动（偷偷关页/换页,红线）');
+  assert.ok((q('.chatNote')?.textContent ?? '').includes('到上限'), '到上限没有一句话说明（用户只会觉得"点了没反应"）');
+  await act(async () => root.unmount());
+});
+
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
 log(`  （期间发出 ${requests.length} 条真实请求）`);

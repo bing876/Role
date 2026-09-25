@@ -15,10 +15,11 @@
  * 明确没有：邮箱登录、真微信、无头浏览器、Playwright/Puppeteer。
  */
 import 'dotenv/config';
-import Fastify from 'fastify';
+import { realpathSync } from 'node:fs';
+import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import { loadEnv } from './env';
+import { loadEnv, type ServerEnv } from './env';
 import type { Pool } from 'pg';
 import { makePool, migrate, migrateTaskGoalEncryption } from './db';
 import { makeCipher, type JsonCipher } from './crypto';
@@ -46,11 +47,37 @@ import { subLoopCount } from './orchestrator/subLoops';
 import { liveLoopCount, runningLoopCount, agentLoopActiveWindowMs } from './toolLoop';
 import { pageStateCount } from './pageState';
 
-async function main(): Promise<void> {
-  const env = loadEnv();
-  const pool = makePool(env.databaseUrl);
-  const cipher = makeCipher(env.dataKey);
+/**
+ * 组装完整应用(Fastify 实例 + 全部路由 + P-2 空 body 宽容解析器),不 listen、
+ * 不起后台定时器(orchestrator/调度器在 main 里装)—— 验收脚本用 app.inject()
+ * 走真实路由(不靠嘴说)。main 与 scripts/verify/routines-lifecycle.mts 共用这一份。
+ */
+export async function buildApp(env: ServerEnv, pool: Pool, cipher: JsonCipher): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
+
+  /**
+   * P-2 修复（2026-09-25 主动发现）：Fastify 默认 JSON 解析器对
+   * 「content-type: application/json 但 body 为空」直接回 400 FST_ERR_CTP_EMPTY_JSON_BODY。
+   * 桌面等客户端常给**所有**请求（含 DELETE）带 JSON 头 → 空 body 的 DELETE 全被拒，
+   * 定时任务删不掉。这里放宽：空 body → undefined（各路由本来就按 (req.body ?? {}) 兜底）；
+   * 非空的坏 JSON 照旧 400，行为只放宽不收紧。
+   */
+  app.removeContentTypeParser('application/json');
+  app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (_req, body, done) => {
+    if (!body || body.length === 0) {
+      done(null, undefined);
+      return;
+    }
+    try {
+      done(null, JSON.parse(body.toString('utf8')));
+    } catch (err) {
+      // 坏 JSON 必须回 400（Fastify 对解析器错误只看 statusCode；裸 Error 会被归成 500）
+      const e = new Error(`JSON 解析失败：${(err as Error).message}`) as Error & { statusCode?: number; code?: string };
+      e.statusCode = 400;
+      e.code = 'FST_ERR_CTP_INVALID_JSON';
+      done(e, undefined);
+    }
+  });
 
   // 桌面 dev 是 http://localhost:5173、生产是 file://（Origin: null）——回显来源即可；
   // 服务只听 127.0.0.1，不暴露局域网。
@@ -126,6 +153,16 @@ async function main(): Promise<void> {
   registerSkillsRoutes(app, { pool, env, cipher });
   // 批次 H | 电脑三级可见度 — Status/Preview/Takeover，默认收起
   registerComputerVisibilityRoutes(app, { pool, env, cipher });
+  await app.ready();
+  return app;
+}
+
+async function main(): Promise<void> {
+  const env = loadEnv();
+  const pool = makePool(env.databaseUrl);
+  const cipher = makeCipher(env.dataKey);
+  const app = await buildApp(env, pool, cipher);
+
   /**
    * 多智能体编排 · 装编排能力（web_search / spawn_workers / delegate 三个服务端工具 + 名额表）。
    *
@@ -286,7 +323,23 @@ async function migrateTaskEncryptionWithRetry(pool: Pool, cipher: JsonCipher): P
   }
 }
 
-main().catch((err) => {
-  console.error('[server] 启动失败：', (err as Error).message);
-  process.exit(1);
-});
+// ★ 只在「直接运行 index.ts」时才启动服务。
+//   验收脚本（scripts/verify/routines-lifecycle.mts）会 import buildApp 走真实路由，
+//   若这里无条件调 main()，import 的瞬间就会 loadEnv()+listen 并把进程退出。
+//   入口判定：argv[1] 的真实路径 == 本模块的真实路径。
+{
+  let isEntry = false;
+  try {
+    const entry = process.argv[1];
+    // CJS 模式（tsx 跑 .ts）：__filename 就是本模块路径；两边都 realpath 再比
+    if (entry && typeof __filename !== 'undefined') isEntry = realpathSync(entry) === realpathSync(__filename);
+  } catch {
+    isEntry = false;
+  }
+  if (isEntry) {
+    main().catch((err) => {
+      console.error('[server] 启动失败：', (err as Error).message);
+      process.exit(1);
+    });
+  }
+}

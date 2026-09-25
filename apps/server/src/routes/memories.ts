@@ -676,22 +676,25 @@ export function registerMemoryRoutes(app: FastifyInstance, deps: MemoryDeps): vo
     const b = req.body as { all?: unknown; ids?: unknown } | null;
     try {
       if (b?.all === true) {
-        await pool.query('UPDATE memories SET status = $2, updated_at = now() WHERE owner_id = $1 AND status = $3', [
+        const r = await pool.query('UPDATE memories SET status = $2, updated_at = now() WHERE owner_id = $1 AND status = $3', [
           claims.sub,
           target,
           'pending',
         ]);
-        return { ok: true, target };
+        return { ok: true, changed: r.rowCount ?? 0, target };
       }
       const ids = Array.isArray(b?.ids) ? (b.ids as unknown[]).map(Number).filter(Number.isInteger).slice(0, 10) : [];
       if (ids.length === 0) return errJson(reply, 400, 'all 或 ids 至少给一个');
+      // 如实报「真的变了多少条」:ids 里已不是 pending 的(重复确认/别人先点了)不计
+      let changed = 0;
       for (const id of ids) {
-        await pool.query(
+        const r = await pool.query(
           'UPDATE memories SET status = $2, updated_at = now() WHERE id = $3 AND owner_id = $1 AND status = $4',
           [claims.sub, target, id, 'pending'],
         );
+        changed += r.rowCount ?? 0;
       }
-      return { ok: true, changed: ids.length, target };
+      return { ok: true, changed, target };
     } catch (err) {
       return dbErr(reply, err);
     }
