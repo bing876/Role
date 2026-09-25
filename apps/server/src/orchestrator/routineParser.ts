@@ -5,13 +5,18 @@
  * 生成 name/description。解析不到(问句/闲聊/没关键词)一律返回 **null** = 回落 LLM 正常路径
  * (与批次 E `detectBuildIntent` 同口径:null 不代表错,只是"这不是建 routine 的话")。
  *
- * 接受的两类句式(有意收窄,宁漏勿误建 —— 反证②钉的就是"含'每天'的闲聊不许建"):
+ * 接受的三类句式(有意收窄,宁漏勿误建 —— 反证②钉的就是"含'每天'的闲聊不许建"):
  *   F1 祈使族:  让/请/叫/安排 + [智能体名] + 节奏 + 任务
  *      "让运营助手每天9点检查店铺数据" / "请客服每天早上八点处理退款咨询"
  *      "让数据员每30分钟刷新一次店铺页面" / "让夜值凌晨两点巡检服务器日志"
  *   F2 节奏起头族(必须紧跟"对我做点什么"的前缀,挡住闲聊):
  *      每天/每日 + [时刻] + 提醒我/帮我/替我/给我 + 任务
  *      "每天9点提醒我喝水" / "每天晚上10点半提醒我复盘今天"
+ *   F2b 节奏前置 + 祈使族(规格 C7,2026-09-25):
+ *      每天/每日 + [时刻] + 让/请/叫/安排 + [名册里的智能体名] + 任务
+ *      "每天09:00让小助总结店铺数据" —— 点名靠调用方传入的名册(knownAgents)做
+ *      **精确前缀**匹配(不猜);没名册时只有"无点名"句式(让/请后直接是任务或
+ *      "帮我…"前缀)才放行,有名字但切不干净的含糊句 → null 回落 LLM。
  *
  * 明确**不**接受(→ null 回落 LLM,是设计不是缺陷):
  *   · 问句:「怎么设定期任务?」「怎么让运营助手每天9点检查数据」
@@ -284,10 +289,19 @@ function makeIntent(args: {
   return { agentName: args.agentName, taskTemplate: args.task, triggerType: args.triggerType, triggerConfig: args.triggerConfig, scheduleLabel: args.scheduleLabel, name, description, timeDefaulted: args.timeDefaulted, raw: args.raw };
 }
 
+/** 解析选项 */
+export interface ParseOpts {
+  /**
+   * 当前项目名册名(F2b「每天09:00让小助…」切"名字|任务"用)。**精确前缀**匹配,
+   * 不猜、不挑最像的;不传时 F2b 只放行无点名句式,含名但切不干净的 → null。
+   */
+  knownAgents?: string[];
+}
+
 /**
  * 解析一句话是不是"建定时任务"的意图。不是(问句/闲聊/建智能体/没节奏/没关键词)→ null = 回落 LLM。
  */
-export function parseRoutineIntent(message: string): RoutineIntent | null {
+export function parseRoutineIntent(message: string, opts: ParseOpts = {}): RoutineIntent | null {
   const t = (message ?? '').trim();
   if (!t || t.length < 5) return null;
 
@@ -331,23 +345,88 @@ export function parseRoutineIntent(message: string): RoutineIntent | null {
     return null;
   }
 
-  // ---------------- F2 节奏起头族:每天/每日 + [时刻] + 提醒我/帮我/… + 任务
+  // ---------------- F2 节奏起头族:每天/每日 + [时刻] + 「对我做点什么」
   const m2 = t.match(/^(每天|每日)\s*(.*)$/);
   if (m2) {
     const clock = stripClock(m2[2]);
-    const afterClock = clock.rest.match(new RegExp(`^(?:${F2_PREFIX})\\s*(.{2,60})$`));
-    if (afterClock) {
-      const task = cleanTask(afterClock[1]);
+    const label = `每天 ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`;
+    const afterClock = clock.rest;
+
+    // F2a:提醒我/帮我/替我/给我 + 任务(原口径,无点名 → 落回会话主人)
+    const m2a = afterClock.match(new RegExp(`^(?:${F2_PREFIX})\\s*(.{2,60})$`));
+    if (m2a) {
+      const task = cleanTask(m2a[1]);
       if (task.length >= 2) {
         return makeIntent({
           agentName: null,
           task,
           triggerType: 'cron',
           triggerConfig: { hour: clock.hour, minute: clock.minute },
-          scheduleLabel: `每天 ${String(clock.hour).padStart(2, '0')}:${String(clock.minute).padStart(2, '0')}`,
+          scheduleLabel: label,
           timeDefaulted: clock.defaulted,
           raw: t,
         });
+      }
+    }
+
+    // F2b(规格 C7):节奏前置 + 祈使 —— "每天09:00让小助总结店铺数据"
+    const m2b = afterClock.match(new RegExp(`^(?:${DIRECTIVE})\\s*(.{2,60})$`));
+    if (m2b) {
+      const rest2 = m2b[1];
+
+      // ① 祈使后紧跟"对我做点什么"前缀("每天9点请帮我喝水")→ 无点名,前缀剥掉就是任务
+      const m2c = rest2.match(new RegExp(`^(?:${F2_PREFIX})\\s*(.{2,60})$`));
+      if (m2c) {
+        const task = cleanTask(m2c[1]);
+        if (task.length >= 2) {
+          return makeIntent({
+            agentName: null,
+            task,
+            triggerType: 'cron',
+            triggerConfig: { hour: clock.hour, minute: clock.minute },
+            scheduleLabel: label,
+            timeDefaulted: clock.defaulted,
+            raw: t,
+          });
+        }
+      }
+
+      // ② 点名:名册名精确前缀,最长匹配优先(生产路径必有名册 —— 不猜)
+      const roster = (opts.knownAgents ?? []).filter((n): n is string => typeof n === 'string' && n.length >= 1);
+      const cands = roster
+        .filter((n) => rest2.startsWith(n) && rest2.length - n.length >= 2)
+        .sort((a, b) => b.length - a.length);
+      if (cands.length > 0) {
+        const name = cands[0];
+        const task = cleanTask(rest2.slice(name.length));
+        if (task.length >= 2) {
+          return makeIntent({
+            agentName: name,
+            task,
+            triggerType: 'cron',
+            triggerConfig: { hour: clock.hour, minute: clock.minute },
+            scheduleLabel: label,
+            timeDefaulted: clock.defaulted,
+            raw: t,
+          });
+        }
+      }
+
+      // ③ 无点名直给任务:rest2 以任务动词开头(没传名册也放行);
+      //    有名字但切不干净(既无名册命中、开头又不是任务动词)→ 落到这里 = null 回落 LLM
+      if (new RegExp(`^(?:${NAME_TASK_VERBS.source.slice(1, -1)})`).test(rest2)) {
+        const task = cleanTask(rest2);
+        if (task.length >= 2) {
+          return makeIntent({
+            agentName: null,
+            task,
+            triggerType: 'cron',
+            triggerConfig: { hour: clock.hour, minute: clock.minute },
+            scheduleLabel: label,
+            timeDefaulted: clock.defaulted,
+            raw: t,
+          });
+        }
       }
     }
   }

@@ -254,6 +254,63 @@ async function main(): Promise<void> {
   });
 
   log('');
+  log('--- ⑦ F2b 节奏前置 + 祈使(规格 C7):每天[时刻]让/请[名册名]任务 ---');
+
+  await check('「每天09:00让小助总结店铺数据」+ 名册 → cron 09:00,agent=小助,task=总结店铺数据', () => {
+    const r = parseRoutineIntent('每天09:00让小助总结店铺数据', { knownAgents: ['母鸡', '小助'] });
+    assert.ok(r, dump(r));
+    assert.equal(r.agentName, '小助');
+    assert.equal(r.triggerType, 'cron');
+    assert.deepEqual(r.triggerConfig, { hour: 9, minute: 0 });
+    assert.equal(r.taskTemplate, '总结店铺数据');
+  });
+
+  await check('「每天9点让小美看一眼店铺」+ 名册 → 09:00,agent=小美(点号时刻写法)', () => {
+    const r = parseRoutineIntent('每天9点让小美看一眼店铺', { knownAgents: ['小美'] });
+    assert.ok(r, dump(r));
+    assert.equal(r.agentName, '小美');
+    assert.deepEqual(r.triggerConfig, { hour: 9, minute: 0 });
+    assert.equal(r.taskTemplate, '看一眼店铺');
+  });
+
+  await check('「每天早上让小助看看店铺」+ 名册 → 只说"早上" → 默认 09:00(timeDefaulted)', () => {
+    const r = parseRoutineIntent('每天早上让小助看看店铺', { knownAgents: ['小助'] });
+    assert.ok(r, dump(r));
+    assert.deepEqual(r.triggerConfig, { hour: 9, minute: 0 });
+    assert.equal(r.timeDefaulted, true);
+    assert.equal(r.taskTemplate, '看看店铺');
+  });
+
+  await check('「每天9点请帮我喝水」(无点名,祈使后跟"帮我")→ agent=null,task=喝水', () => {
+    const r = parseRoutineIntent('每天9点请帮我喝水');
+    assert.ok(r, dump(r));
+    assert.equal(r.agentName, null);
+    assert.equal(r.taskTemplate, '喝水');
+  });
+
+  await check('「每天9点让检查店铺数据」(无点名,任务动词开头)→ agent=null,task=检查店铺数据', () => {
+    const r = parseRoutineIntent('每天9点让检查店铺数据');
+    assert.ok(r, dump(r));
+    assert.equal(r.agentName, null);
+    assert.equal(r.taskTemplate, '检查店铺数据');
+  });
+
+  await check('名册最长匹配优先:名册[小助,小助手] + 「每天9点让小助手查数据」→ agent=小助手', () => {
+    const r = parseRoutineIntent('每天9点让小助手查数据', { knownAgents: ['小助', '小助手'] });
+    assert.ok(r, dump(r));
+    assert.equal(r.agentName, '小助手');
+    assert.equal(r.taskTemplate, '查数据');
+  });
+
+  await check('「每天9点让小助总结店铺数据」无 name roster → null(有名字但切不干净,宁漏勿误建)', () => {
+    assert.equal(parseRoutineIntent('每天9点让小助总结店铺数据'), null);
+  });
+
+  await check('「每天9点让看店铺数据」有名册但无名命中且非任务动词开头 → null(回落 LLM)', () => {
+    assert.equal(parseRoutineIntent('每天9点让看店铺数据', { knownAgents: ['母鸡'] }), null);
+  });
+
+  log('');
   log('=== 结论 ===');
   log(`  ${passes} PASS / ${fails} FAIL`);
   process.exit(fails > 0 ? 1 : 0);
