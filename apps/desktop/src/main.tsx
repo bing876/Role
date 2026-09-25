@@ -3,6 +3,8 @@ import React, { Component, StrictMode } from 'react';
 import type { ErrorInfo, ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+// 批次 M-2 迁移期：设计 CSS 在 styles.css 之前（同权重时旧规则赢 = 未迁移部分零视觉改动）
+import './design/index.css';
 import './styles.css';
 
 interface ErrorBoundaryProps {

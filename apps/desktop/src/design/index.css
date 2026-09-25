@@ -1,0 +1,8 @@
+/* 设计 CSS 入口 —— 导入顺序 = 层叠顺序，与设计基准 workbench-ui 完全一致，禁止重排。
+   迁移期规矩（批次 M-2）：设计 CSS 整体在 styles.css **之前**导入
+   （同权重竞争时后导入的旧规则赢 = 未迁移部分零视觉改动）；
+   每迁移一块组件，就从 styles.css 删掉对应旧规则，设计 CSS 自然接权。
+   项目级覆盖统一放在 99-theme.css（始终最后导入）。 */
+@import './01-tokens.css';
+@import './02-base.css';
+@import './99-theme.css';
