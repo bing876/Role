@@ -39,7 +39,7 @@ import { API_BASE, TOKEN_KEY, authFetchJson } from './shared/api';
 /** 批次 M-8'：首帧兜底配置（原写在本文件模块级）搬进 shared/settings.ts */
 import { SETTINGS_FALLBACK } from './shared/settings';
 import { useKnowledge } from './features/knowledge';
-import { useMemory } from './features/memory';
+import { MemoryConfirmCard, useMemory } from './features/memory';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -2043,16 +2043,14 @@ export default function App() {
               开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
             </div>
             {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
-            {/* 记忆合并第四批：待确认记忆确认卡 */}
+            {/* 规格 C4（2026-09-25）：待确认记忆不再走侧栏面板 —— 确认卡进对话流（见聊天区 <MemoryConfirmCard/>）。
+                这里只留两层记忆的**只读**查阅（用户记忆 / 项目记忆）。 */}
             <div className="buttons-row">
               <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
                 用户记忆（{userMem.length}）
               </button>
               <button type="button" className="btn" onClick={() => setProjMemOpen((v) => !v)}>
                 项目记忆（{projMem.length}）
-              </button>
-              <button type="button" className={pendingMem.length > 0 ? 'btn btn--pending' : 'btn'} onClick={() => setPendingMemOpen((v) => !v)}>
-                待确认（{pendingMem.length}）
               </button>
             </div>
             {userMemOpen && (
@@ -2085,37 +2083,8 @@ export default function App() {
                 ))}
               </div>
             )}
-            {pendingMemOpen && (
-              <div className="memList memList--pending" role="list" aria-label="待确认记忆">
-                <div className="small memList__title">待确认 · 需你确认后才生效（decision/fact）</div>
-                {pendingMem.length === 0 && <div className="small">没有待确认的记忆。</div>}
-                {pendingMem.length > 0 && (
-                  <div className="buttons-row" style={{ marginBottom: 8 }}>
-                    <button type="button" className="btn btn--go" onClick={() => void confirmAllPending()}>
-                      全部确认
-                    </button>
-                    <button type="button" className="btn" onClick={() => void rejectAllPending()}>
-                      全部忽略
-                    </button>
-                  </div>
-                )}
-                {pendingMem.map((m) => (
-                  <div className="memList__row memList__row--pending" key={m.id}>
-                    <span className="small">
-                      <b>[{m.type === 'decision' ? '决定' : m.type === 'fact' ? '事实' : '偏好'}]</b> {m.content}
-                    </span>
-                    <div className="memList__actions">
-                      <button type="button" className="btn btn--go memList__confirm" onClick={() => void confirmMemory(m.id)}>
-                        确认
-                      </button>
-                      <button type="button" className="btn memList__reject" onClick={() => void rejectMemory(m.id)}>
-                        不用
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            {/* 规格 C4（2026-09-25）：旧的侧栏「待确认」面板（抽屉式确认路径）已移除 ——
+                待确认记忆的确认卡现在渲染在**对话流里**（聊天区 <MemoryConfirmCard/>）。 */}
             {/* 第 11 步：同一主窗口左栏入口；标准文件选择器后 POST 到本机服务端，不创建 Electron 窗口。 */}
             <div className="buttons-row">
               <button
@@ -2512,6 +2481,24 @@ export default function App() {
                 )}
             </div>
           ))}
+          {/*
+            规格 C4（2026-09-25）：记忆确认在**对话流里**,不弹抽屉。
+            待确认记忆（decision/fact）就是聊天流里的一个节点（跟着消息一起滚动,
+            与求助卡同一模式）：「确认，生效」= 真 POST /memories/confirm 进真表,
+            「不用」= 真 POST /memories/reject。旧的侧栏「待确认（N）」面板已移除。
+          */}
+          {pendingMem.length > 0 && (
+            <div className="memConfirmFlow">
+              {pendingMem.map((m) => (
+                <MemoryConfirmCard
+                  key={m.id}
+                  item={m}
+                  onConfirm={(id) => void confirmMemory(id)}
+                  onReject={(id) => void rejectMemory(id)}
+                />
+              ))}
+            </div>
+          )}
           {/*
             第 27 步 · **人工介入求助卡**（AI 主动求助）。
 

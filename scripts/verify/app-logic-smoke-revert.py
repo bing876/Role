@@ -91,7 +91,7 @@ MUTATIONS = [
         'name': 'confirm 去掉本地过滤（等服务端重拉 —— 界面会闪一下）',
         'anchor': "      setPending((prev) => prev.filter((m) => m.id !== id));\n      void loadUser();",
         'replace': "      void loadUser();",
-        'expect': '待确认：点「确认」',
+        'expect': 'C4：对话流里点「确认，生效」',
     },
     {
         'file': MEMORY,
@@ -449,6 +449,17 @@ MUTATIONS = [
         ),
         'replace': "              <div className={`msg ${m.role}`}>{m.text}</div>\n",
         'expect': '⑰-1',
+    },
+    # ---- C4：记忆确认在对话流里（不弹抽屉）----
+    # ---- C4：记忆确认在对话流里（不弹抽屉）----
+    {
+        'file': APP_TSX,
+        'id': 'R1',
+        'visible': True,
+        'name': '把 C4 打回去：对话流里不再渲染记忆确认卡（确认退回抽屉路径,用户找不到）',
+        'anchor': '          {pendingMem.length > 0 && (\n',
+        'replace': '          {false && pendingMem.length > 0 && (  // 反证注入：C4 打回 —— 对话流没有确认卡\n',
+        'expect': '对话流里长出确认卡',
     },
 ]
 

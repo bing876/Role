@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { sameNode } from './lib/dom-assert.mts';
 
@@ -621,12 +621,22 @@ await act(async () => {
 });
 await flush();
 
-await check('三个入口显示服务端返回的条数（用户 2 / 项目 1 / 待确认 2）', async () => {
+await check('C4：侧栏只剩只读入口（用户 2 / 项目 1）；待确认以确认卡出现在**对话流**里（无抽屉式「待确认（N）」）', async () => {
   await waitFor('记忆入口出现', () => doc.body.textContent!.includes('用户记忆（2）'));
-  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|项目记忆|待确认/.test(t));
+  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|项目记忆/.test(t));
   assert.ok(labels.some((t) => t.includes('用户记忆（2）')), `用户记忆条数不对：${labels.join(' | ')}`);
   assert.ok(labels.some((t) => t.includes('项目记忆（1）')), `项目记忆条数不对：${labels.join(' | ')}`);
-  assert.ok(labels.some((t) => t.includes('待确认（2）')), `待确认条数不对：${labels.join(' | ')}`);
+  // C4 红线：侧栏不许再有「待确认」抽屉式入口
+  assert.ok(!qa('aside.sidebar .btn').some((b) => (b.textContent ?? '').includes('待确认')),
+    '侧栏又出现「待确认」面板入口（C4：确认在对话流里,不弹抽屉）');
+  // 待确认记忆（321 决定 / 322 事实）以确认卡出现在对话流
+  await waitFor('对话流里长出确认卡', () => qa('.memConfirmCard').length === 2, 60);
+  const cards = qa('.memConfirmCard');
+  assert.equal(cards.length, 2, `确认卡数量不对：${cards.length}`);
+  assert.match(cards[0].textContent ?? '', /记忆·决定/, '种类徽标（决定）缺失');
+  assert.match(cards[0].textContent ?? '', /决定用 A 方案/, '卡片内容不是服务端回来的真数据');
+  assert.match(cards[1].textContent ?? '', /记忆·事实/, '种类徽标（事实）缺失');
+  assert.match(cards[1].textContent ?? '', /项目代号是猎户座/, '第二条内容不对');
 });
 
 await check('展开用户记忆：列出两条，且「忘掉」走 POST /memory/forget（带 layer 与 id）', async () => {
@@ -645,22 +655,43 @@ await check('展开用户记忆：列出两条，且「忘掉」走 POST /memory
   assert.deepEqual(body, { layer: 'user', id: 301 }, `body 不对：${JSON.stringify(body)}`);
 });
 
-await check('待确认：点「确认」走 POST /memories/confirm（{ids:[id]}），该条立刻消失，并回一句人话', async () => {
-  const btn = qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('待确认'));
-  click(btn ?? null, '待确认入口');
-  await flush(3);
-  const before = qa('.memList__row--pending').length;
-  assert.equal(before, 2, `待确认行数不对：${before}`);
-
-  click(qa('.memList__confirm')[0], '确认第一条');
+await check('C4：对话流里点「确认，生效」→ POST /memories/confirm（{ids:[id]}），卡立刻消失,回一句人话', async () => {
+  const card0 = qa('.memConfirmCard')[0];
+  const goBtn = [...card0.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('确认，生效'))!;
+  assert.ok(goBtn, '确认卡上没有「确认，生效」按钮');
+  click(goBtn, '对话流里确认第一条');
   await waitFor('发出 /memories/confirm', () => requests.some((r) => r.path === '/memories/confirm'));
   await flush(3);
-  const after = qa('.memList__row--pending').length;
-  assert.equal(after, before - 1, `确认后没有立刻少一条（${before} → ${after}）`);
   const req = requests.filter((r) => r.path === '/memories/confirm').pop()!;
   const body = JSON.parse(String(req.body)) as { ids?: number[] };
   assert.deepEqual(body, { ids: [321] }, `body 不对：${JSON.stringify(body)}`);
+  assert.equal(qa('.memConfirmCard').length, 1, '确认后确认卡没立刻消失');
   assert.match(doc.body.textContent ?? '', /已确认一条记忆，今后会按它执行。/, '聊天流里没有人话提示');
+});
+
+await check('C4：对话流里点「不用」→ POST /memories/reject（{ids:[id]}），卡消失', async () => {
+  const card = qa('.memConfirmCard')[0];
+  assert.ok(card, '前置：还剩一条确认卡');
+  const rejectBtn = [...card.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('不用'))!;
+  click(rejectBtn ?? null, '对话流里拒绝');
+  await waitFor('发出 /memories/reject', () => requests.some((r) => r.path === '/memories/reject'));
+  await flush(3);
+  const req = requests.filter((r) => r.path === '/memories/reject').pop()!;
+  const body = JSON.parse(String(req.body)) as { ids?: number[] };
+  assert.deepEqual(body, { ids: [322] }, `body 不对：${JSON.stringify(body)}`);
+  assert.equal(qa('.memConfirmCard').length, 0, '「不用」之后确认卡没消失');
+});
+
+await check('C4 样式红线：17-mem-confirm.css 在场且挂入口；抽屉旧规则从设计 CSS 删净', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '17-mem-confirm.css'), 'utf8');
+  assert.ok(/\.memConfirmCard\s*\{/.test(css) && /\.memConfirmCard__btn--go\s*\{/.test(css), '确认卡规则缺失');
+  assert.ok(/border-left:\s*3px solid #d98a1f/.test(css), '确认卡缺左侧 accent 线（该和协同卡区分开）');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./17-mem-confirm.css'), '确认卡 CSS 没挂进设计入口');
+  const all = readdirSync(join(REPO, 'apps', 'desktop', 'src', 'design'))
+    .filter((f) => f.endsWith('.css')).map((f) => readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', f), 'utf8'))
+    .join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!all.includes('.memList--pending') && !all.includes('.btn--pending'), '抽屉旧规则没删净（C4：确认在对话流里）');
 });
 
 const memRequestCount = requests.length;

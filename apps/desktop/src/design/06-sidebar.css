@@ -326,34 +326,9 @@
   margin-bottom: 4px;
   color: #6b7280;
 }
-/* 记忆合并第四批：待确认记忆确认卡 */
-.memList--pending {
-  border: 1px solid #fcd34d;
-  background: #fffbeb;
-  border-radius: 8px;
-  padding: 8px;
-  margin-top: 6px;
-}
-.memList__row--pending {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  padding: 6px 0;
-}
-.memList__actions {
-  display: flex;
-  gap: 6px;
-  justify-content: flex-end;
-}
-.memList__confirm {
-  padding: 2px 8px;
-  font-size: 12px;
-}
-.memList__reject {
-  padding: 2px 8px;
-  font-size: 12px;
-  color: #6b7280;
-}
+/* 规格 C4（2026-09-25）：旧侧栏「待确认」抽屉（.memList--pending / __row--pending /
+   __actions / __confirm / __reject）已移除 —— 确认卡进对话流,样式在
+   design/17-mem-confirm.css（.memConfirmCard 一族）。 */
 
 /* 第 11 步：左栏知识库入口 */
 .knowledgePanel {
