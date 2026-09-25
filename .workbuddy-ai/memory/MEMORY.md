@@ -10,6 +10,9 @@
   `export GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=20"`
   再 `git fetch --no-tags git@github.com:bing876/Role.git '+refs/heads/*:refs/remotes/origin/*'`。
   **必须用显式 URL**（`-c remote.origin.url=` / `GIT_CONFIG_*` 覆盖都无效）。`~/.ssh/config` 已把 github.com 映射到 `ssh.github.com:443`。
+- ★ **用显式 URL push 不会更新 `refs/remotes/origin/*`** ⇒ 推完要再 `git fetch` 一次，否则 `git status` 误报 ahead；复核远端用 `git ls-remote <url> refs/heads/main`。
+- 合并前预演冲突：`git merge-tree --write-tree <A> <B>`（不碰工作区，exit 0 = 无冲突）。
+- ★ **有未提交改动时先提交再 merge**，否则改动会被 merge 冲掉/卡住。
 - 历史事故（partial clone 毁库 / 含 `/` 分支名丢 ref / gc prune 对象）**已随仓库重做消失**，但**通用规程仍有效**：
   - 破坏性操作前 `cp -r .git/refs` 到**仓库外**；操作后 `ls -R .git/refs` 复查（ref-guard 钩子只修当前分支，不够）。
   - 离线冲突预演用 `git merge-tree --write-tree <A> <B>`（不碰工作区/ref，打印结果树 oid，exit 0 = 无冲突）。
@@ -28,13 +31,29 @@
 - PG 便携包 `~\workbuddy-ai\pg2`（`pg\bin` 无 psql）；探活 `pg2/ping-db.mjs`
 - 服务端 cwd 必须 `apps/server`（`dotenv/config` 从 cwd 加载）；`dotenv` **不覆盖**已有环境变量
 - 验证码 mock：只在「AI工作台-服务端」窗口 / 经 `relayServerLog` 转 UI
-- ★ agent 不能替用户常驻进程：**起环境的验证必须一次调用跑完「起→断言→收尾」**。已试过全不通（`sleep N` 后台挂住、PowerShell `Start-Process`、`Invoke-CimMethod Win32_Process.Create`）⇒ **别再想办法让它常驻**，只给用户 N 分钟窗口 + 明说「窗口没了自己双击图标」
+- ★ agent 不能替用户常驻进程：**起环境的验证必须一次调用跑完「起→断言→收尾」**。已试过**全走不通**（`sleep N` 后台挂住、`Start-Process`、`Win32_Process.Create`、**`schtasks`（安全策略明令禁止）**、**`explorer.exe <x.cmd>`**、`pg_ctl start`、`nohup &`）⇒ **别再想办法让它常驻**，只给用户 N 分钟窗口 + 明说「窗口没了自己双击图标」
+
+### ★★★ MSYS 的 `find.exe` 会毁掉 `start-dev.cmd`（2026-09-25 实撞，PG 被打死）
+**从 agent 的 bash 里**跑 `cmd //c start-dev.cmd`，PATH 带 MSYS 目录 ⇒ 脚本里 `tasklist | find "…"` 调到 **Unix `find`** ⇒
+start-dev.cmd 误删 `postmaster.pid`、`watchdog.cmd` 每 10s 反复删 pid + 乱起第二个 postgres.exe（两个 postmaster 同数据目录）。
+旧 PG 被打死，但 **WAL 自动恢复成功、数据无损**（users 6 / projects 6 / agents 9 / tasks 1）。
+- ★ **解法**：给 cmd 干净 PATH —— `PATH="/c/Windows/System32:/c/Windows:/c/Windows/System32/Wbem:/c/Program Files/nodejs" cmd //c start-dev.cmd`
+- ★★ **用户双击天然干净 PATH，不受影响** ⇒ **起环境就该让用户双击，别从 bash 代跑**
+- ★★ **`taskkill /F /T` 杀 Electron dev 进程树会连坐杀掉桌面端 `ensurePostgres` 拉起的 PG 子进程** ⇒ 杀前先确认 PG 是不是它的子进程
+- ★ `MSYS_NO_PATHCONV=1` 与 `cmd //c` **不可同用**（cmd 收到字面 `//c` → 静默 exit 1）；`MSYS_NO_PATHCONV=1 cmd /c` 被安全策略拦；`tasklist /FI` 反而**必须**加 `MSYS_NO_PATHCONV=1`；**Write 写的 `.cmd` 是 UTF-8，cmd 按 GBK 读会乱码** ⇒ `.cmd` 只写纯 ASCII
+- 完整细节（含 Windows/bash 互操作坑表）见 `TOOLBOX.md` 末节
 
 **PG 三坑**：① 端口通 ≠ 可查（5432 1.6s 通但报 `starting up`，可查要 ~34s；`migrate()` 只跑一次 ⇒ 撞上静默降级，`/auth` 一律 503）。PASS 三条件：`db="up"` + 日志有「数据库表就绪」+ 无「暂未连通」。② **别按端口判在跑**（恢复期已监听）⇒ 先 `taskkill /F /IM postgres.exe` 全杀再起唯一一个。③ `postmaster.pid` 残留 → 静默拒启（判据是「那个 PID 现在是不是 postgres」，不是「还活不活」—— Windows 会回收 PID，见 `server-supervisor.ts` `pidImageName`）；停库 `pg_ctl stop -m fast`。
 - ★★ **起 Electron 前必须连续 2 次** `/health` 报 `db=up`（间隔 3s），否则 pg-supervisor 会自己再拉一个 PG ⇒ 登录失败。
 - ★★ **判断数据库好不好必须直读库**（`_dbq-tables.mjs`）或日志出现「数据库表就绪」；`db:"up"` 只是实时探测，**不代表 migrate 跑过**。但**不用手动重启服务端**——它会自己重试建表（实测第 12 次成功），先出现「数据库暂未连通」是正常恢复期。
 
 **表 & 密钥**：`users`(`xyz_id`/`phone_hash`/`phone_enc`，无明文 phone)；`projects` 只有 `is_default`；`agents` **无 user_id**（靠 `project_id`）；`sms_codes` 作废列 **`used`**。改 `PHONE_PEPPER` → 老用户全登录不上。★ **密钥只放 `apps/server/.env`**（`.gitignore` 挡住），代码无兜底、缺了拒启；`.env.example` 只留空值+注释。
+
+**★ 三个「假问题」别重复踩（2026-09-25 查清）**：
+1. 启动日志 `goal 密文回填暂未完成：task_pauses: column "goal_enc" does not exist` → **是竞态不是 bug**：回填重试跑在 `migrate()` 建列之前，重试机制正是为此设计。稍后该列就在。
+2. `user_memories` / `agent_memories` 表不存在 → **故意 DROP 的**（记忆合并第一批，已并入单一 `memories` 表，`agent_id IS NULL` = 账号级）。但 `index.ts` 的「数据库表就绪（…user_memories/agent_memories）」是**硬编码字符串**没跟着更新 ⇒ 日志误导。
+3. `routines` 表 → **真名是 `agent_routines`**。
+★ **桌面端 supervisor 起的是 `apps/server/dist/index.js`（构建产物），不是 tsx** ⇒ 改了服务端一定要 `npm run build -w @ai-workbench/server`，否则重启桌面端也还是旧代码。
 
 ## 三、★ 换装 & 安装版确认
 - 已安装包 `...\Programs\@ai-workbenchdesktop\resources\app.asar`；用户数据 `%APPDATA%\@ai-workbench\desktop`

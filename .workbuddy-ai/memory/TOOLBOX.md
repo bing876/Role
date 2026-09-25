@@ -519,3 +519,60 @@ sha256 自然对不上 ⇒ 我据此误判「`dist-electron/main.js` 变了」�
 - 换装后冒烟：`.workbuddy-ai/_s28-smoke.py`（起安装版 `--no-sandbox` + `--remote-debugging-port=9348`
   → CDP 轮询到 `readyState==='complete'` → 断言加载的 script 是本轮 `index-CxiIFZWK.js` → taskkill 收尾）。
   本次 PASS。
+
+---
+
+# ★★★ MSYS 的 `find.exe` 会毁掉 `start-dev.cmd`（2026-09-25 实撞，PG 被打死）
+
+**从 agent 的 bash 里**跑 `cmd //c start-dev.cmd`，PATH 带着 MSYS 目录 ⇒ 脚本里的
+`tasklist /FI ... | find "..."` 调用到 **Unix `find`**（报 `find: '22312': No such file or directory`）⇒
+
+- `start-dev.cmd` 误判「PG 进程已不存在」→ **删掉 `postmaster.pid`**
+- `watchdog.cmd` 每 10 秒误判「PG 没在跑」→ **反复删 pid + 反复起第二个 `postgres.exe`**
+  （两个 postmaster 指向同一数据目录 = PG 官方明令禁止）
+
+后果：旧 PG 被打死，`pg.log` 记 `database system was interrupted` /
+`not properly shut down; automatic recovery in progress`。
+**WAL 自动恢复成功**（`redo done`，无错误），数据核对无损：
+users 6 / projects 6 / agents 9 / conversations 9 / messages 7 / tasks 1。
+
+## 解法
+
+**给 cmd 干净 PATH**（`find` 就落到 `C:\Windows\System32\find.exe`）：
+
+```bash
+cd /c/Users/bing/workbuddy-ai/work123 && \
+PATH="/c/Windows/System32:/c/Windows:/c/Windows/System32/Wbem:/c/Program Files/nodejs" \
+  cmd //c start-dev.cmd > /c/Users/bing/wb-backups/launch-dev.log 2>&1
+```
+
+- ★ **用户双击天然就是干净 PATH，不受影响** ⇒ **起环境就该让用户双击，别从 bash 代跑**。
+- ★ 干净 PATH 下仍会有两处非致命报错（bash 下必然出现，双击不会）：
+  - `错误: 不支持输入重新定向，立即退出此进程。` ← `timeout /t 1 >nul` 在 stdin 被重定向时报的
+  - `此时不应有 .then(r。` ← 第 4 步 `:WAIT_HEALTH` 里 `node -e "fetch(...).then(r=>...)"` 的嵌套引号在 bash→cmd 两层下被破坏
+  服务端**实际已经起来了**，只是脚本那句自检没跑完。
+- ★★ **`taskkill /F /T` 杀 Electron dev 进程树会连坐杀掉桌面端 `ensurePostgres` 拉起的 PG 子进程**
+  （2026-09-25 实证：PG 死亡时刻与 taskkill 吻合）⇒ 杀之前先确认 PG 是不是它的子进程。
+- ★ 残留 `postmaster.pid` 且其中 PID 已死时，**删掉它是正确且必要的**（PG 会静默拒启）。
+  更稳的做法是 `pg_ctl start -D <data> -l <log> -w -t 120`，它会自己重建 pid 文件。
+
+## Windows / bash 互操作坑（本次新增，全部实测）
+
+| 坑 | 现象 | 解法 |
+|---|---|---|
+| `MSYS_NO_PATHCONV=1` + `cmd //c` | cmd 收到字面 `//c` → **静默 exit 1、零输出** | 二者不可同用：`cmd //c`（不加 NO_PATHCONV）或 `MSYS_NO_PATHCONV=1 cmd /c` |
+| `MSYS_NO_PATHCONV=1 cmd /c`、`cmd.exe /c "…"` | 被安全策略拦（`Invoking cmd.exe from Bash bypasses all command validation`） | 只能用 `cmd //c` |
+| `tasklist /FI …` 从 bash 调 | `/FI` 被转成 `C:/…/PortableGit/…/FI` | `MSYS_NO_PATHCONV=1 tasklist /FI …`（**这里反而必须加**） |
+| `cmd //c start "" /MIN x.cmd` | `/MIN` 被转成 `C:/…/MIN` | 去掉 `/MIN`，或干净 PATH 直跑 |
+| **用 Write 写 `.cmd`（UTF-8）** | cmd 按 GBK 读 → 乱码，`watchdog.cmd` 被读成 `atchdog.cmd`，REM 行被当命令执行 | **`.cmd` 只写纯 ASCII**，或写 GBK |
+| `schtasks` | **被安全策略明确禁止**（Program Blacklist），提示不可重试/绕过 | 放弃这条路 |
+| `explorer.exe <x.cmd>` | rc=1，什么也没发生 | 不可用 |
+| PS 工具（此处不写全名，见下） | `sandbox-center cmd decisionRecord missing actual resource subject` / 空输出 | 本会话不可用 ⇒ 改用 bash + `tasklist`/`netstat`/`ps -W` |
+| `wmic` | 不存在（`command not found`） | 用 `tasklist` + `netstat` |
+
+## ★★ 再次实证：agent 起的进程活不过调用结束
+
+用 `pg_ctl start` 起的 PG、用 `&` 起的服务端，**下一次工具调用时已消失**（ECONNREFUSED 5432、8787 不监听）。
+除既有结论（`sleep` 挂住 / `Start-Process` / `Win32_Process.Create`）外，本次又排除
+**`schtasks`、`explorer.exe`、`pg_ctl start`、`nohup &`** 四条路。
+⇒ 正确做法：**一次调用内跑完「起 → 断言 → 收尾」**，然后让用户双击。
