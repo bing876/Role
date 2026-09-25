@@ -72,7 +72,7 @@ import { useSidebarColumn } from './app/useSidebarColumn';
 import { useProjects } from './features/projects';
 import { AuthScreen, useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
-import { PersonaChips, useChat } from './features/chat';
+import { CollabCard, PersonaChips, isCollabMessage, useChat } from './features/chat';
 import type { AgentChat, Message, Role, PersonaChipsDraft, PersonaField } from './features/chat';
 import type { CurrentTask } from './features/tasks';
 
@@ -2419,7 +2419,16 @@ export default function App() {
                   </div>
                 );
               })()}
-              <div className={`msg ${m.role}`}>{m.text}</div>
+              {/*
+                规格 C3（2026-09-25）：协同进对话流（折叠）。
+                【协同·xxx】前缀的消息（服务端 collabChat/chiefOfStaff 写进主会话）
+                渲染成默认收起的一行摘要卡,点开看全文 —— 无抽屉、无仪表盘、无指派板。
+              */}
+              {m.role === 'assistant' && isCollabMessage(m.text) ? (
+                <CollabCard text={m.text} />
+              ) : (
+                <div className={`msg ${m.role}`}>{m.text}</div>
+              )}
               {/* 批次 E：第一个智能体提议同事，快捷建按钮（对话式建智能体、立刻建好不挡你） */}
               {m.role === 'assistant' && m.text.includes('建议先建这几位同事') && (
                 <div className="colleagueProposal" style={{ padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>

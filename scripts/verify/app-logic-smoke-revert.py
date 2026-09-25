@@ -4,7 +4,7 @@
 往**抽出去的 feature 源码**里注入「把代码搬出 App.tsx 时最可能犯的错」，
 行为验收网 `verify:logic` 必须每次都变红、且命中对应断言：
 
-  （名单已长到 K/M/G/P/A/T/F3/C/B/N 十组；N = M8' 搬 AuthScreen + C1 chips 的回归；下面只写前四条的来历）
+  （名单已长到 K/M/G/P/A/T/F3/C/B/N/L 十一组；N = M8' 搬 AuthScreen + C1 chips 的回归；L = C3 协同折叠卡；下面只写前四条的来历）
 
   K1 丢守卫：`load` 里删掉「切号后晚到的响应不许覆盖列表」
   K2 放宽校验：扩展名白名单里塞进 .exe
@@ -433,6 +433,22 @@ MUTATIONS = [
         'anchor': '    if (all) onComplete(next);\n',
         'replace': '',
         'expect': '⑬-2',
+    },
+    # ---- C3：协同进对话流（折叠卡）----
+    {
+        'file': APP_TSX,
+        'id': 'L1',
+        'visible': True,
+        'name': '把 C3 打回去：协同消息不再渲染成折叠卡（退回纯文本气泡,挤占对话流）',
+        'anchor': (
+            "              {m.role === 'assistant' && isCollabMessage(m.text) ? (\n"
+            "                <CollabCard text={m.text} />\n"
+            "              ) : (\n"
+            "                <div className={`msg ${m.role}`}>{m.text}</div>\n"
+            "              )}\n"
+        ),
+        'replace': "              <div className={`msg ${m.role}`}>{m.text}</div>\n",
+        'expect': '⑰-1',
     },
 ]
 

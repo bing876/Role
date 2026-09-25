@@ -361,7 +361,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     const qs2 = new URLSearchParams(url.split('?')[1] ?? '');
     const aid = Number(qs2.get('agentId') ?? '');
     if (aid === 98) return json({ conversationId: 502, messages: [{ id: 901, role: 'user', text: '八号的历史' }, { id: 902, role: 'assistant', text: '我是卡布' }] });
-    return json({ conversationId: 501, messages: [{ id: 900, role: 'assistant', text: '九七号的历史' }] });
+    /** 规格 C3：服务端 collabChat 写进主会话的协同消息（【协同·xxx】前缀,真格式）→ 前端必须渲染成折叠卡 */
+    return json({ conversationId: 501, messages: [
+      { id: 900, role: 'assistant', text: '九七号的历史' },
+      { id: 903, role: 'assistant', text: '【协同·派单】小助 → 小美：盯一下店铺数据，半小时后回话（ID:12）' },
+    ] });
   }
   if (path === '/memory/user') return json({ items: USER_MEM });
   const pm = /^\/agents\/(\d+)\/memory$/.exec(path);
@@ -1852,7 +1856,7 @@ await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.t
   assert.ok(!app.includes('function AgentGuide('), 'AgentGuide 还定义在 App.tsx（M8\' 没搬?）');
   assert.ok(!/const SETTINGS_FALLBACK/.test(app), 'SETTINGS_FALLBACK 还定义在 App.tsx（M8\' 没搬?）');
   assert.ok(app.includes("AuthScreen, useAuth } from './features/auth'"), 'App 没从 features/auth 引 AuthScreen');
-  assert.ok(app.includes("PersonaChips, useChat } from './features/chat'"), 'App 没从 features/chat 引 PersonaChips（C1）');
+  assert.ok(app.includes("CollabCard, PersonaChips, isCollabMessage, useChat } from './features/chat'"), 'App 没从 features/chat 引 C1 chips / C3 折叠卡');
   const chatImport = app.split('\n').find((l) => l.includes("from './features/chat'")) ?? '';
   assert.ok(!chatImport.includes('AgentGuide'), 'App 还在从 features/chat 引 AgentGuide（C1 已删）');
   assert.ok(!/<AgentGuide[\s/>]/.test(app), 'App.tsx 还在渲染 <AgentGuide/>（C1 已删）');
@@ -1885,6 +1889,59 @@ await check('⑮-2 M8\' 行为：登录页搬走后 ⚡ 快捷登录照旧走真
   assert.ok(q('.app') !== null, '快捷登录后工作台没出来（搬走的登录页接线断了?）');
   assert.ok(dom.window.localStorage.getItem('workbench.token'), '快捷登录后 token 没存本地（搬动丢了登录那步?）');
   await act(async () => root.unmount());
+});
+
+
+// ---------------------------------------------------------------------------
+// ⑰ C3 协同（2026-09-25 规格）：协同进对话流（折叠卡）—— 默认收起一行,点开全文,无抽屉
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑰ C3 协同：【协同·xxx】消息渲染成折叠卡（默认收起一行,点开全文,无抽屉/仪表盘） ---`);
+
+await check('⑰-1 C3：协同消息渲染成折叠卡（默认收起,点开看全文,再点收起）', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('协同卡出现', () => q('.collabCard') !== null, 60);
+  assert.ok(q('.collabCard'), '【协同·派单】消息没渲染成折叠卡（C3）');
+  // 默认收起：全文不在 DOM 里,只有一行摘要
+  assert.ok(q('.collabCard__body') === null, '协同卡默认是展开的（C3 要求默认收起一行摘要）');
+  const headText = q('.collabCard__head')?.textContent ?? '';
+  assert.ok(headText.includes('协同·派单'), '一行摘要没有种类（协同·派单）');
+  assert.ok(headText.includes('小助 → 小美'), '一行摘要没有谁→谁');
+  assert.ok(headText.includes('展开'), '没有「展开」入口');
+  // 点开 → 全文（真数据,不是写死）
+  await act(async () => {
+    click(q('.collabCard__head'), '展开协同卡');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const body = q('.collabCard__body');
+  assert.ok(body, '点开后全文没出现');
+  assert.ok((body?.textContent ?? '').includes('盯一下店铺数据，半小时后回话（ID:12）'), '展开的全文不是服务端写进来的真协同内容');
+  assert.ok((q('.collabCard')?.textContent ?? '').includes('协同·派单'), '展开态还留着种类徽标');
+  // 再点 → 收起
+  await act(async () => {
+    click(q('.collabCard__head'), '收起协同卡');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(q('.collabCard__body') === null, '再点一次没收起');
+  // 普通消息不受影响（还是 .msg 气泡,没被折叠卡吞）
+  assert.ok(qa('.msg').some((el) => (el.textContent ?? '').includes('九七号的历史')), '普通助手消息没了（协同判定误伤?）');
+  // C3 红线：没有独立协同抽屉/仪表盘/指派板
+  assert.ok(!q('[class*="collabPanel"]') && !q('[class*="dashboard"]') && !q('[class*="assignBoard"]'),
+    '出现了独立协同面板/仪表盘/指派板（C3 红线：协同只进对话流）');
+  await act(async () => root.unmount());
+});
+
+await check('⑰-2 C3 样式红线：16-collab-card.css 在场且挂入口；一行摘要裁切 + 左侧 accent 线', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '16-collab-card.css'), 'utf8');
+  assert.ok(/\.collabCard\s*\{/.test(css) && /\.collabCard__head\s*\{/.test(css) && /\.collabCard__body\s*\{/.test(css),
+    '折叠卡规则缺失（.collabCard/__head/__body）');
+  assert.ok(/border-left:\s*3px solid var\(--accent\)/.test(css), '折叠卡缺左侧 accent 线（视觉上该"退后一档"）');
+  assert.ok(/text-overflow:\s*ellipsis/.test(css), '一行摘要缺 ellipsis 裁切（会挤占对话流）');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./16-collab-card.css'), '折叠卡 CSS 没挂进设计入口');
 });
 
 log('');

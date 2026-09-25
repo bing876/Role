@@ -11,3 +11,4 @@ export { useChat } from './useChat';
 export type { AgentChat, ChatApi, Message, Role, UseChatOptions } from './useChat';
 export { PersonaChips } from './PersonaChips';
 export type { PersonaChipsDraft, PersonaField } from './PersonaChips';
+export { CollabCard, isCollabMessage } from './CollabCard';
