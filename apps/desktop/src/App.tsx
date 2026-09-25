@@ -12,10 +12,6 @@ import type {
   ChatSource,
   ChatStateResult,
   ConversationStateView,
-  KnowledgeDeleteResult,
-  KnowledgeDocument,
-  KnowledgeListResult,
-  KnowledgeUploadResult,
   MemoryEntry,
   MemoryLayerList,
   MemoryItem,
@@ -28,6 +24,21 @@ import type {
   TaskState,
   WorkbenchSettings,
 } from '@ai-workbench/shared';
+import type { ChatMentionMeta, ChatSpeaker } from '@ai-workbench/shared';
+/**
+ * 批次 J · @点名（渲染进程这一侧）：裁决权在服务端，桌面只需要一道闸 ——
+ * 服务端已经用「一句告知」答过的那两轮（R-A 忙 / 只写了 @名字），兜底不许再替用户发车。
+ * 判定收在 `./mentionGate`（可单测），App.tsx 不在 3500 行的组件里散写规则。
+ */
+import { shouldFallbackLaunch } from './mentionGate';
+/**
+ * 批次 M · 逻辑抽离第 1 片：`API_BASE` / `TOKEN_KEY` / `authFetchJson` / `dbHint`
+ * 原先写在本文件里（模块级、组件之外），被 30 多处逻辑用到。抽出 feature 时它们
+ * 必须离开 App.tsx —— 否则每个 feature 都要反向依赖 App。现已原样搬到 `shared/api.ts`。
+ */
+import { API_BASE, TOKEN_KEY, authFetchJson, dbHint } from './shared/api';
+import { useKnowledge } from './features/knowledge';
+import { useMemory } from './features/memory';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -35,6 +46,16 @@ import {
   CONTINUE_WEAK_RE,
   HOME_URL,
   HelpCard,
+  /**
+   * 收尾 7 | 批次 H 的电脑三级可见度**第一次真的挂进界面**。
+   * 它以前只在 `browser/index.ts` 里 export 着、没人渲染（H 空转），
+   * 而且自己 fetch 的路径是 `/api/agents/:id/visibility`（服务端没有 `/api` 前缀）、
+   * token 摸的是 `localStorage.getItem('token')`（真实 key 是 `workbench.token`）—— 两处都错，从没存上。
+   * 现在读写都走这两个导出的纯函数，地址与 JWT 由这边给（`API_BASE()` + `session.token`）。
+   */
+  ComputerVisibility,
+  loadVisibility,
+  saveVisibility,
   detectBrowseIntent,
   detectOpenUrl,
   detectStopIntent,
@@ -42,8 +63,15 @@ import {
   isPureOpenCommand,
   useBrowserWorkspace,
 } from './browser';
-import type { EmbedRect } from './browser';
+import type { BrowserWorkspace, ComputerVisibilityLevel, EmbedRect } from './browser';
 import { useResourceGuard } from './resources/useResourceGuard';
+import { useBrowserGlue } from './app/browserGlue';
+import { useProjects } from './features/projects';
+import { useAuth } from './features/auth';
+import { useTasks } from './features/tasks';
+import { useChat } from './features/chat';
+import type { AgentChat, Message, Role } from './features/chat';
+import type { CurrentTask } from './features/tasks';
 
 /**
  * 第 2 步（内嵌版）「脸和门」：
@@ -151,36 +179,10 @@ import { useResourceGuard } from './resources/useResourceGuard';
  *   - 分区规则、母鸡调度、项目级记忆都不在本子阶段范围内。
  */
 
-/** 第 18 步：聊天只剩这两种角色 —— 网页不再以消息形式出现在聊天里（看中栏工作区） */
-type Role = 'user' | 'assistant';
-type Message = {
-  id: number;
-  role: Role;
-  text: string;
-  /**
-   * 第 26 步：这条回复引用到的网页来源（本轮联网检索命中的）。
-   * 只有走过搜索的助手回复才有；渲染成气泡下方的可点链接。
-   */
-  sources?: ChatSource[];
-};
-/** 第 15 步：一个智能体 = 一份聊天（自己的消息列表 + 自己的会话号） */
-type AgentChat = { messages: Message[]; convId: number | null };
 /**
- * 第 27 步：一张**人工介入求助卡**（AI 主动求助）。
- *
- * ★ 这里刻意**只有文案与 id，没有任何输入字段** —— 卡片不承载输入能力，
- *   用户必须在上面那块**真实页面**里自己操作（安全红线，见 HelpCard.tsx 顶部注释）。
+ * 第 15 步：`Role` / `Message` / `AgentChat` / `EMPTY_MESSAGES` 的**定义**随片 7a 一起搬进
+ * `features/chat`（那边是唯一 owner）；本文件只 import 类型用。
  */
-type HelpCardView = {
-  /** 触发求助的那张内嵌页（guest webContents id）—— 恢复时要点名它 */
-  wcId: number;
-  agentId: number;
-  helpKind: 'captcha' | 'login';
-  question: string;
-  hint: string;
-};
-/** 空列表用同一个常量：切智能体时引用稳定，不会每次渲染都造新数组 */
-const EMPTY_MESSAGES: Message[] = [];
 
 /**
  * 阶段简报 · 方案 B：临时测试条用的相位中文名。
@@ -233,18 +235,9 @@ function driveStateView(
  * （和 server 端 promptPolicy.isContinueMarker 保持同一套词表。）
  */
 
-/** 第 8 步：GET /agent/task/current 的形态（红点/结果都认这个，不信内存假数据） */
-interface CurrentTask {
-  id: number;
-  status: string;
-  goal: string;
-  steps: string[];
-  unread: boolean;
-  summary?: string;
-  docTitle?: string;
-  unreadHint?: string;
-  outline?: string[];
-}
+/**
+ * 第 8 步：`CurrentTask` 的**定义**随片 6 一起搬进 `features/tasks`（那边是唯一 owner）。
+ */
 
 /**
  * 第 6 步：不再放写死的开场白。
@@ -265,16 +258,6 @@ interface CurrentTask {
 // - 未登录时整个工作台不渲染（登录门控在 App 的 return 处），不做“游客看假数据”那一套。
 // ---------------------------------------------------------------------------
 
-/** 后端地址：默认 127.0.0.1:8787；浏览器直测模式下自动使用相对路径走 Vite 代理 */
-const API_BASE = () => {
-  const custom = localStorage.getItem('workbench.apiBase');
-  if (custom) return custom;
-  if (typeof window !== 'undefined' && !(window as any).workbench?.isElectron) {
-    return '';
-  }
-  return 'http://127.0.0.1:8787';
-};
-const TOKEN_KEY = 'workbench.token';
 
 /**
  * 第 22 步：可调配置的**兜底值** —— `packages/shared` 里 `DEFAULT_SETTINGS` 的第二份。
@@ -301,38 +284,6 @@ const SETTINGS_FALLBACK: WorkbenchSettings = {
   resourceSysMemFloorMB: 1536,
 };
 
-async function authFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE()}${path}`, {
-      ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
-    });
-  } catch {
-    // ★ 文案要指向本机真正可用的那个动作。
-    // 这台机器上没有可用的 Docker（PG 是便携包），"npm run db:up" 是跑不通的；
-    // 正确做法是双击仓库根的 start-dev.cmd（它清陈旧 pid → 起 PG → 等库真能查 → 起服务端）。
-    throw new Error(`连不上后端 ${API_BASE()}：先双击仓库根目录的 start-dev.cmd 起库和服务端，再重试`);
-  }
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-  if (!res.ok) throw new Error(dbHint(data.error) ?? `HTTP ${res.status}`);
-  return data;
-}
-
-/**
- * 把服务端那句「先跑 docker compose…」换成本机真正可用的指引。
- *
- * 服务端 8 个 route 都会回同一句 503 文案（docker / npm run db:up），
- * 但本机没有可用的 Docker —— 对着这句照做只会更困惑。
- * 这里统一在渲染层做一次替换，改动面最小、也不会漏掉某个 route。
- */
-function dbHint(msg?: string): string | undefined {
-  if (!msg) return msg;
-  if (msg.includes('数据库连不上')) {
-    return '数据库没连上：双击仓库根目录的 start-dev.cmd（它会起库 + 服务端并等到真正可用），再点一次';
-  }
-  return msg;
-}
 
 type AuthTab = 'sms' | 'xyz' | 'wechat';
 
@@ -661,10 +612,6 @@ function AgentGuide({
 
 export default function App() {
   /** 头像右上角红点：第 8 步起由服务端 tasks.unread 驱动（登录后拉 current，done 事件点亮，看完熄灭） */
-  const [hasUnread, setHasUnread] = useState(false);
-  const [curTask, setCurTask] = useState<CurrentTask | null>(null);
-  const [taskDetailOpen, setTaskDetailOpen] = useState(false);
-  const [docNote, setDocNote] = useState('');
   /**
    * 第 4 步：任务状态机的镜像。
    * 权威状态在主进程（driver.ts），挂载时取一次 + 之后靠 'state' 广播同步；
@@ -689,77 +636,87 @@ export default function App() {
    * chats[agentId] = { messages, convId }；切换智能体只是换渲染哪一份，
    * 绝不把两个智能体的消息揉成一条时间线。
    */
-  const [chats, setChats] = useState<Record<number, AgentChat>>({});
-  /** 异步回包里读最新 chats（闭包里拿 state 会拿到旧的） */
-  const chatsRef = useRef<Record<number, AgentChat>>({});
-  chatsRef.current = chats;
+  /**
+   * ★ 这两个**留在 App**（不进 hook）：`curAgentId` 是左栏的选择，浏览器 / 记忆 / 胶水都要读；
+   *   `curAgentRef` 是它的「最新值镜像」（异步回包里读它，闭包里的 state 是旧的）。
+   *   片 7a 搬聊天状态时，**它们一个都没删**（用户点名的红线）。
+   */
   /** 左栏选中的那个智能体；null = 还没拿到列表 */
   const [curAgentId, setCurAgentId] = useState<number | null>(null);
   /** 异步回调里读「此刻是哪个智能体」——直接用 state 会拿到挂载时的旧闭包值 */
   const curAgentRef = useRef<number | null>(null);
-  curAgentRef.current = curAgentId;
-  /** 已经拉过历史的智能体，来回切换不反复请求 */
-  const historyLoadedRef = useRef<Set<number>>(new Set());
+  /**
+   * 收尾 7 | 电脑三级可见度（批次 H 的 `agents.computer_visibility`）：status / preview / takeover。
+   * 默认 `status`（收起，不抢焦点）—— 这是批次 H 的设计前提，也是服务端那列的默认值。
+   * 状态放在这里（不在组件里）有两个理由：① 切智能体要把那个智能体自己存的档位读回来；
+   * ② 「接管」档要顺带把浏览器前置，那是 `browser.showFullscreen()`，只有这边够得着。
+   */
+  const [computerVisibility, setComputerVisibility] = useState<ComputerVisibilityLevel>('status');
 
-  /** 只改**某一个**智能体的那份聊天。异步回包（尤其是流式）必须用它，别用下面的 setMessages */
-  const patchChat = (agentId: number, patch: (c: AgentChat) => AgentChat) => {
-    setChats((prev) => {
-      const cur = prev[agentId] ?? { messages: [], convId: null };
-      const next = patch(cur);
-      return next === cur ? prev : { ...prev, [agentId]: next };
-    });
-  };
-  const curChat = curAgentId === null ? undefined : chats[curAgentId];
-  const messages = curChat?.messages ?? EMPTY_MESSAGES;
-  /** 往「当前智能体」那份聊天里追加/替换消息（沿用第 6 步以来的调用点写法） */
-  const setMessages = (updater: Message[] | ((prev: Message[]) => Message[])) => {
-    const id = curAgentRef.current;
-    if (id === null) return;
-    patchChat(id, (c) => ({ ...c, messages: typeof updater === 'function' ? updater(c.messages) : updater }));
-  };
   /** 第 1 步的 IPC 自检，留着当回归哨兵 */
   const [bridgeInfo, setBridgeInfo] = useState('检测中…');
 
-  // ---- 第 5 步：会话。JWT 从 localStorage 读回后只放内存 state；绝不 console 打全文 ----
-  const [session, setSession] = useState<AuthSession | null>(null);
+  /**
+   * 批次 M · 逻辑抽离第 5 片：**会话**（静默登录 / 改密码 / 登出）搬进 `features/auth`。
+   *
+   * ★ 依旧**只换来源、不改名字** → 下面 30 多处 `session?.token`、JSX 里的
+   *   `pwOld/pwNew/pwMsg/onSubmitPassword/onLogout` 一个字都不用改。
+   * ★ 登出被有意切成两半：会话那一半在 hook（`signOutSession`），
+   *   跨 feature 清场那一半留在本文件的 `onLogout`（见那里的注释）。
+   */
+  const {
+    session,
+    setSession,
+    checkingAuth,
+    pwOld,
+    setPwOld,
+    pwNew,
+    setPwNew,
+    pwMsg,
+    setPwMsg,
+    submitPassword: onSubmitPassword,
+    signOutSession,
+  } = useAuth();
   /**
    * 多智能体编排 · 「内部频道」面板开没开。
    *
    * 只是个视图开关（与 `browser.view` 同一性质）：开了盖在中栏上面看智能体之间的
    * 委派对话，关掉就回到原来的样子 —— **不 start / 不 resume / 不碰任何一路驾驶**。
    */
-  const [checkingAuth, setCheckingAuth] = useState(() => Boolean(localStorage.getItem(TOKEN_KEY)));
-  const [pwOld, setPwOld] = useState('');
-  const [pwNew, setPwNew] = useState('');
-  const [pwMsg, setPwMsg] = useState('');
 
-  /** 带已存 token 调 /auth/me：能换回 profile 就静默登录，换不回来就清 token 回登录页 */
-  useEffect(() => {
-    const saved = localStorage.getItem(TOKEN_KEY);
-    if (!saved) return;
-    let off = false; // 卸载标志：慢回来的响应不再 setState
-    authFetchJson<AuthProfile>('/auth/me', { headers: { authorization: `Bearer ${saved}` } })
-      .then((p) => {
-        if (off) return;
-        /**
-         * ★ F5 后的静默恢复 —— **必须**同步给主进程。
-         * 这条路径完全不经过主进程（token 是从 localStorage 直接读出来的），
-         * 不同步的话就会出现「渲染层已登录、主进程没凭证」，
-         * 用户刷新后立刻点下载文档就会报"没有登录凭证"。
-         */
-        void window.workbench?.syncSession?.(API_BASE(), saved);
-        setSession({ ...p, token: saved });
-      })
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        // 登录态失效 → 顺手把主进程那份也清掉，别留着一份过期的还能发请求
-        void window.workbench?.syncSession?.(API_BASE(), '');
-        if (!off) setSession(null);
-      })
-      .finally(() => { if (!off) setCheckingAuth(false); });
-    return () => { off = true; };
-  }, []);
+  /**
+   * ★ 批次 M · 逻辑抽离时**上移**：`sessionRef` 原先声明在下面（第 8 步任务快照那段），
+   *   那时它只在函数体里被延迟引用（`memHeaders()` 之类），声明顺序无所谓；
+   *   现在 memory feature 的 hook 调用要在**渲染期**读到它，必须声明在使用之前。
+   *   移动 `useRef` 的位置不改变 hook 的**稳定性**（仍然无条件、每次渲染同一顺序）。
+   */
+  const sessionRef = useRef<AuthSession | null>(null);
+  sessionRef.current = session;
 
+  /**
+   * 批次 M · 逻辑抽离第 6 片：任务快照 / 结果详情 / 文档下载搬进 `features/tasks`。
+   * ★ 同名解构（连 setter 都同名）→ 主进程事件分发那几处 `setHasUnread(…)`、
+   *   JSX 里的 `curTask` / `taskDetailOpen` / `docNote` 一个字都不用改。
+   */
+  const {
+    curTask,
+    setCurTask,
+    taskDetailOpen,
+    setTaskDetailOpen,
+    docNote,
+    setDocNote,
+    hasUnread,
+    setHasUnread,
+    refreshTask,
+    openTaskResult,
+    downloadTaskDoc,
+    resetTasks,
+  } = useTasks({ sessionRef, session });
+
+  /**
+   * 静默登录（带已存 token 调 `/auth/me` 换回 profile）也搬进 `features/auth` 了 ——
+   * 它和 session 是同一件事，分开写就会出现"两个地方各自决定登录态"。
+   */
   // ---- 第 6 步：流式聊天状态（真聊天，不再是内存假数据）----
   /**
    * 第 13 步：这一轮的**用户原话**是不是「开网页指令」。
@@ -768,24 +725,9 @@ export default function App() {
    * 第 15 步：按智能体分别记（否则在 A 里开的网页会压掉 B 里的确认按钮）。
    */
   const lastUserWasOpenRef = useRef<Record<number, boolean>>({});
-  const [streaming, setStreaming] = useState(false);
   /** 第 15 步：这轮流式是**哪个**智能体在打字——切走后不该在别的智能体里冒出打字气泡 */
-  const [streamingAgentId, setStreamingAgentId] = useState<number | null>(null);
   /** 打字机中的半截助手回复（done 之前只活在这里；库里只有完成的全文） */
-  const [streamText, setStreamText] = useState('');
   /** 聊天区一条可关闭的提示（未配置模型 / 出错 / 已先行暂停等），不冒充 AI 的话 */
-  const [chatNote, setChatNote] = useState('');
-  /**
-   * 第 26 步：联网搜索的**过程提示**（一行小字，如「正在搜索：今天有什么新闻」）。
-   *
-   * 为什么要有：搜索是**轻量、无界面**的能力 —— 不打开任何网页、不出现浏览器卡片，
-   * 如果界面上一点动静都没有，用户会以为「AI 卡住了 / 在瞎编」。
-   * 所以这里只补一行纯文字状态，让它**看得见但不打扰**（不做动画、不做美化）。
-   *
-   * 注意：它跟浏览器那条链路毫无关系 —— 这里只读服务端推来的 `search` 事件，
-   * 不碰任何开页判定、不碰驾驶循环、不碰浏览器面板的渲染。
-   */
-  const [searchHint, setSearchHint] = useState('');
 
   /**
    * 第 9 步：驾驶员在聊天里等用户回答普通资料（need_info）——回答后自动继续，不用点「继续」。
@@ -794,13 +736,6 @@ export default function App() {
    */
   const [agentAwaitInfo, setAgentAwaitInfo] = useState(false);
   const [agentAwaitAgent, setAgentAwaitAgent] = useState<number | null>(null);
-  /** 任务模式状态机追踪（idle / running / paused / waiting_user） */
-  const [runningLoopId, setRunningLoopId] = useState<string | null>(null);
-  const [runningLoopWcId, setRunningLoopWcId] = useState<number | null>(null);
-  const runningLoopIdRef = useRef<string | null>(null);
-  const runningLoopWcIdRef = useRef<number | null>(null);
-  runningLoopIdRef.current = runningLoopId;
-  runningLoopWcIdRef.current = runningLoopWcId;
   /** 第 17 步：提问来自**哪一张页**（答复只喂给那一路，不串到另一路） */
   const [agentAwaitWcId, setAgentAwaitWcId] = useState<number | null>(null);
   /**
@@ -828,7 +763,6 @@ export default function App() {
    *   - `agents` 与 `curProjectId` **永远一起更新**（见 enterProject），
    *     所以「名单里挑母鸡」不会挑到别的项目的人。
    */
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [curProjectId, setCurProjectId] = useState<number | null>(null);
   const curProjectRef = useRef<number | null>(null);
   const agentsRef = useRef<AgentView[]>([]);
@@ -842,19 +776,9 @@ export default function App() {
    * 那张页落到兜底分区 `…-project-none`，宁可让它登出，也绝不让它跟真项目混。
    */
   const agentProjectRef = useRef<Map<number, number>>(new Map());
-  const [projectsOpen, setProjectsOpen] = useState(false);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [projectBusy, setProjectBusy] = useState(false);
-  const [projectNote, setProjectNote] = useState('');
   /** 第 15 步 · 第一层：用户记忆库（账号级，所有智能体都能读，界面上也列出来） */
-  const [userMem, setUserMem] = useState<MemoryEntry[]>([]);
-  const [userMemOpen, setUserMemOpen] = useState(false);
   /** 第 15 步 · 第二层：**当前智能体**的项目记忆（智能体级，切智能体就整块换掉） */
-  const [projMem, setProjMem] = useState<MemoryEntry[]>([]);
-  const [projMemOpen, setProjMemOpen] = useState(false);
   /** 记忆合并第四批：待确认记忆（decision/fact 需用户确认才生效） */
-  const [pendingMem, setPendingMem] = useState<MemoryItem[]>([]);
-  const [pendingMemOpen, setPendingMemOpen] = useState(false);
   /**
    * 第 16 步：每个智能体的**会话状态**（服务端现有 Postgres 的 conversations 表为准）。
    * current_task / browser_confirmed / keepalive 都从这里来；进程重启后靠它恢复「当前任务」。
@@ -866,37 +790,14 @@ export default function App() {
   /** 保活开关正在请求中（防连点） */
   const [keepaliveBusy, setKeepaliveBusy] = useState(false);
   /** 第 11 步：知识库资料独立于 memories；只展示当前账号的文件元信息和已入库段数。 */
-  const [knowledgeDocs, setKnowledgeDocs] = useState<KnowledgeDocument[]>([]);
-  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
-  const [knowledgeUploading, setKnowledgeUploading] = useState(false);
-  const [knowledgeNote, setKnowledgeNote] = useState('');
   /** 建完能改人设：编辑态 */
   const [personaEditOpen, setPersonaEditOpen] = useState(false);
   const [personaEditAgentId, setPersonaEditAgentId] = useState<number | null>(null);
   const [personaEditDraft, setPersonaEditDraft] = useState<AgentPersona>({ name: '', who: '', tone: '', duty: '' });
   /** 第 19 步：正在删的那条资料 id（按钮显示「删除中…」并防连点），null = 没有删除在跑 */
-  const [knowledgeDeletingId, setKnowledgeDeletingId] = useState<number | null>(null);
-  const knowledgeFileRef = useRef<HTMLInputElement | null>(null);
   /** 第 7 步：主进程 'agent' 事件的镜像（步摘要/文档结论），权威循环在主进程 */
-  const [agentSteps, setAgentSteps] = useState<string[]>([]);
-  const [agentDoc, setAgentDoc] = useState<{ title: string; outline: string[] } | null>(null);
 
-  /** 聊天里追加一条「小助之外」的系统泡（driver 循环的问话/结论/报错），只进内存展示 */
-  const pushChatLine = (text: string) => {
-    setMessages((prev) => prev.concat({ id: Date.now() + Math.floor(Math.random() * 1000), role: 'assistant', text }));
-  };
 
-  /**
-   * 第 17 步：按智能体落桶的系统泡。
-   * 两路驾驶可能分属两个智能体，事件里的 wcId 决定这条话进谁的聊天 ——
-   * 绝不按「此刻正在看的那个智能体」乱写（那正是「聊天串了」）。
-   */
-  const pushChatLineFor = (agentId: number, text: string) => {
-    patchChat(agentId, (c) => ({
-      ...c,
-      messages: c.messages.concat({ id: Date.now() + Math.floor(Math.random() * 1000), role: 'assistant', text }),
-    }));
-  };
 
   /**
    * 第 22 步：改可调配置（并发数 / 多实例上限）。
@@ -932,44 +833,141 @@ export default function App() {
   };
 
   // ---- 第 15 步：两层记忆 + 智能体列表（一切以服务端为准，界面只做展示） ----
-  const memHeaders = () => ({ authorization: `Bearer ${sessionRef.current?.token ?? ''}` });
+  /**
+   * 批次 M · 逻辑抽离第 2 片：两层记忆 + 待确认记忆的逻辑搬进 `features/memory`。
+   *
+   * ★ 同样**只换来源、不改名字**（下面解构出来的名字与原变量完全一致），
+   *   所以 JSX 与后面那些调用点（loadAgents / selectAgent / tidyCurrentAgent …）一个字都不用改。
+   * ★ `sessionRef` / `curAgentRef` 是**注入**的：这两个"最新值镜像"ref 原样留在 App 里。
+   * ★ `onNote` 传的是 `setChatNote`：提示文案仍写在聊天流里，但 memory feature 不依赖 chat 的 state。
+   */
+  /**
+   * 批次 M · 逻辑抽离第 7b 片：**两个"定义在 useChat 之后"的依赖，用最新值镜像注入**。
+   *
+   *   · `browserRef` —— 浏览器工作区 `useBrowserWorkspace(...)` 排在 `useChat(...)` 之后
+   *     （它自己要用 `setChatNote`），而 `sendChat` 要指挥它（开页 / 叫醒睡着的页 / 停 / 刷横幅）；
+   *   · `loadAgentStateRef` —— 同理：`loadAgentState` 的定义在下面，一轮结束后要回刷状态行。
+   *
+   * 两个都是「渲染期赋值、调用期读取」，与 `chatsRef` / `agentsRef` / `curAgentRef` 同一条规矩：
+   * 不新建 state、不加 React 依赖，闭包里永远不会拿到旧对象。
+   */
+  const browserRef = useRef<BrowserWorkspace | null>(null);
+  const loadAgentStateRef = useRef<(agentId: number) => Promise<void>>(async () => undefined);
 
-  /** 第一层：用户记忆库（账号级）——任何智能体都读得到，界面也一样列出来 */
-  const loadUserMemory = async () => {
-    if (!sessionRef.current) return;
-    try {
-      const r = await authFetchJson<MemoryLayerList>('/memory/user', { headers: memHeaders() });
-      setUserMem(r.items);
-    } catch {
-      /* 后端/库没起就不打扰 */
-    }
-  };
-  /** 第二层：某个智能体的项目记忆（智能体级）——切智能体就整块换成它自己的 */
-  const loadProjectMemory = async (agentId: number) => {
-    if (!sessionRef.current) return;
-    try {
-      const r = await authFetchJson<MemoryLayerList>(`/agents/${agentId}/memory`, { headers: memHeaders() });
-      // 切走之后晚到的响应不能覆盖当前智能体的那份
-      if (curAgentRef.current !== agentId) return;
-      setProjMem(r.items);
-    } catch {
-      /* 同上 */
-    }
-  };
-  /** 记忆合并第四批：待确认记忆（账号级+智能体级+会话级，三级合并） */
-  const loadPendingMemory = async (agentId?: number | null, conversationId?: number | null) => {
-    if (!sessionRef.current) return;
-    try {
-      const params = new URLSearchParams();
-      if (agentId) params.set('agentId', String(agentId));
-      if (conversationId) params.set('conversationId', String(conversationId));
-      const qs = params.toString() ? `?${params.toString()}` : '';
-      const r = await authFetchJson<MemoryListResult>(`/memories${qs}`, { headers: memHeaders() });
-      setPendingMem(r.pending);
-    } catch {
-      /* 后端/库没起就不打扰 */
-    }
-  };
+  /**
+   * 批次 M · 逻辑抽离第 7a 片：**聊天这一侧的 state 与历史**搬进 `features/chat`。
+   *
+   * ★ 依旧**只换来源、不改名字** → 本文件 100 多处 `messages` / `setMessages` / `chatNote` /
+   *   `agentSteps` / `streaming` … 以及 JSX 一个字都不用改。
+   * ★ `setChatNote` 现在从 hook 出来，仍是**其它 feature 唯一往聊天里说话的通道**
+   *   （浏览器工作区、记忆、胶水都拿它当 `onNote`）—— 所以这个 hook 必须排在它们之前。
+   * ★ 片 7b 之后：`sendChat` / `onSend` / `startAgentTask` 也从这里出来（注入见上面的端口注释），
+   *   本文件只留「组合层」的连线与 JSX。
+   */
+  const {
+    chats,
+    setChats,
+    chatsRef,
+    historyLoadedRef,
+    curChat,
+    messages,
+    setMessages,
+    patchChat,
+    streaming,
+    setStreaming,
+    streamingAgentId,
+    setStreamingAgentId,
+    streamText,
+    setStreamText,
+    chatNote,
+    setChatNote,
+    agentSteps,
+    setAgentSteps,
+    agentDoc,
+    setAgentDoc,
+    pushChatLine,
+    pushChatLineFor,
+    loadAgentHistory,
+    resetChat,
+    /** 片 7b 搬进来的（JSX 里 `searchHint` / `runningLoopId` / `onSend` / `startAgentTask` 照旧同名） */
+    searchHint,
+    runningLoopId,
+    sendChat,
+    onSend,
+    startAgentTask,
+  } = useChat({
+    sessionRef,
+    curAgentId,
+    curAgentRef,
+    /**
+     * ---- 片 7b：`sendChat` / `startAgentTask` 要的东西，一律由**组合层**在这里注入 ----
+     * 「只换来源、不改名字」→ 那两个函数的正文可以逐字搬（只有 3 处白名单改动）。
+     */
+    session,
+    input,
+    setInput,
+    browserRef,
+    /** 任务侧：发车前熄红点（`features/tasks`） */
+    setHasUnread,
+    agentsRef,
+    lastUserWasOpenRef,
+    lastUserGoalBeforeConfirm,
+    loadAgentStateRef,
+    /** 「等继续」四件套（写它的那条事件分发 effect 在下面，留在 App） */
+    resume: {
+      awaitResume,
+      awaitResumeAgent,
+      awaitResumeWc,
+      setAwaitResume,
+      setAwaitResumeAgent,
+      setAwaitResumeWc,
+    },
+    /** 「驾驶员问资料」四件套（同上） */
+    askInfo: {
+      agentAwaitInfo,
+      agentAwaitAgent,
+      agentAwaitWcId,
+      setAgentAwaitInfo,
+      setAgentAwaitAgent,
+      setAgentAwaitWcId,
+    },
+    /** 批次 J 的兜底发车闸（纯函数，住在 `./mentionGate`） */
+    shouldFallbackLaunch,
+    /** 纯本地判定（开页 / 停 / 继续…）：单一实现住在 `browser/`，注入进来用 */
+    intent: {
+      detectStopIntent,
+      detectOpenUrl,
+      detectUnknownOpenTarget,
+      isPureOpenCommand,
+      CONTINUE_STRONG_RE,
+      CONTINUE_WEAK_RE,
+      CONFIRM_ASK_RE,
+      HOME_URL,
+    },
+  });
+
+  const {
+    user: userMem,
+    setUser: setUserMem,
+    userOpen: userMemOpen,
+    setUserOpen: setUserMemOpen,
+    project: projMem,
+    setProject: setProjMem,
+    projectOpen: projMemOpen,
+    setProjectOpen: setProjMemOpen,
+    pending: pendingMem,
+    setPending: setPendingMem,
+    pendingOpen: pendingMemOpen,
+    setPendingOpen: setPendingMemOpen,
+    loadUser: loadUserMemory,
+    loadProject: loadProjectMemory,
+    loadPending: loadPendingMemory,
+    forget: forgetEntry,
+    confirm: confirmMemory,
+    reject: rejectMemory,
+    confirmAll: confirmAllPending,
+    rejectAll: rejectAllPending,
+  } = useMemory({ sessionRef, curAgentRef, onNote: setChatNote });
 
   /**
    * 第 16 步：拉某个智能体的会话状态（当前任务 / 是否已同意用浏览器 / 是否保活）。
@@ -988,6 +986,8 @@ export default function App() {
       /* 后端/库没起就不打扰 */
     }
   };
+  /** ★ 片 7b：同上（`sendChat` 收尾要回刷状态行） */
+  loadAgentStateRef.current = loadAgentState;
 
   /**
    * 「启动并保活」：只把该会话标成监听态（服务端 conversations.keepalive）。
@@ -1020,25 +1020,6 @@ export default function App() {
     }
   };
 
-  /** 拉某个智能体自己的那条会话历史（一个智能体一份聊天，不串） */
-  const loadAgentHistory = async (agent: AgentView) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    const q = agent.conversationId !== null ? `?conversationId=${agent.conversationId}` : `?agentId=${agent.id}`;
-    try {
-      const h = await authFetchJson<ChatHistoryResult>(`/chat/history${q}`, {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return; // 切号期间晚到的响应丢掉
-      historyLoadedRef.current.add(agent.id);
-      patchChat(agent.id, () => ({
-        messages: h.messages.map((m) => ({ id: m.id, role: m.role, text: m.text, sources: m.sources })),
-        convId: h.conversationId,
-      }));
-    } catch (e) {
-      setChatNote(`拉取历史失败：${(e as Error).message}`);
-    }
-  };
 
   /**
    * 子阶段 2-B：按项目取智能体名单（**纯取，不动 state**）。
@@ -1098,32 +1079,6 @@ export default function App() {
   };
 
   // ---- 子阶段 2-B：项目层（最小化验证版；不做正式 UI 交互）----
-  /** 读项目列表；把「当前使用中的项目」同步到 state 与 ref，并返回它 */
-  const loadProjects = async (): Promise<number | null> => {
-    const sess = sessionRef.current;
-    if (!sess) return null;
-    try {
-      const r = await authFetchJson<ProjectListResult>('/projects', {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return null;
-      setProjects(r.projects);
-      /**
-       * ★ 把项目列表推给主进程 —— 分区闸（`will-attach-webview`）靠它判定归属。
-       * 主进程那个事件是**同步**的，没法自己去拉，所以必须在这里显式同步一次。
-       * 拿不到列表时（上面 catch）不同步，主进程会保持"还没同步过"的宽松状态。
-       */
-      void window.workbench?.syncProjects?.(r.projects.map((p) => p.id));
-      curProjectRef.current = r.currentProjectId;
-      setCurProjectId(r.currentProjectId);
-      setProjectNote('');
-      return r.currentProjectId;
-    } catch (e) {
-      setProjectNote(`读不到项目列表：${(e as Error).message}`);
-      return null;
-    }
-  };
-
   /**
    * 进入某个项目：先把「新项目 id」和「它的名单」**一次性**写进 state，再补拉历史 / 项目记忆 /
    * 会话状态 / 资料列表。这样中间不会出现「项目已经换了、名单还是上一个项目的」那一帧。
@@ -1154,52 +1109,30 @@ export default function App() {
     void loadKnowledge(id);
   };
 
-  /** 切换当前项目：服务端 activate 先落地，再进这个项目（名单与资料一起换） */
-  const switchProject = async (id: number) => {
-    const sess = sessionRef.current;
-    if (!sess || projectBusy || id === curProjectRef.current) return;
-    setProjectBusy(true);
-    setProjectNote('');
-    try {
-      await authFetchJson<ProjectUpdateResult>(`/projects/${id}/activate`, {
-        method: 'POST',
-        body: '{}',
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return;
-      await enterProject(id);
-      await loadProjects();
-    } catch (e) {
-      setProjectNote(`切换项目没成：${(e as Error).message}`);
-    } finally {
-      setProjectBusy(false);
-    }
-  };
-
-  /** 新建项目（服务端连带建一只母鸡并设为当前项目）→ 直接进这个新项目 */
-  const createProject = async () => {
-    const sess = sessionRef.current;
-    const name = newProjectName.trim();
-    if (!sess || projectBusy || !name) return;
-    setProjectBusy(true);
-    setProjectNote('');
-    try {
-      const r = await authFetchJson<ProjectCreateResult>('/projects', {
-        method: 'POST',
-        body: JSON.stringify({ name }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (sessionRef.current?.token !== sess.token) return;
-      setNewProjectName('');
-      setProjectNote(`项目「${r.project.name}」建好了（自带一只母鸡），已经切过去。`);
-      await enterProject(r.project.id);
-      await loadProjects();
-    } catch (e) {
-      setProjectNote(`建项目没成：${(e as Error).message}`);
-    } finally {
-      setProjectBusy(false);
-    }
-  };
+  /**
+   * 批次 M · 逻辑抽离第 4 片：项目列表 / 切换 / 新建搬进 `features/projects`。
+   * ★ **进入项目（enterProject）留在上面这一层** —— 它要同时动 chat / memory / knowledge 三块，
+   *   属于跨 feature 协调，按拍板只能待在组合层；这里把它注入给 hook。
+   * ★ 同名解构 → 下面 JSX（disabled={projectBusy} 等）一个字都不用改。
+   */
+  const {
+    projects,
+    projectsOpen,
+    setProjectsOpen,
+    projectBusy,
+    projectNote,
+    newProjectName,
+    setNewProjectName,
+    loadProjects,
+    switchProject,
+    createProject,
+    resetProjects,
+  } = useProjects({
+    sessionRef,
+    curProjectRef,
+    onCurrentProject: setCurProjectId,
+    onEnterProject: enterProject,
+  });
 
   /** 切智能体 = 换一份聊天：换消息列表、换项目记忆 */
   const selectAgent = (agent: AgentView) => {
@@ -1422,241 +1355,40 @@ export default function App() {
     }
   };
 
-  /** 忘掉一条：user = 账号级用户记忆库；agent = 当前智能体的项目记忆 */
-  const forgetEntry = async (layer: 'user' | 'agent', id: number) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      await authFetchJson('/memory/forget', {
-        method: 'POST',
-        body: JSON.stringify({ layer, id }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (layer === 'user') void loadUserMemory();
-      else if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
-    } catch (e) {
-      setChatNote(`忘掉失败：${(e as Error).message}`);
-    }
-  };
-
-  /** 记忆合并第四批：确认/拒绝待确认记忆 */
-  const confirmMemory = async (id: number) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      await authFetchJson('/memories/confirm', {
-        method: 'POST',
-        body: JSON.stringify({ ids: [id] }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem((prev) => prev.filter((m) => m.id !== id));
-      void loadUserMemory();
-      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
-      setChatNote('已确认一条记忆，今后会按它执行。');
-    } catch (e) {
-      setChatNote(`确认失败：${(e as Error).message}`);
-    }
-  };
-  const rejectMemory = async (id: number) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      await authFetchJson('/memories/reject', {
-        method: 'POST',
-        body: JSON.stringify({ ids: [id] }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem((prev) => prev.filter((m) => m.id !== id));
-      setChatNote('已忽略一条记忆。');
-    } catch (e) {
-      setChatNote(`忽略失败：${(e as Error).message}`);
-    }
-  };
-  const confirmAllPending = async () => {
-    const sess = sessionRef.current;
-    if (!sess || pendingMem.length === 0) return;
-    try {
-      await authFetchJson('/memories/confirm', {
-        method: 'POST',
-        body: JSON.stringify({ all: true }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem([]);
-      void loadUserMemory();
-      if (curAgentRef.current !== null) void loadProjectMemory(curAgentRef.current);
-      setChatNote(`已确认全部 ${pendingMem.length} 条记忆。`);
-    } catch (e) {
-      setChatNote(`批量确认失败：${(e as Error).message}`);
-    }
-  };
-  const rejectAllPending = async () => {
-    const sess = sessionRef.current;
-    if (!sess || pendingMem.length === 0) return;
-    try {
-      await authFetchJson('/memories/reject', {
-        method: 'POST',
-        body: JSON.stringify({ all: true }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      setPendingMem([]);
-      setChatNote(`已忽略全部 ${pendingMem.length} 条待确认记忆。`);
-    } catch (e) {
-      setChatNote(`批量忽略失败：${(e as Error).message}`);
-    }
-  };
-
-  /** 第 8 步：任务快照（状态/未读/结果）——红点的唯一事实源。
-   *  用 ref 拿会话：agent 订阅 effect 是挂载时建的闭包，直接引用 session 会拿到旧的 null。 */
-  const sessionRef = useRef<AuthSession | null>(null);
-  sessionRef.current = session;
-
-  // ---- 第 11 步：资料上传/列表。文件直接由当前渲染进程 POST 到本机服务端，
-  // 不经过 preload，不开新窗口；multipart 的 Content-Type 必须让浏览器自己带 boundary。 ----
   /**
-   * 子阶段 2-B：资料列表**按项目**拉（`?projectId=`）。
-   * 不传就走服务端的「当前使用中的项目」——两条路都以服务端为准，前端不自己过滤。
+   * 记忆的 5 个写操作（忘掉 / 确认 / 拒绝 / 批量确认 / 批量拒绝）也搬进 `features/memory`，
+   * 见上面的 useMemory 解构 —— 本文件只留调用点。
    */
-  const loadKnowledge = async (projectId?: number | null) => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    const pid = projectId === undefined ? curProjectRef.current : projectId;
-    try {
-      const r = await authFetchJson<KnowledgeListResult>(pid === null ? '/knowledge' : `/knowledge?projectId=${pid}`, {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      // 切号期间晚到的 A 号响应不能覆盖 B 号列表。
-      if (sessionRef.current?.token !== sess.token) return;
-      setKnowledgeDocs(r.documents);
-    } catch {
-      /* 资料列表属于辅助入口，后端暂不可达时不打扰已登录界面 */
-    }
-  };
-  const uploadKnowledgeFile = async (file: File) => {
-    const sess = sessionRef.current;
-    if (!sess || knowledgeUploading) return;
-    const supported = /\.(txt|md|pdf)$/i.test(file.name);
-    if (!supported) {
-      setKnowledgeNote('只支持 .txt、.md、.pdf 文件。');
-      return;
-    }
-    if (file.size > 12 * 1024 * 1024) {
-      setKnowledgeNote('文件超过 12 MB，本版请拆分后上传。');
-      return;
-    }
-    setKnowledgeNote('');
-    setKnowledgeUploading(true);
-    try {
-      const form = new FormData();
-      form.append('file', file, file.name);
-      let res: Response;
-      try {
-        res = await fetch(`${API_BASE()}/knowledge/upload`, {
-          method: 'POST',
-          headers: { authorization: `Bearer ${sess.token}` },
-          body: form,
-        });
-      } catch {
-        throw new Error(`连不上后端 ${API_BASE()}：先双击仓库根目录的 start-dev.cmd 起库和服务端，再重试`);
-      }
-      const data = (await res.json().catch(() => ({}))) as KnowledgeUploadResult & { error?: string };
-      if (!res.ok) throw new Error(dbHint(data.error) ?? `HTTP ${res.status}`);
-      // 若用户在上传过程中退出/切换账号，不把旧账号的成功提示带到新账号界面。
-      if (sessionRef.current?.token !== sess.token) return;
-      const doc = data.document;
-      setKnowledgeNote(`《${doc.filename}》已入库，共 ${doc.chunkCount} 个片段。`);
-      await loadKnowledge(curProjectRef.current);
-    } catch (e) {
-      setKnowledgeNote(`上传没有入库：${(e as Error).message}`);
-    } finally {
-      setKnowledgeUploading(false);
-    }
-  };
-  const onChooseKnowledgeFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
-    // 清空值后，用户选择同一份文件也会再次触发 change。
-    event.currentTarget.value = '';
-    if (file) void uploadKnowledgeFile(file);
-  };
 
   /**
-   * 第 19 步：删掉当前账号的一条资料（服务端连它的切块一起删）。
+   * 批次 M · 逻辑抽离第 1 片：资料（知识库）的逻辑搬进 `features/knowledge`。
    *
-   * 一点就删、只回一句人话 —— 不做二次确认弹窗，也不做回收站/重命名（本步明确不做）。
-   * 删除权限完全由服务端的 JWT 决定：这里只传资料 id，删不到别人的资料（会得到 404）。
-   * 本地列表用「过滤掉这条」而不是整表重拉，避免删完闪烁；刷新页面时以服务端为准。
+   * ★ 这里**只换来源，不改名字**：下面解构出来的 `knowledgeDocs` / `loadKnowledge` …
+   *   与原变量同名，所以本文件 3714 行里的 JSX **一个字都不用改**（用户 2026-09-24 的叫停：
+   *   设计语言未定稿前不搬 JSX/CSS，只抽逻辑）。
+   * ★ `sessionRef` / `curProjectRef` 是**注入**进去的（hook 不自己持有真相）——
+   *   这两个镜像 ref 一个都没删，见本文件里"最新值镜像"那条注释。
    */
-  const deleteKnowledgeDoc = async (doc: KnowledgeDocument) => {
-    const sess = sessionRef.current;
-    if (!sess || knowledgeDeletingId !== null) return;
-    setKnowledgeNote('');
-    setKnowledgeDeletingId(doc.id);
-    try {
-      const r = await authFetchJson<KnowledgeDeleteResult>(`/knowledge/${doc.id}`, {
-        method: 'DELETE',
-        // 空 body 会被 fastify 判 400，这里明确送一个 JSON 空对象。
-        body: '{}',
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      // 删除期间切了账号：不要拿 A 号的结果去动 B 号的列表/提示。
-      if (sessionRef.current?.token !== sess.token) return;
-      setKnowledgeDocs((prev) => prev.filter((d) => d.id !== doc.id));
-      setKnowledgeNote(`《${doc.filename}》已删除${r.removedChunks ? `（连同 ${r.removedChunks} 个片段）` : ''}。`);
-    } catch (e) {
-      if (sessionRef.current?.token !== sess.token) return;
-      setKnowledgeNote(`删除失败：${(e as Error).message}`);
-      void loadKnowledge(curProjectRef.current); // 服务端说没有这份资料时，用真实列表把界面拉回来
-    } finally {
-      setKnowledgeDeletingId(null);
-    }
-  };
+  const {
+    documents: knowledgeDocs,
+    setDocuments: setKnowledgeDocs,
+    open: knowledgeOpen,
+    setOpen: setKnowledgeOpen,
+    uploading: knowledgeUploading,
+    note: knowledgeNote,
+    deletingId: knowledgeDeletingId,
+    fileRef: knowledgeFileRef,
+    load: loadKnowledge,
+    upload: uploadKnowledgeFile,
+    onChooseFile: onChooseKnowledgeFile,
+    remove: deleteKnowledgeDoc,
+    reset: resetKnowledge,
+  } = useKnowledge({ sessionRef, curProjectRef });
 
-  const refreshTask = async () => {
-    const sess = sessionRef.current;
-    if (!sess) return;
-    try {
-      const r = await authFetchJson<{ task: CurrentTask | null }>('/agent/task/current', {
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      if (r.task) {
-        setCurTask(r.task);
-        setHasUnread(r.task.status === 'done' && r.task.unread);
-      }
-    } catch {
-      /* 后端/库没起时红点保持原样，不打扰 */
-    }
-  };
-
-  /** 看完结果 → 服务端标记已读、红点熄灭 */
-  const openTaskResult = async () => {
-    if (!curTask) return;
-    setTaskDetailOpen(true);
-    if (curTask.unread) {
-      const sess = sessionRef.current;
-      try {
-        await authFetchJson('/agent/task/read', {
-          method: 'POST',
-          body: JSON.stringify({ taskId: curTask.id }),
-          headers: { authorization: `Bearer ${sess?.token ?? ''}` },
-        });
-        setCurTask({ ...curTask, unread: false });
-        setHasUnread(false);
-      } catch {
-        /* 标已读失败就留着红点，下次再点 */
-      }
-    }
-  };
-
-  /** 下载 .md：主进程弹“另存为”+写盘，内容经脱敏兜底 */
-  const downloadTaskDoc = async () => {
-    if (!curTask || !session) return;
-    setDocNote('正在准备文档…');
-    const r = await window.workbench?.downloadDoc(curTask.id, API_BASE());
-    if (!r) return;
-    if (r.saved) setDocNote(`已保存：${r.path}`);
-    else if (r.canceled) setDocNote('已取消保存');
-    else setDocNote(`下载失败：${r.error ?? '未知原因'}`);
-  };
-
+  /**
+   * 任务三件套（`refreshTask` / `openTaskResult` / `downloadTaskDoc`）搬进 `features/tasks` 了，
+   * 见上面的 useTasks 解构 —— 本文件只留调用点。
+   */
   /**
    * 会话变了：把**所有**智能体的聊天缓存清掉，重新拉智能体列表 / 用户记忆库 / 任务快照 / 资料列表。
    * 具体某个智能体的历史由 loadAgents → loadAgentHistory 拉（一个智能体一份聊天，互不干扰）。
@@ -1671,14 +1403,11 @@ export default function App() {
     setUserMem([]);
     setProjMem([]);
     setPendingMem([]);
-    setProjects([]);
+    resetProjects();
     curProjectRef.current = null;
     // Phase 3：换号了就把「agentId → projectId」清掉（id 会跨账号复用，留着会把分区认错人）
     agentProjectRef.current.clear();
     setCurProjectId(null);
-    setProjectsOpen(false);
-    setNewProjectName('');
-    setProjectNote('');
     if (!session) return;
     void refreshTask();
     void loadUserMemory();
@@ -1693,45 +1422,19 @@ export default function App() {
     })();
   }, [session]);
 
-  const onSubmitPassword = async () => {
-    if (!session) return;
-    setPwMsg('');
-    try {
-      const body: Record<string, string> = { new_password: pwNew };
-      if (session.user.has_password) body.old_password = pwOld;
-      const r = await authFetchJson<{ ok: boolean; message: string }>('/auth/password/set', {
-        method: 'POST',
-        body: JSON.stringify(body),
-        headers: { authorization: `Bearer ${session.token}` },
-      });
-      setPwMsg(r.message);
-      setPwOld('');
-      setPwNew('');
-      setSession((s) => (s ? { ...s, user: { ...s.user, has_password: true } } : s));
-    } catch (e) {
-      setPwMsg((e as Error).message);
-    }
-  };
-
+  /**
+   * 登出 = **两半**（这一片有意切开的）：
+   *   ① 会话那一半 → `signOutSession()`（清 token / 清主进程凭证 / 清分区白名单 / session 置空）；
+   *   ② 跨 feature 清场那一半 → 下面这些 reset（聊天 / 名单 / 两层记忆 / 资料 / 任务 / 网页）。
+   * 本函数只剩"顺序"，两半各归各位 —— 这也是它必须留在 App 的原因。
+   */
   const onLogout = () => {
-    localStorage.removeItem(TOKEN_KEY);
-    // ★ 登出 → 把主进程那份凭证也清掉（它是内存里的，不主动清就得等进程退出）
-    void window.workbench?.syncSession?.(API_BASE(), '');
-    /**
-     * ★ 登出 → 分区闸的项目集合也要清空。
-     * 不清的话下一位登录者会**继承上一位的项目白名单**，分区闸就等于没装。
-     */
-    void window.workbench?.syncProjects?.([]);
-    setSession(null);
-    setPwMsg('');
+    signOutSession();
     // 第 6 步：聊天痕迹也清掉（历史本来就在服务端，重启登录后由 /chat/history 还原）
-    setChatNote('');
-    setStreamText('');
-    // 第 15 步：所有智能体的聊天、列表、两层记忆全部清掉（会话 effect 也会兜一遍）
-    setChats({});
+    // 聊天这一侧（提示 / 流式文本 / 所有智能体的聊天缓存 / 历史账本 / 步骤 / 文档）一次清干净
+    resetChat();
     setCurAgentId(null);
     curAgentRef.current = null;
-    historyLoadedRef.current = new Set();
     setAgents([]);
     setAgentNote('');
     setUserMem([]);
@@ -1741,32 +1444,20 @@ export default function App() {
     setPendingMem([]);
     setPendingMemOpen(false);
     // 子阶段 2-B：项目层也清掉（换号不该看见上一个号的项目名/名单）
-    setProjects([]);
+    resetProjects();
     curProjectRef.current = null;
     setCurProjectId(null);
-    setProjectsOpen(false);
-    setNewProjectName('');
-    setProjectNote('');
-    setProjectBusy(false);
     setAgentStates({}); // 第 16 步：会话状态（当前任务/保活）不留在登录页
     setKeepaliveBusy(false);
     // 第 7 步：驾驶员循环和 token 一并停掉/清掉（主进程里也不留）
     void window.workbench?.agentStop();
     // 第 18 步：所有网页一并关掉（换号不该看见上一个号的网页）——由浏览器工作区自己清
     browser.closeAllTabs();
-    setAgentSteps([]);
-    setAgentDoc(null);
-    setCurTask(null);
-    setTaskDetailOpen(false);
-    setDocNote('');
-    setHasUnread(false);
+    resetTasks();
     setAgentAwaitInfo(false);
     setAgentAwaitAgent(null);
-    setKnowledgeDocs([]);
-    setKnowledgeOpen(false);
-    setKnowledgeUploading(false);
-    setKnowledgeDeletingId(null);
-    setKnowledgeNote('');
+    // 资料（知识库）的清理收进 feature：documents / open / uploading / deletingId / note 一次清干净
+    resetKnowledge();
   };
 
   // ---- 第 18 步：中栏浏览器工作区（第 20 步起：**每个智能体一套独立浏览器**，无活页上限）----
@@ -1795,6 +1486,77 @@ export default function App() {
      */
     getProjectOfAgent: (agentId: number) => agentProjectRef.current.get(agentId) ?? null,
   });
+  /** ★ 片 7b：聊天侧要指挥浏览器工作区，而它的定义在这里 → 镜像给它（见上面 browserRef 的说明） */
+  browserRef.current = browser;
+
+  /**
+   * 批次 M · 逻辑抽离第 3 片：跨 chat × browser 的胶水（求助卡 / 上下文没了确认卡 / 窗口几何）
+   * 搬进 `app/browserGlue.ts`。★ 仍然**只换来源、不改名字** → 下面 4 处 JSX 一个字都不用改。
+   */
+  const {
+    loopGone,
+    answerLoopGone,
+    helpCards,
+    curHelp,
+    embedRect,
+    onEmbedRect,
+    helpCardAct,
+    showHelp,
+    clearHelp,
+    clearEmbed,
+    askLoopGone,
+  } = useBrowserGlue({ browser, curAgentId, onNote: setChatNote });
+
+  /**
+   * 收尾 7 | 读回这个智能体自己存的可见度档位（切换智能体 / 登录态变化时各读一次）。
+   *
+   * ★ 读不到（未登录、网络、老后端没这条路由）就**保持当前档位不动**，绝不回落成 `status` 再写回去 ——
+   *   那会把「读不到」变成「用户选了收起」，把人家存的偏好抹掉（与 R2 那条「不猜、不冒充」同一个道理）。
+   * ★ `off` 标志防卸载/切人之后 setState（这条规矩在本文件里已经是既有做法）。
+   */
+  useEffect(() => {
+    let off = false;
+    const agentId = curAgentId;
+    if (!agentId || !session?.token) return () => { off = true; };
+    void loadVisibility({ apiBase: API_BASE(), token: session.token, agentId }).then((v) => {
+      if (off || !v) return;
+      // 读回来的档位如果是「接管」，也要把浏览器前置 —— 否则重开应用后档位说是接管、页却在后台
+      setComputerVisibility(v);
+      if (v === 'takeover') browser.showFullscreen();
+    });
+    return () => { off = true; };
+    // browser.showFullscreen 是 hook 里的稳定回调；这里只按「换人 / 换登录态」重读
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [curAgentId, session?.token]);
+
+  /**
+   * 切档：本地立刻生效 + 存回服务端（fire-and-forget，失败只 warn 不弹错 —— 这是偏好，不是数据）。
+   *
+   * ★ 这里**只**碰视图：`showFullscreen()` 是既有的视图开关（「跟任务执行毫无耦合」是它自己的注释）。
+   *   不调 loop 的 start/stop/pause、不调 throttle —— 「收起面板」绝不等于「停下任务」，
+   *   这条由 `scripts/verify/panel-visibility-coupling-probe.py` 与 H 的验收一起钉着。
+   */
+  const onChangeComputerVisibility = (v: ComputerVisibilityLevel): void => {
+    setComputerVisibility(v);
+    if (v !== 'status') browser.showFullscreen();
+    const agentId = curAgentId;
+    const token = session?.token ?? null;
+    if (!agentId || !token) return;
+    void saveVisibility({ apiBase: API_BASE(), token, agentId }, v).then((ok) => {
+      if (!ok) console.warn('[visibility] 档位没能存回服务端（本地已生效，重开应用会回到上次的档位）');
+    });
+  };
+
+  /**
+   * 喂给可见度条的真实状态（不是写死的假数据）：
+   * · `status` / `statusDetail` / `statusStep` 来自左栏那一行智能体（头像即状态那套，服务端广播来的）；
+   * · 当前这一步干什么，用主进程报上来的**最后一条步摘要**（`agentSteps` 的尾巴）；
+   * · 页面摘要用当前那张页的标题（没有标题就用地址）。
+   * 拿不到就是 null —— 组件那边会显示「空闲 / 暂无页面摘要」，不猜、不编。
+   */
+  const visAgent = agents.find((a) => a.id === curAgentId) ?? null;
+  const visLastStep = agentSteps.length > 0 ? agentSteps[agentSteps.length - 1] : null;
+  const visPage = browser.active ? browser.active.title || browser.active.url || null : null;
 
   /**
    * Phase 4：资源守护者（持续资源监控）。
@@ -1841,15 +1603,43 @@ export default function App() {
     const bridge = window.workbench;
     if (!bridge) return;
 
-    // 第 4 步：状态机镜像 = 初始拉取一次 + 订阅广播（主进程是权威，这里只跟随）
-    bridge
-      .getTaskState()
-      .then(setTask)
-      .catch(() => setTask((s) => ({ ...s, detail: '读取主进程状态失败（preload 桥异常）' })));
+    /**
+     * ★ F3 修复（2026-09-24，用户点名提前修）：**状态机镜像绝不许把整页搞白屏**。
+     *
+     * 原来这里是 `bridge.getTaskState().then(setTask)`，三处都不设防：
+     *   ① `setTask` 收到 `undefined`（桥给不出状态）→ 渲染期读 `task.phase` → `TypeError` → 白屏；
+     *   ② `bridge.getTaskState` **根本不是个函数**（老 preload / 渲染层与 preload 版本不一致）
+     *      → 同步 `TypeError`，比 ① 更直接；
+     *   ③ 广播那条路只挡了空负载：`JSON.parse('null')` 得到 `null` 是**合法解析**，
+     *      于是 `setTask(null)` → 同样白屏（`if (!payload)` 挡不住字符串 `"null"`）。
+     *
+     * 现在：**先校验形状，再落 state**；拿不到就保持上一次的值，并把兜底文案写在状态行上。
+     * 注意这不是"猜一个状态"——权威始终在主进程，这里只是**不因为读不到而崩**。
+     *
+     * 顺带说明（用户第 2 条问的那件事）：`getTaskState` 走的是 IPC 到主进程
+     * （`workbench:task:state` → `driver.getTaskState` → `aggregateState`，**永远有返回值**），
+     * 所以"服务端重启"这条路上它**不会**返回 undefined；真正会白屏的是上面 ①②③ 三条。
+     */
+    const isTaskState = (v: unknown): v is TaskState =>
+      !!v && typeof v === 'object' && typeof (v as TaskState).phase === 'string';
+    try {
+      const maybe = bridge.getTaskState?.();
+      void Promise.resolve(maybe)
+        .then((raw) => {
+          if (isTaskState(raw)) setTask(raw);
+          else setTask((s) => ({ ...s, detail: '拿不到主进程状态（桥返回了空值），状态行保持上一次的值' }));
+        })
+        .catch(() => setTask((s) => ({ ...s, detail: '读取主进程状态失败（preload 桥异常）' })));
+    } catch {
+      // `bridge.getTaskState` 不存在 / 不是函数：同步异常也要吃掉，绝不让 effect 抛出
+      setTask((s) => ({ ...s, detail: 'preload 桥缺少 getTaskState（版本不一致？），状态行不可用' }));
+    }
     const offState = bridge.on('state', (payload) => {
       if (!payload) return;
       try {
-        setTask(JSON.parse(payload) as TaskState);
+        const parsed: unknown = JSON.parse(payload);
+        // ★ F3-③：解析成功不代表形状对（`'null'` / `'{}'` 都能解析）—— 形状不对就忽略，等下一次广播
+        if (isTaskState(parsed)) setTask(parsed);
       } catch {
         /* 坏负载忽略，等下一次广播 */
       }
@@ -1985,30 +1775,20 @@ export default function App() {
          *   用户自己在那块真实页面上操作，AI 只负责"把页面递到眼前 + 说明白"。
          */
         if (typeof p.wcId === 'number' && ownerAgent !== null && ownerAgent !== undefined) {
-          setHelpCards((prev) => ({
-            ...prev,
-            [ownerAgent]: {
-              wcId: p.wcId as number,
-              agentId: ownerAgent,
-              helpKind: p.helpKind,
-              question: p.question,
-              hint: p.hint,
-            },
-          }));
+          showHelp({
+            wcId: p.wcId as number,
+            agentId: ownerAgent,
+            helpKind: p.helpKind,
+            question: p.question,
+            hint: p.hint,
+          });
           browser.enterEmbed(p.wcId);
         }
         void browser.refreshDriving();
       } else if (p.kind === 'help-clear') {
         // 求助已解除（自动感知到页面变化 / 用户点了按钮 / 任务收尾）→ 收卡片 + 退出该视图
-        if (ownerAgent !== null && ownerAgent !== undefined) {
-          setHelpCards((prev) => {
-            if (!(ownerAgent in prev)) return prev;
-            const next = { ...prev };
-            delete next[ownerAgent];
-            return next;
-          });
-        }
-        setEmbedRect(null);
+        clearHelp(ownerAgent);
+        clearEmbed();
         browser.exitEmbed();
         void browser.refreshDriving();
       } else if (p.kind === 'loop-gone') {
@@ -2024,26 +1804,15 @@ export default function App() {
          *
          * ★ 这里同样**不碰页面**：不聚焦、不代点，与求助卡同一条安全红线。
          */
-        setLoopGone(
-          typeof p.wcId === 'number'
-            ? { wcId: p.wcId as number, question: p.question }
-            : null,
-        );
+        askLoopGone(p.wcId, p.question);
         void browser.refreshDriving();
       } else if (p.kind === 'done') {
         setAgentAwaitInfo(false);
         setAgentAwaitAgent(null);
         setAgentAwaitWcId(null);
         // 第 27 步：任务收尾了，求助卡就没有存在意义了（留着会是一张点不动的卡）
-        if (ownerAgent !== null && ownerAgent !== undefined) {
-          setHelpCards((prev) => {
-            if (!(ownerAgent in prev)) return prev;
-            const next = { ...prev };
-            delete next[ownerAgent];
-            return next;
-          });
-        }
-        setEmbedRect(null);
+        clearHelp(ownerAgent);
+        clearEmbed();
         browser.exitEmbed();
         // 任务已经收尾：不再等「继续」（否则下一条「继续」会去 resume 一条已经 done 的循环）
         setAwaitResume(false);
@@ -2085,621 +1854,13 @@ export default function App() {
   }, []);
 
 
-  /**
-   * 第 6 步：发送 = 走 /chat/stream（带 JWT，fetch 读 SSE；EventSource 加不了 Authorization 所以不用它）。
-   * 第 4 步规矩保留：running 时先让主进程暂停（权威横幅由 'state' 广播改回「你正在控制」），聊天照发。
-   */
-  const sendChat = async () => {
-    if (!session) return;
-    const value = input.trim();
-    if (!value) return;
-    // 普通聊天流式中（非运行中任务）阻止重复发送
-    if (streaming && !runningLoopIdRef.current) return;
-    /**
-     * 第 15 步：**这轮消息属于哪个智能体，在发起时就钉死**。
-     * 后面所有写入（用户句、流式半截、助手全文）都用这个 id 落桶——
-     * 中途切到别的智能体，也绝不会把 A 的话写进 B 的聊天里。
-     */
-    const myAgent = curAgentRef.current;
-    if (myAgent === null) return;
-    setChatNote('');
-
-    // ★ 问题 4 核心修复：任务执行期间中途发送消息的锁与意图分类机制
-    // 不新建任何冲突并发 Loop，区分为中断指令或补充追问
-    if (runningLoopIdRef.current && streaming && streamingAgentId === myAgent) {
-      const loopId = runningLoopIdRef.current;
-      const wcId = runningLoopWcIdRef.current;
-
-      // 分支 A：中断指令（停、别动、取消、算了、不用了、stop等）—— 优雅中断并保存现场
-      if (detectStopIntent(value)) {
-        patchChat(myAgent, (c) => ({
-          ...c,
-          messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
-        }));
-        setInput('');
-        setChatNote('好，已为您暂停当前任务。现场状态已完整保留，输入「继续」可原地接上。');
-        if (typeof wcId === 'number') {
-          void window.workbench?.pauseTask(wcId);
-        }
-        void fetch(`${API_BASE()}/agent/loop/pause`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', authorization: `Bearer ${session.token}` },
-          body: JSON.stringify({ loopId, reason: 'user_paused' }),
-        }).catch(() => undefined);
-        return;
-      }
-
-      // 分支 B：补充指令/追问（如"顺便看一下价格"、"现在什么情况了"）—— 动态注入当前 Loop 上下文
-      patchChat(myAgent, (c) => ({
-        ...c,
-        messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
-      }));
-      setInput('');
-      setChatNote(`已将补充指令注入当前任务上下文：「${value}」`);
-      void fetch(`${API_BASE()}/agent/loop/message`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${session.token}` },
-        body: JSON.stringify({ loopId, message: value }),
-      }).catch((e) => {
-        setChatNote(`补充指令递交失败：${(e as Error).message}`);
-      });
-      return;
-    }
-    // 第 9 步本地闸：聊天里出现「密码/验证码：xxx」这类赋值就拦下——不发送、不落库、
-    // 让敏感值只走浏览器输入框（服务端聊天与代填执行层各有自己的闸，这是第一道）。
-    // 形态判定：敏感关键词后面跟着「像值的串」（≥6 位字母数字符号），或整句就是 4~8 位纯数字；
-    // 只是提到关键词（“验证码一般几位”）不会被拦——宁可拦赋值、不问句误伤。
-    if (/(密码|口令|password|passcode|验证码|校验码|captcha|otp|cvv|银行卡|卡号|身份证)[\s:：=是为]{0,3}[A-Za-z0-9*#@$%&+=.-]{6,}/i.test(value)
-      || /^\s*\d{4,8}\s*$/.test(value)) {
-      setChatNote('这看起来像密码/验证码/卡号：请不要发到聊天里。直接点在中栏工作区那张页的输入框上自己打（我把焦点给这张页面），我不会代填、也不会留存。');
-      // 第 15 步：顺手把输入框清空——否则这串敏感值会一直留在框里，
-      // 下一次输入变成「123456打开百度」这种拼串，既难查也等于没拦住。
-      setInput('');
-      try {
-        browser.focusActive();
-      } catch {
-        /* 聚焦失败不碍事 */
-      }
-      return;
-    }
-    /**
-     * 第 18 步：**只有明确的「停」才停手**。
-     * 闲聊（你好 / 谢谢 / 你是谁）绝不打断正在跑的驾驶；「停 / 停下来 / 别动了 / 暂停」才停——
-     * 当前这张页在跑就只停那一路，否则全停（判定见 browser/intent.ts 的 detectStopIntent）。
-     */
-    if (detectStopIntent(value)) {
-      browser.stopDriving();
-      setChatNote('好，停手了——这一路不再动作。要它接着干，直接说下一步就行。');
-    }
-    // 第 13 步：明确的开网页指令 → 不再要确认，中栏浏览器工作区直接开一张真实网页。
-    // 判定纯本地（不联网、不问模型），所以后端/模型没起来时页面照样打开。
-    const openUrl = detectOpenUrl(value);
-    /**
-     * ★ 第 24 步：认不出的开页指令 —— 必须**拦住模型**，并给用户一张起始页自己输。
-     *
-     * 用户报的原始症状：「消息里说打开了，浏览器里没有」。
-     * 根因是：站点不在登记表 → `detectOpenUrl` 返回 null → 页没开、`browserOpened` 也没带上去，
-     * 但**用户那句话照样发给了模型**，模型看到「打开」这个动词就自己编了一句「已为你打开」。
-     *
-     * 用户拍板（2026-09-19）的处理方式：
-     *   **开一张空白起始页 + 把焦点给地址栏**，让用户直接打网址 ——
-     *   "认不出"不该是死路，得给一条能走下去的路。
-     *
-     * 关键：这句话**不再**走 /chat/stream。发过去模型还会继续编，用户就被骗两次。
-     */
-    const unknownTarget = openUrl === null ? detectUnknownOpenTarget(value) : null;
-    if (unknownTarget) {
-      patchChat(myAgent, (c) => ({
-        ...c,
-        messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
-      }));
-      // 开一张起始页，并把焦点交给地址栏
-      const startTabId = await browser.openUrl(myAgent, HOME_URL);
-      if (startTabId !== null) {
-        browser.focusUrlBar();
-      }
-      setChatNote(
-        `我认不出「${unknownTarget}」是哪个网站，所以**没有替你打开任何真实网站** —— 刚才没开就是没开，不糊弄你。\n\n` +
-          `我在中栏给你开了一张新标签页，**地址栏已经选中**：直接打网址就行（比如 ${unknownTarget}.com）。\n\n` +
-          `（说明：我靠一张**内置站点表**认站点名，表里没有的名字我就认不出。` +
-          `这张表是我写的，漏了谁就是这种情况——你说一声我就补上。）`,
-      );
-      setInput('');
-      setHasUnread(false);
-      lastUserWasOpenRef.current[myAgent] = false;
-      return;
-    }
-    /**
-     * 第 16 步缺项修复：**已经有打开的网页**时，「普通浏览指令」（在这个页面搜一下 AI / 读一下当前页 /
-     * 往下滚…）必须交给**驾驶员**去动**当前切到前面的那张**页 —— 不能再只回一句口头「稍等」。
-     *
-     * 判定纯本地（不联网、不问模型）：一张页都没开就不发车（不开第二张、不新窗口），
-     * 闲聊（你好 / 谢谢 / 你是谁）也不发车。
-     */
-    const activeTab = browser.active;
-    let targetWcId: number | undefined;
-    if (activeTab) {
-      const slept = browser.sleepOf(activeTab.id);
-      if (slept) {
-        browser.wakeTab(activeTab.id);
-        await new Promise((r) => window.setTimeout(r, slept === 'deep' ? 650 : 180));
-      }
-      const wcId = await browser.awaitWebContentsId(activeTab.id);
-      if (typeof wcId === 'number') targetWcId = wcId;
-    }
-    const browseGoal = openUrl === null && activeTab ? value : null;
-    /**
-     * 第 16 步：确认是**例外**不是默认。
-     * 「继续 / 可以」这类回答只有在**本会话确实有一个待确认的浏览器任务**时才算同意：
-     * 判定只看**这个智能体**自己那份聊天里最后一条助手回复是不是在要确认。
-     * 一旦算同意 → 直接开页 + 立刻起任务，不再让用户点按钮、也不再问一遍。
-     */
-    const pendingConfirm =
-      openUrl === null &&
-      (CONTINUE_STRONG_RE.test(value) || CONTINUE_WEAK_RE.test(value)) &&
-      (() => {
-        const list = chatsRef.current[myAgent]?.messages ?? [];
-        for (let i = list.length - 1; i >= 0; i -= 1) {
-          if (list[i].role === 'assistant') return CONFIRM_ASK_RE.test(list[i].text);
-        }
-        return false;
-      })();
-    /** 待确认任务的原始目标 = 那条确认之前最近的一句用户原话（沿用第 7/8 步的取法） */
-    const pendingGoal = pendingConfirm ? lastUserGoalBeforeConfirm(myAgent) : '';
-    const goNow = pendingConfirm && Boolean(pendingGoal);
-    /** 这句话本身就算「已确认」：明确开页指令、对确认提问回「继续/可以」、或已在当前页面上干活 */
-    const confirmedByThisMessage = openUrl !== null || goNow || browseGoal !== null;
-    lastUserWasOpenRef.current[myAgent] = confirmedByThisMessage;
-
-    /**
-     * 第 17 步（用户拍板）：**纯闲聊不打断两路驾驶**。
-     *
-     * 旧行为是「发一句话就把驾驶员暂停」，但本步要求任务能在你聊别的事时继续跑、
-     * 不用你盯着点「继续」——所以这里不再全局 pauseTask。
-     * 第 18 步起，唯一让驾驶停下来的入口是明确的「停」口令（见上面的 detectStopIntent）；
-     * 同一张页再来一条新指令 → 主进程 agentStart 让那一路的旧循环作废（最新指令优先），
-     * 别的页上正在跑的那一路完全不动。
-     */
-    // 用户这句话先落桶（按发起时的智能体）
-    patchChat(myAgent, (c) => ({ ...c, messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }) }));
-
-    /**
-     * ★★ 步数上限停住后的「继续」：**接回原来那条循环**，绝不发给聊天。
-     *
-     * 为什么必须在这里短路（这就是本轮要修的 bug 的根因）：
-     *   服务端一轮走满（默认 10 步）会自己停下来问「要我接着做就点『继续』」，
-     *   但用户这句「继续」—— 不是开页指令（`openUrl` 空）、前面也没有一条**开页确认**提问
-     *   （`CONFIRM_ASK_RE` 那张正则是给「要不要我用浏览器帮你打开」用的，匹配不上那句提示）、
-     *   更没有动作动词（`browseGoal` 空）—— 于是下面三条发车判定**全空**，
-     *   `taskMode` 不带 ⇒ 走 `/chat/stream` 的**普通聊天**分支。
-     *   而普通聊天那一支按设计只有 `web_search` 一个工具，**结构上就不可能操作浏览器**，
-     *   表现正是用户说的「嘴上答应了、手上不动」。
-     *
-     *   正确做法是把它接到**已验收的恢复链路**上：主进程 `resumeTask(wcId)` 会
-     *   「先读当前真实页 → 服务端 `/agent/loop/resume` 解挂并把步数归零 → 原地接上」，
-     *   于是「恢复前重新感知、不盲目跳回旧地址」那套设计自动生效，这里不用重造第二套。
-     */
-    if (awaitResume && awaitResumeAgent === myAgent && CONTINUE_STRONG_RE.test(value)) {
-      const wcId = awaitResumeWc;
-      setAwaitResume(false);
-      setAwaitResumeAgent(null);
-      setAwaitResumeWc(null);
-      if (wcId === null) {
-        setChatNote('刚才那一轮已经收尾了 —— 直接说你要做什么就行。');
-      } else {
-        void window.workbench?.resumeTask(wcId);
-        pushChatLineFor(myAgent, '好，我接着刚才那一步往下做 —— 先重新看一眼你现在这个页面。');
-        // 让主进程把状态刷上来（横幅从「等你继续」回到「AI 驾驶中」）
-        window.setTimeout(() => void browser.refreshDriving(), 400);
-      }
-      setInput('');
-      setHasUnread(false);
-      return;
-    }
-    /**
-     * 等「继续」期间用户说的是**别的话**（比如「先点第一个结果」）：
-     * 等待态解除，这句话照正常路径处理（该发车发车、该聊天聊天）。
-     * 只在**同一个智能体**说话时解除 —— 别的智能体聊天不该把这一路的等待态清掉。
-     */
-    if (awaitResume && awaitResumeAgent === myAgent) {
-      setAwaitResume(false);
-      setAwaitResumeAgent(null);
-      setAwaitResumeWc(null);
-    }
-
-    /**
-     * 在**某一张**页上发车（第 17 步：必须点名哪张页；主进程不再自己瞎挑一张）。
-     * 别路不动 —— 这就是「第二句不会把第一张降级成不能动的占位」。
-     *
-     * 第 21 步：这里**不再自己发车**。先只记下「哪张页 + 目标」，等服务端把
-     * loopId（工具循环号）发下来再发车 —— 脑在服务端，桌面只当手。
-     */
-    let drive: { wcId: number; goal: string; note: string; pageUrl: string } | null = null;
-    /**
-     * 读「待发车」的那份信息。用函数读是为了绕开 TS 的控制流收窄：
-     * 赋值发生在异步闭包里，直接读变量会被收窄成 null（编译期看不到那次赋值）。
-     */
-    const pendingDrive = (): { wcId: number; goal: string; note: string; pageUrl: string } | null => drive;
-
-    const prepareDrive = async (tabId: number, goal: string, note: string, pageUrl: string): Promise<void> => {
-      /*
-       * ★ 第 24 步：与 startAgentTask 同一道保险 —— **派任务前先把睡着的页叫醒**。
-       *
-       * 这里是主聊天路径（用户说一句话 → AI 在这张页上干活），
-       * 命中率比"继续"按钮那条路高得多，所以这道拦截更不能少：
-       * 深休眠的页不在 DOM 里，`awaitWebContentsId` 拿不到句柄，
-       * 就会变成「我说了话 AI 没反应」。
-       */
-      const slept = browser.sleepOf(tabId);
-      if (slept) {
-        browser.wakeTab(tabId);
-        await new Promise((r) => window.setTimeout(r, slept === 'deep' ? 650 : 180));
-      }
-      const wcId = await browser.awaitWebContentsId(tabId);
-      if (typeof wcId !== 'number') {
-        setChatNote('这张页还没准备好（拿不到内嵌页句柄），没有发车。');
-        return;
-      }
-      drive = { wcId, goal, note, pageUrl };
-      setAgentSteps([]);
-      setAgentDoc(null);
-      setChatNote(note);
-    };
-
-    /** 真正发车：带 loopId（服务端已建好的循环）时直接用；没带就让主进程自己建一个 */
-    const launch = (loopId?: string, forceWcId?: number): void => {
-      const d = pendingDrive();
-      const effectiveWcId = forceWcId ?? d?.wcId ?? targetWcId;
-      if (typeof effectiveWcId !== 'number') return;
-      const goal = d?.goal || value;
-      // token 递给主进程只用于请求头；不打印
-      void window.workbench?.agentStart(goal, API_BASE(), session.token, effectiveWcId, { agentId: myAgent, loopId });
-      window.setTimeout(() => {
-        void browser.refreshDriving();
-      }, 400);
-    };
-
-    if (openUrl) {
-      // 明确开页指令 → 打开（同站则复用）那张页。
-      const tabId = await browser.openUrl(myAgent, openUrl);
-      if (tabId !== null && !isPureOpenCommand(value)) {
-        await prepareDrive(tabId, value, '已把这条指令交给驾驶员，在刚打开的那张页上执行（不新开窗口）。', openUrl);
-        const newWcId = await browser.awaitWebContentsId(tabId);
-        if (typeof newWcId === 'number') targetWcId = newWcId;
-      }
-    } else if (goNow) {
-      // 「继续」= 直接执行：打开目标站点后立刻把目标交给驾驶员循环
-      const url = detectOpenUrl(pendingGoal) ?? HOME_URL;
-      const tabId = await browser.openUrl(myAgent, url);
-      if (tabId !== null) {
-        await prepareDrive(tabId, pendingGoal, '按你的确认开始执行。', url);
-        const newWcId = await browser.awaitWebContentsId(tabId);
-        if (typeof newWcId === 'number') targetWcId = newWcId;
-      }
-    } else if (activeTab) {
-      // 无论是否匹配旧白名单动词，只要有活跃页面，均预先准备驾驶员
-      await prepareDrive(
-        activeTab.id,
-        value,
-        '已把这条指令交给驾驶员，在当前这张网页上执行。',
-        activeTab.url,
-      );
-    }
-    setInput('');
-    setHasUnread(false);
-    setStreaming(true);
-    setStreamingAgentId(myAgent);
-    setStreamText('');
-    let sawLoop = false;
-    try {
-      const res = await fetch(`${API_BASE()}/chat/stream`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${session.token}` },
-        // 所有用户输入统一发送到服务端，服务端自主判定是否进入任务模式，不依赖本地正则白名单
-        body: JSON.stringify({
-          conversationId: chatsRef.current[myAgent]?.convId ?? undefined,
-          agentId: myAgent,
-          message: value,
-          ...(openUrl || (activeTab?.url) ? { browserOpened: openUrl ?? activeTab?.url } : {}),
-          pageUrl: pendingDrive()?.pageUrl || activeTab?.url,
-          wcId: pendingDrive()?.wcId ?? targetWcId,
-        }),
-      });
-      if (!res.ok || !res.body) {
-        // 服务端在开流前给的 JSON 人话（503 未配置模型 / 400 / 401…）原样贴出来
-        let msg = `HTTP ${res.status}`;
-        try {
-          const j = (await res.json()) as { error?: string; code?: string };
-          if (j.code === 'llm_not_configured') msg = '未配置模型：在 apps/server/.env 填 DEEPSEEK_API_KEY 后重启 npm run dev:server';
-          else if (j.error) msg = j.error;
-        } catch {
-          /* 非 JSON 错误体，维持 HTTP 状态码 */
-        }
-        // 第 13 步：开网页指令即使这句没发给小助，页也已经开好了——先说清楚，
-        // 免得用户以为「开网页」也失败了（后端/模型没起是另一回事，照实说）。
-        setChatNote(`${openUrl ? '网页已经打开在中栏浏览器工作区里；' : ''}没发出去：${msg}`);
-        return;
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      let acc = '';
-      let sawDone = false;
-      /** 第 26 步：服务端在 done 里给的来源（已去重）；空数组 = 这轮没搜过 */
-      let sawSources: ChatSource[] = [];
-      for (;;) {
-        const { done, value: chunk } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(chunk, { stream: true });
-        const blocks = buf.split(/\r?\n\r?\n/);
-        buf = blocks.pop() ?? '';
-        for (const block of blocks) {
-          const lines = block.split(/\r?\n/);
-          const ev = lines.find((l) => l.startsWith('event:'))?.slice(6).trim() ?? '';
-          const dl = lines.find((l) => l.startsWith('data:'));
-          if (!dl) continue;
-          let j: {
-            delta?: string;
-            error?: string;
-            conversationId?: number;
-            loopId?: string;
-            maxSteps?: number;
-            wcId?: number;
-            /** 第 26 步：search 事件的载荷（{phase, query, results}） */
-            phase?: string;
-            query?: string;
-            results?: number;
-            /** 第 26 步：done 事件带来的来源列表（本轮联网检索命中的网页） */
-            sources?: ChatSource[];
-          };
-          try {
-            j = JSON.parse(dl.slice(5).trim());
-          } catch {
-            continue; // 坏帧忽略，等下一条
-          }
-          if (ev === 'meta' && typeof j.conversationId === 'number') {
-            // 会话号写回**发起时那个智能体**的桶（不是「此刻正在看的」那个）
-            const cid = j.conversationId;
-            patchChat(myAgent, (c) => (c.convId === cid ? c : { ...c, convId: cid }));
-          } else if (ev === 'loop' && typeof j.loopId === 'string') {
-            // 第 21 步：服务端已经建好工具循环 —— 现在才发车，带着这个循环号
-            sawLoop = true;
-            const effectiveWc = typeof j.wcId === 'number' && j.wcId >= 0 ? j.wcId : targetWcId;
-            setRunningLoopId(j.loopId);
-            setRunningLoopWcId(effectiveWc ?? null);
-            launch(j.loopId, effectiveWc);
-          } else if (ev === 'search') {
-            /**
-             * 第 26 步：联网搜索的过程提示。
-             * 只认服务端推来的这个事件，**不推断**任何东西：
-             * 服务端说"开始搜了"就显示，说"搜完了/搜失败了"就换一句，本轮结束就收掉。
-             */
-            if (j.phase === 'start') setSearchHint(`正在搜索：${j.query ?? ''}`);
-            else if (j.phase === 'done')
-              setSearchHint(`已搜索「${j.query ?? ''}」（${j.results ?? 0} 条结果），正在整理…`);
-            else if (j.phase === 'error') setSearchHint(`搜索没成功：${j.query ?? ''}（AI 会如实说明）`);
-          } else if (ev === 'error') setChatNote(`出错了：${j.error ?? '未知原因'}`);
-          else if (ev === 'done') {
-            sawDone = true;
-            sawSources = Array.isArray(j.sources) ? j.sources : [];
-          }
-          else if (j.delta) {
-            acc += j.delta;
-            setStreamText(acc); // 打字机：逐段追加到助手气泡
-          }
-        }
-      }
-      /**
-       * 第 21 步兜底：任务轮没拿到 loopId（老后端 / 流被掐）也要发车 ——
-       * 主进程会自己调 /agent/loop/start 建一个（同一条引擎，不是第二套）。
-       */
-      if (pendingDrive() && !sawLoop) launch();
-      if (acc) {
-        patchChat(myAgent, (c) => ({
-          ...c,
-          messages: c.messages.concat({
-            id: Date.now() + 1,
-            role: 'assistant',
-            text: acc,
-            /** 第 26 步：来源跟着这条回复走，渲染在气泡下方（没搜过就是 undefined） */
-            sources: sawSources.length > 0 ? sawSources : undefined,
-          }),
-        }));
-      } else if (!sawDone) {
-        setChatNote((n) => n || '这轮没拿到回复（未完成，服务端不会把半截存进历史）。');
-      }
-    } catch (e) {
-      setChatNote(`${openUrl ? '网页已经打开在中栏浏览器工作区里；' : ''}连不上后端：${(e as Error).message}`);
-    } finally {
-      setRunningLoopId(null);
-      setRunningLoopWcId(null);
-      setStreaming(false);
-      setStreamingAgentId(null);
-      setStreamText('');
-      // 第 26 步：这一轮结束，搜索提示跟着收掉（它只在这一轮里有效）
-      setSearchHint('');
-      // 第 16 步：这轮服务端已经更新过会话状态（current_task / browser_confirmed）——
-      // 拉回来刷新界面上的状态行，改口后这里显示的就是新任务了。
-      void loadAgentState(myAgent);
-    }
-    // 第 9 步：刚才是回答驾驶员的「补资料」提问 → 把答案递给主进程并自动恢复循环
-    // 第 15/17 步：只有「正在等的那个智能体 + 那一张页」的回答才转给它；别处的话不串过去。
-    if (agentAwaitInfo && agentAwaitAgent === myAgent) {
-      setAgentAwaitInfo(false);
-      setAgentAwaitAgent(null);
-      setChatNote('已把答复转给小助，继续驾驶中…');
-      void window.workbench?.agentAnswer(value, agentAwaitWcId ?? undefined);
-      setAgentAwaitWcId(null);
-    }
-  };
-
-  const onSend = () => {
-    void sendChat();
-  };
-
-  /**
-   * 第 7 步 + 第 13/17 步：把目标交给主进程的 AI 循环。
-   * 驾驶目标就是**某一张打开的页**；还没开过就先按目标里的站点开一张（拿不到站点才用默认主页），
-   * 然后等 guest 真就绪再发车，否则主进程会「没有找到内嵌 webview 的 webContents」。
-   * 第 17 步：别路（别的页）不动 —— 两路可以同时跑。
-   */
-  const startAgentTask = async (rawGoal?: string) => {
-    const goal = (rawGoal ?? '').trim();
-    if (!goal || !session) return;
-    const cur = browser.active;
-    const owner = curAgentRef.current;
-    if (owner === null) return;
-    const tabId = cur ? cur.id : await browser.openUrl(owner, detectOpenUrl(goal) ?? HOME_URL);
-    if (tabId === null) return;
-    /*
-     * ★ 第 24 步：**AI 要用的页如果正睡着，先把它叫醒**。
-     *
-     * 为什么必须在这儿拦：深休眠的页**已经从 DOM 里卸载了**，
-     * `awaitWebContentsId` 会一直拿不到句柄 → 走到下面那句
-     * 「这张页还没准备好（拿不到内嵌页句柄）」→ 任务根本没发出去。
-     * 用户看到的是「我说了话，AI 没动」，而他并不知道是休眠导致的 ——
-     * 这是最难排查的一类问题，所以必须在源头处理掉。
-     *
-     * 唤醒用的是**系统唤醒**（manual=false）：不记宽限期，
-     * 活干完了该睡还是照常睡回去。
-     */
-    const slept = browser.sleepOf(tabId);
-    if (slept) {
-      browser.wakeTab(tabId);
-      setChatNote(
-        slept === 'deep'
-          ? '先把那张睡着的页叫醒（它在后台待久了、内存被收走了），加载完就开始。'
-          : '先把那张打盹的页叫回来（它刚才在后台省电），马上开始。',
-      );
-      // 深休眠唤醒要真的重新加载一次，给 React 挂载 + dom-ready 留时间；
-      // 浅休眠是瞬时的，这点等待也不亏（下面 awaitWebContentsId 本来就会轮询）。
-      await new Promise((r) => window.setTimeout(r, slept === 'deep' ? 650 : 180));
-    }
-    const wcId = await browser.awaitWebContentsId(tabId);
-    if (typeof wcId !== 'number') {
-      setChatNote('这张页还没准备好（拿不到内嵌页句柄），没有发车。');
-      return;
-    }
-    setAgentSteps([]);
-    setAgentDoc(null);
-    // token 递给主进程只用于请求头；不打印
-    // 第 21 步：这条路径（「继续 / 开始任务」按钮）没有 loopId —— 主进程会自己
-    // 调 /agent/loop/start 建一个（同一条服务端引擎）；agentId 仍然要带上，别串 bot。
-    void window.workbench?.agentStart(goal, API_BASE(), session.token, wcId, { agentId: owner });
-    window.setTimeout(() => {
-      void browser.refreshDriving();
-    }, 400);
-  };
 
   // 批次 E：砍掉一切仪表盘，临时测试条已移除（暂停/继续走浏览器原生控制或输入「停」）
 
-  // ---- ★ P0 止血（2026-09-21）·「这一轮的上下文没了」确认卡 ------------------
   /**
-   * 主进程在 `/agent/loop/resume` 拿到 `code:'loop_gone'` 时**不会**自动重开，
-   * 只把一句问话送过来；这里那张卡就是用户拍板的唯一入口。
-   *
-   * ★ 一次只可能有一张（按 wcId 记），点完就清空 —— 绝不留一张点不动的卡。
+   * 上面这块（「这一轮的上下文没了」确认卡 / 求助卡分桶 / 窗口几何 / 切智能体同步视图 / 卡片两个按钮）
+   * 已整体搬进 `app/browserGlue.ts`，见上面的 useBrowserGlue 解构。
    */
-  const [loopGone, setLoopGone] = useState<{ wcId: number; question: string } | null>(null);
-  /** 点两颗按钮中的任意一颗：把决定送回主进程，然后收卡 */
-  const answerLoopGone = (choice: 'restart' | 'giveup'): void => {
-    const cur = loopGone;
-    setLoopGone(null);
-    if (!cur) return;
-    void window.workbench?.loopGoneChoice(cur.wcId, choice).then(() => {
-      void browser.refreshDriving();
-    });
-  };
-
-  // ---- 第 27 步 · 人工介入求助卡片 ------------------------------------------
-  /**
-   * 每个智能体当前有没有一张待处理的求助卡（key = agentId）。
-   *
-   * 为什么按**智能体**分桶（不是按页、也不是全局一张）：
-   *   聊天区本来就只显示当前智能体的内容，卡片必须落在"触发它的那个对话"里 ——
-   *   这正是本步的要求（**不做跨对话提醒**，只在当前对话显示）。
-   */
-  const [helpCards, setHelpCards] = useState<Record<number, HelpCardView>>({});
-  /**
-   * 求助卡里那块"窗口"的几何（相对浏览器舞台左上角）。
-   *
-   * ★ 它**不是**状态机的一部分，也不进任何持久化：纯粹是"这一帧卡片在哪"的临时量。
-   *   由 HelpCard 每帧量一次、变了才上报，交给 BrowserPanel 写进那个**一直挂着的**
-   *   webview 的内联样式 —— 元素本身从头到尾没动过位置（影子层方案）。
-   */
-  const [embedRect, setEmbedRect] = useState<EmbedRect | null>(null);
-  const onEmbedRect = useCallback((r: EmbedRect | null) => setEmbedRect(r), []);
-  /** 当前这个对话有没有求助卡（聊天区只画当前智能体的那张） */
-  const curHelp = curAgentId !== null ? helpCards[curAgentId] ?? null : null;
-
-  /**
-   * 第 27 步：求助卡的两个按钮。
-   *
-   * ★ 两个动作**都走主进程既有的通道**，不新开机制：
-   *   · 「我处理好了，继续」= `resumeTask`（就是「继续」按钮那条路：
-   *     读当前真实页面 → 服务端算 delta → 同一条历史原地接上）；
-   *   · 「不用了，停手」= `agentDrop`（就是「停」那条路）。
-   */
-  /**
-   * 第 27 步：**切智能体时跟着切换求助卡视图**。
-   *
-   * 为什么必须显式管：卡片是按智能体分桶的，而 `browser.view` 是全局的。
-   * 不做这一步会出现两种错位：
-   *   · 切到另一个对话 → 浏览器层还停在 embed 态，那一层是透明的，
-   *     用户会看到"聊天正常，但屏幕上多出一块别人的网页"；
-   *   · 切回有求助卡的那个对话 → 卡片回来了，但页没跟着回来（白框）。
-   */
-  useEffect(() => {
-    const h = curAgentId !== null ? helpCards[curAgentId] : null;
-    if (h) {
-      browser.enterEmbed(h.wcId);
-      return;
-    }
-    /*
-     * ★★ 这里**不要**写 `else if (browser.view === 'embed')`（2026-09-21 真机踩出来的问题）。
-     *
-     * `browser.view` 是**这一次渲染的闭包快照**，而这个 effect 的依赖只有
-     * `[curAgentId, helpCards]` —— 不包含 `view`。于是有一条时序破口：
-     *   ① 求助卡刚弹出 → `setView('embed')`；
-     *   ② 用户紧接着切到别的对话 → `curAgentId` 变 → 本 effect 重跑；
-     *   ③ 若此刻 React 还没把「view='embed'」那次渲染提交完，
-     *      闭包里的 `browser.view` 仍是 `'fullscreen'` ⇒ 那道 `if` 为假
-     *      ⇒ **exitEmbed() 根本没被调用** ⇒ 浏览器层停在 embed，
-     *      聊天旁边露出一块**别人的网页**（真机上实测到的现象：
-     *      `切到别的对话` 后 20 秒仍停在 `browserLayer--embed`）。
-     *
-     * 正解：**恒调 `exitEmbed()`** —— 它内部用的是函数式更新
-     * （`setView(v => v === 'embed' ? … : v)`），永远读到最新值；
-     * 不在 embed 态时它本来就是个安全的 no-op（顺手把 `embedWcId` 清成 null 也对）。
-     * 换句话说：**判断该由"知道最新值的那一层"做，而不是由拿着快照的调用方做。**
-     */
-    browser.exitEmbed();
-    // browser 的方法是稳定引用（只读 ref + setState），无需进依赖
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curAgentId, helpCards]);
-
-  const helpCardAct = async (kind: 'done' | 'stop', wcId: number) => {
-    try {
-      if (kind === 'done') {
-        await window.workbench?.resumeTask?.(wcId);
-      } else {
-        await window.workbench?.agentDrop?.(wcId);
-      }
-    } catch (e) {
-      setChatNote(`没成功：${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      // 本地先收卡片，别等主进程的事件回来（事件会再收一次，幂等）
-      if (curAgentId !== null) {
-        setHelpCards((prev) => {
-          const next = { ...prev };
-          delete next[curAgentId];
-          return next;
-        });
-      }
-      setEmbedRect(null);
-      browser.exitEmbed();
-    }
-  };
   // 批次 E：activeTabId 轮询已移除（仪表盘砍掉）
 
   // 批次 E：driveBarAct 已移除（仪表盘砍掉，暂停/继续走 detectStopIntent 或浏览器控制）
@@ -3207,6 +2368,27 @@ export default function App() {
                   </button>
                 </div>
               )}
+            {/*
+              收尾 7 | 批次 H 的三级可见度**第一次真的渲染出来**（以前只 export 没人用）。
+
+              ★ 它与 BrowserPanel 是**兄弟**节点，不是把面板塞进它的 children：
+                children 一旦随档位换父节点，React 就会卸载重建那个 <webview> —— 正在跑的那张页当场没了，
+                驾驶的点击坐标也全废（`styles.css` 里 `.browserLayer--bg` 的注释写的就是这个坑）。
+                组件内部也已经改成「children 恒在同一个宿主里」，这边再保守一层，两条一起保证。
+              ★ 它只改**看得见多少**，绝不改跑不跑：切档不调 loop 的任何接口（见 onChangeComputerVisibility）。
+            */}
+            <ComputerVisibility
+              agentId={curAgentId}
+              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
+              statusDetail={visAgent?.statusDetail ?? null}
+              step={visAgent?.statusStep ?? null}
+              currentTool={visLastStep}
+              pageSummary={visPage}
+              visibility={computerVisibility}
+              onChange={onChangeComputerVisibility}
+              apiBase={API_BASE()}
+              token={session?.token ?? null}
+            />
             <BrowserPanel
               ws={browser}
               agentLabel={agents.find((a) => a.id === curAgentId)?.name}
@@ -3366,6 +2548,39 @@ export default function App() {
           )}
           {messages.map((m, idx) => (
             <div key={m.id}>
+              {/**
+                * 批次 J · 发言人名字牌：**只在换人的那一句上挂**。
+                *
+                * · 每条助手气泡都挂名字 = 噪音（99% 的话都是同一个「当前智能体」说的）；
+                *   用户真正要一眼看出的是「这段对话里换过人」，所以只在与**上一条助手气泡**
+                *   不是同一个人时才挂（第一条有 speaker 的也会挂 —— 前面没有可比的）。
+                * · speaker 缺失（老数据 / 服务端没给）→ 什么都不挂，**不拿当前智能体冒充**。
+                * · 版式只给了最小可读样式（小字、半透明、右对齐）；1:1 的像素还原等用户的 HTML/CSS，
+                *   className 已经留好（msg__speaker），到时候直接改样式表就行。
+                */}
+              {(() => {
+                const sp = m.role === 'assistant' ? m.speaker : undefined;
+                if (!sp || !sp.name) return null;
+                let prevSpeakerId: number | null | undefined;
+                for (let i = idx - 1; i >= 0; i--) {
+                  const x = messages[i];
+                  if (x && x.role === 'assistant') {
+                    prevSpeakerId = x.speaker ? x.speaker.id : null;
+                    break;
+                  }
+                }
+                if (prevSpeakerId === sp.id) return null;
+                return (
+                  <div
+                    className="msg__speaker"
+                    data-agent-id={sp.id}
+                    title={`这句话是「${sp.name}」说的（智能体 #${sp.id}）`}
+                    style={{ fontSize: 11, opacity: 0.72, margin: '2px 0', textAlign: 'right' }}
+                  >
+                    {sp.name}
+                  </div>
+                );
+              })()}
               <div className={`msg ${m.role}`}>{m.text}</div>
               {/* 批次 E：第一个智能体提议同事，快捷建按钮（对话式建智能体、立刻建好不挡你） */}
               {m.role === 'assistant' && m.text.includes('建议先建这几位同事') && (

@@ -498,6 +498,8 @@
 
 .computerVisibility {
   font-size: 12px;
+  /* 在 .browserLayer（flex column）里只占自己那点高度，不许跟浏览器面板抢空间 */
+  flex: 0 0 auto;
 }
 
 .computerVisibility__bar {
@@ -531,65 +533,55 @@
   border-bottom: 1px solid #eee;
 }
 
-.computerVisibility__previewBrowser {
-  margin-top: 8px;
-  border: 1px solid #e0e0e5;
-  border-radius: 8px;
-  overflow: hidden;
-  height: 200px;
-}
-
-.computerVisibility--takeover {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(0,0,0,0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.computerVisibility__takeoverMask {
-  width: 90%;
-  height: 85%;
-  background: #fff;
-  border-radius: 12px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
-}
-
-.computerVisibility__takeoverHeader {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e8e8ea;
+.computerVisibility--takeover .computerVisibility__bar {
   background: #fff7ed;
+  border-bottom-color: #fed7aa;
 }
 
-.computerVisibility__takeoverBody {
-  flex: 1;
+/*
+ * 收尾 7（2026-09-24）| 接管档从「黑色全屏遮罩」改成**不遮页**的横幅。
+ *
+ * 原来那一版是 `position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 1000`，
+ * 正好把用户该监督的那张页整个盖住 —— 与这一档的目的（「浏览器前置，用户必须监督」）相反。
+ * 现在只加一条横幅，页照常看得见；「把浏览器前置」由 App 调既有的 `browser.showFullscreen()` 完成
+ * （那条路本来就与任务执行无耦合，见 useBrowserWorkspace 的注释）。
+ *
+ * ★ 版式（颜色/圆角/间距）等用户的 1:1 设计稿；这里只保证**功能**与**不挡页**。
+ */
+.computerVisibility__takeoverBanner {
   display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 12px;
-  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #fff7ed;
+  border-bottom: 1px solid #fed7aa;
+  color: #9a3412;
 }
 
-.computerVisibility__takeoverInfo {
-  font-size: 12px;
-  color: #6b6b72;
-  padding: 8px;
-  background: #fafafb;
-  border-radius: 8px;
-}
-
-.computerVisibility__takeoverBrowser {
-  flex: 1;
-  min-height: 0;
-  border: 1px solid #e0e0e5;
-  border-radius: 8px;
+.computerVisibility__detail,
+.computerVisibility__who {
+  opacity: 0.75;
+  white-space: nowrap;
   overflow: hidden;
-  background: #fff;
+  text-overflow: ellipsis;
+  max-width: 32ch;
+}
+
+/*
+ * ★ children 宿主：三档**共用同一个**，绝不换父节点、绝不卸载、绝不 display:none、绝不尺寸归零。
+ *   原因写在 ComputerVisibility.tsx 的文件头：驾驶的点击坐标来自页内 getBoundingClientRect，
+ *   webview 没有真实尺寸时坐标全废、点击静默失败。
+ *   `:empty` 那条只是「里面没东西就不占位」（App 把面板当兄弟节点渲染时这是常态），
+ *   它用的是 flex-basis 归零，**不是** display:none —— 宿主里真有面板时这条不生效。
+ */
+.computerVisibility__host {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.computerVisibility__host:empty {
+  flex: 0 0 auto;
 }

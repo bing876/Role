@@ -88,6 +88,32 @@ async function ownsAgent(pool: Pool, userId: number, agentId: number): Promise<b
   return r.rowCount === 1;
 }
 
+/**
+ * 收尾 6 | 读暂停记录里的任务目标：**解密优先，回退旧列**。
+ *
+ * 三种行都可能存在，必须都读得出来（这是「用户能感知」的那一半：加密不能把功能吃掉）：
+ *   1. 新行：`goal_enc` 有值、`goal` 恒 NULL           → 解密返回；
+ *   2. 老行（回填迁移跑过）：同上                        → 解密返回；
+ *   3. 老行（迁移还没跑 / 当时没拿到 cipher）：只有 `goal` → 原样返回，界面不至于空白。
+ *
+ * 解密失败（DATA_KEY 换过、密文损坏）时**不抛**：回退旧列，旧列也没有就返回 null，
+ * 并打一行不带任何内容的警告 —— 一条暂停记录读不出目标，不该让整个列表 500。
+ */
+function pauseGoalFromRow(
+  row: { goal_enc: string | null; goal: string | null },
+  c: JsonCipher | null | undefined,
+): string | null {
+  if (c && row.goal_enc) {
+    try {
+      const g = c.decryptText(row.goal_enc);
+      if (typeof g === 'string') return g;
+    } catch (err) {
+      console.warn('[loop] task_pauses.goal_enc 解密失败，回退旧明文列：', (err as Error)?.message ?? String(err));
+    }
+  }
+  return row.goal;
+}
+
 export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: LoopDeps): void {
   app.post('/agent/loop/start', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
@@ -371,6 +397,36 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
     // `page` = 桌面端在**暂停那一刻**真读到的当前页，用它当变化判定的基线
     //（没有就用循环里的旧快照，行为跟以前一样）。
     const page = b?.page && typeof b.page === 'object' ? (b.page as PageSnapshot) : null;
+
+    /**
+     * ★ 收尾 6 条件2（2026-09-24 用户拍板）：**先加密，再动任何状态**。
+     *
+     *   拿不到 cipher / 加密抛错 → **直接 500，一行都不写**，对齐收尾 1 对 `loop_checkpoints`
+     *   的口径（「库里一行都不落」），而不是「行照写、goal_enc 置空」。
+     *
+     *   为什么必须放在 `ingestToolResult` / `pauseLoop` **之前**：那两步会改内存里的会话
+     *   （认领回执、把状态改成 paused）。如果先改内存再发现加密不了，就会留下一个
+     *   「内存里挂着、库里没有台账」的半成品状态 —— 用户重启后看不到这一路暂停，
+     *   而服务端又以为它挂着。先加密就把整件事变成**原子的**：要么全成，要么什么都没发生。
+     *
+     *   代价说清楚：这条路一旦 500，用户点「暂停」是没反应的（循环继续跑）。
+     *   但 cipher 缺失意味着 DATA_KEY 没配 —— 而 `env.ts` 本来就拒绝启动这种服务，
+     *   所以这条路径在正常部署里进不来，它是纵深防御的最后一道，不是日常分支。
+     */
+    let goalEnc: string | null = null;
+    try {
+      if (!cipher) throw new Error('未注入 cipher（DATA_KEY 缺失）');
+      goalEnc = session.goal ? cipher.encryptText(session.goal) : null;
+    } catch (err) {
+      console.warn(
+        `[loop] 暂停 ${loopId} 被拒绝：目标加密失败，内存与库都不动（不回退明文、不留半成品状态）——`,
+        (err as Error)?.message ?? String(err),
+      );
+      return errJson(reply, 500, '暂停失败：任务目标加密不了，这一路没有被挂起（服务端绝不把目标明文落库）', {
+        code: 'goal_encrypt_failed',
+      });
+    }
+
     // R3（2026-09-22）：暂停时顺手认领桌面刷上来的回执 —— 先认领、再挂起（认领刷新了
     // lastSnapshot，暂停基线也更新鲜）。只在「回执形状合法 + 还有 pending/用户答复」时记；
     // 回执坏了只告警，暂停本身永不失败。终态循环跳过认领（pauseLoop 照旧回 409）。
@@ -395,14 +451,17 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
     }
 
     // 落库（best-effort：库挂了不该拦住暂停本身，内存里那份已经生效了）
+    // ★ 收尾 6：goal_enc 已在**本函数最前面**算好（先加密再动状态，见上面的注释）；
+    //   明文列 `goal` 恒写 NULL —— 用户完全可能把密码/卡号写在目标里（R2 的原始事故就是这么来的），
+    //   而暂停记录会在库里躺很久（重启后还要靠它还原「哪几路暂停着」）。
     let recordId: number | null = null;
     try {
       const r = await pool.query<{ id: string }>(
-        `INSERT INTO task_pauses (user_id, loop_id, agent_id, wc_id, goal, paused_by, paused_at)
-         VALUES ($1, $2, $3, $4, $5, $6, now())
+        `INSERT INTO task_pauses (user_id, loop_id, agent_id, wc_id, goal, goal_enc, paused_by, paused_at)
+         VALUES ($1, $2, $3, $4, NULL, $5, $6, now())
          ON CONFLICT DO NOTHING
          RETURNING id`,
-        [claims.sub, loopId, session.agentId, session.wcId, session.goal, by],
+        [claims.sub, loopId, session.agentId, session.wcId, goalEnc, by],
       );
       recordId = r.rows[0] ? Number(r.rows[0].id) : null;
     } catch (err) {
@@ -508,12 +567,13 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
         agent_id: string | null;
         wc_id: string | null;
         goal: string | null;
+        goal_enc: string | null;
         paused_by: string;
         paused_at: string;
         resumed_at: string | null;
         delta_kind: string | null;
       }>(
-        `SELECT id, loop_id, agent_id, wc_id, goal, paused_by, paused_at, resumed_at, delta_kind
+        `SELECT id, loop_id, agent_id, wc_id, goal, goal_enc, paused_by, paused_at, resumed_at, delta_kind
            FROM task_pauses
           WHERE ${where.join(' AND ')}
           ORDER BY paused_at DESC
@@ -529,7 +589,8 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
         resumedAt: x.resumed_at ? new Date(x.resumed_at).getTime() : null,
         agentId: x.agent_id === null ? null : Number(x.agent_id),
         wcId: x.wc_id === null ? null : Number(x.wc_id),
-        goal: x.goal ?? undefined,
+        // 收尾 6：解密优先（goal_enc），解不开/没密文才回退老的明文列（尚未回填的历史行）
+        goal: pauseGoalFromRow(x, cipher) ?? undefined,
         deltaKind: x.delta_kind ?? undefined,
         /**
          * ★ 本批次新增的两个字段（回答的是**两个不同的问题**，别只看一个）。

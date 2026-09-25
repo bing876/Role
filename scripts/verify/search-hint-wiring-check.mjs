@@ -26,6 +26,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
 const SERVER_CHAT = path.join(ROOT, 'apps', 'server', 'src', 'routes', 'chat.ts');
 const APP = path.join(ROOT, 'apps', 'desktop', 'src', 'App.tsx');
+/** ★ 2026-09-25（片 7b）：`search` 事件的处理随 `sendChat` 搬进 features/chat（探针跟着代码走） */
+const CHAT_SRC = path.join(ROOT, 'apps', 'desktop', 'src', 'features', 'chat', 'useChat.ts');
 const CSS = path.join(ROOT, 'apps', 'desktop', 'src', 'styles.css');
 
 let pass = 0;
@@ -42,7 +44,7 @@ const chk = (id, ok, detail = '') => {
 };
 
 const server = readFileSync(SERVER_CHAT, 'utf8');
-const app = readFileSync(APP, 'utf8');
+const app = readFileSync(APP, 'utf8') + '\n' + readFileSync(CHAT_SRC, 'utf8');
 const css = readFileSync(CSS, 'utf8');
 
 // ---- ① 服务端真的发 search 事件，且事件名从一个地方取（避免多处写死） ----

@@ -15,6 +15,7 @@ import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isSensitive as isSensitiveMem } from './memoryNormalize';
+import type { JsonCipher } from './crypto';
 
 export function makePool(connectionString: string): Pool {
   if (connectionString.startsWith('pglite')) {
@@ -119,6 +120,11 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
 
+-- 收尾 6（安全）：任务目标 goal 只以密文存 goal_enc 列。
+--   · payload 里不再有明文 goal（历史行由 migrateTaskGoalEncryption 摘掉）；
+--   · title 也不再抄一份 goal 前 80 字 —— 那是同一个明文目标的第二份副本，
+--     留着它等于「加密了 goal，但短目标照样明文躺在库里」；新任务 title 恒写 NULL。
+--   （注意：本段在 DDL 模板字符串里，不能写反引号，否则模板会被截断。）
 CREATE TABLE IF NOT EXISTS tasks (
   id         BIGSERIAL PRIMARY KEY,
   project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -127,6 +133,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
   unread     BOOLEAN NOT NULL DEFAULT false,
   result_enc TEXT,
+  goal_enc   TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -135,6 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id, status);
 -- 第 8 步：对老库幂等补列（新库上面已带）——unread 红点跟服务端走；结果文档加密放 result_enc
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS unread BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS result_enc TEXT;
+-- 收尾 6：老库幂等补密文列（新库上面已带）
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS goal_enc TEXT;
 
 -- 第 10 步：用户档案记忆挂 owner_id（全员共用）；老列 project_id/mem_key/value_enc 保留兼容
 -- 记忆合并第一批：project_id 改可空（NULL=不按项目隔离），agent_id 两级作用域（NULL=账号级，值=智能体级）
@@ -236,6 +245,17 @@ ALTER TABLE conversations ADD COLUMN IF NOT EXISTS state_updated_at TIMESTAMPTZ 
 -- 明文 JSONB（不是密文）是刻意的：内容是公开网页地址，且要能直接在界面上渲染。
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources JSONB;
 
+-- 批次 J · @点名换人：这条消息**是谁说的**（发言人 = 某个智能体）。
+--   · 只写在 role='assistant' 的行上：助手气泡必须能回答「这句话是哪个智能体说的」，
+--     否则中途 @ 换人之后，历史回看全是同一个头像，看不出换过人。
+--   · role='user' 的行恒为 NULL（用户不是智能体）。
+--   · NULL 还有第二层含义：这行是「本批次之前」写的老数据 —— 老数据不回填、不猜，
+--     前端按「未知发言人」渲染（沿用会话当前智能体），绝不假装知道。
+--   · ON DELETE SET NULL：智能体被删掉时，历史消息不能被连坐删掉（消息属于会话，不属于智能体）。
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS speaker_agent_id BIGINT NULL
+  REFERENCES agents(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_speaker ON messages (speaker_agent_id);
+
 -- 第 15 步 · 第二层（已合并到 memories）：项目记忆原来是 agent_memories 表，智能体级。
 -- 记忆合并第一批后单一 memories 表（agent_id = 智能体ID = 智能体级），旧表由迁移逻辑 DROP。
 -- 这里不再 CREATE 旧表，避免新库又建出两套。
@@ -284,6 +304,10 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_project ON knowledge_chunks (pro
 --
 -- 与内存里那份的关系：内存那份（toolLoop 的 session.pause）管「现在是不是挂着」，
 -- 这份管「重启后还能不能看到、当时判定成了什么」。两者都写，互不替代。
+--
+-- 收尾 6（安全）：暂停时的任务目标同样是敏感文本（用户可能把密码/卡号写在目标里），
+--   所以落库只写密文列 goal_enc；老列 goal 恒写 NULL，仅为读老数据保留。
+--   历史行由 migrateTaskGoalEncryption 回填（幂等：WHERE goal_enc IS NULL）。
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS task_pauses (
   id          BIGSERIAL PRIMARY KEY,
@@ -292,16 +316,21 @@ CREATE TABLE IF NOT EXISTS task_pauses (
   agent_id    BIGINT,
   wc_id       BIGINT,
   goal        TEXT,
+  goal_enc    TEXT,
   paused_by   TEXT NOT NULL DEFAULT 'user',
   paused_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   resumed_at  TIMESTAMPTZ,
   delta_kind  TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- 收尾 6：老库幂等补密文列（新库上面已带）
+ALTER TABLE task_pauses ADD COLUMN IF NOT EXISTS goal_enc TEXT;
 CREATE INDEX IF NOT EXISTS idx_task_pauses_user ON task_pauses (user_id, paused_at DESC);
 -- 同一条循环同时只应有一次「未解除」的挂起：部分唯一索引兜底（防重复请求写两行）
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_task_pauses_open
   ON task_pauses (loop_id) WHERE resumed_at IS NULL;
+-- 批次 K：挂起跟进的"上次催办时间"（幂等：同一条挂起 N 分钟内只提醒一次，见 orchestrator/followup.ts）
+ALTER TABLE task_pauses ADD COLUMN IF NOT EXISTS last_followed_at TIMESTAMPTZ;
 
 -- ---------------------------------------------------------------------------
 -- 多智能体编排（2026-09-23）：**智能体之间的内部频道** + 委派记录。
@@ -364,6 +393,8 @@ CREATE TABLE IF NOT EXISTS agent_delegations (
 );
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_user ON agent_delegations (user_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_delegations_channel ON agent_delegations (channel_id, id DESC);
+-- 批次 K：委派跟进的"上次催办时间"（幂等：同一条委派 N 分钟内只提醒一次，见 orchestrator/followup.ts）
+ALTER TABLE agent_delegations ADD COLUMN IF NOT EXISTS last_followed_at TIMESTAMPTZ;
 
 -- 定时/事件触发（Routines）：Gro kBot 的 Routines，描述=长期规矩，对话=一次活
 -- trigger_type: interval(每 N 分钟)/cron(表达式)/event(事件)
@@ -410,7 +441,11 @@ CREATE INDEX IF NOT EXISTS idx_project_whiteboard_user ON project_whiteboard (us
 
 -- 批次 D | 重启恢复：借 LangGraph checkpoint 思路，循环状态落库，服务重启能续跑正在进行的 job
 -- 修 1（安全）：messages 若为明文 JSONB，改为加密——整列 messages_enc TEXT 走 cipher，goal 同理 goal_enc TEXT
--- 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，R2 当年专门给 task_pauses 加 goal_enc
+-- 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，任务目标也必须密文
+-- ★ 更正（收尾 6，2026-09-23）：这里以前写的是「R2 当年专门给 task_pauses 加 goal_enc」——**那是错的**。
+--   R2（2026-09-22）只在 docs/待办-R2残留-goal明文-20260922.md 里记了「残留 + 建议方案」，
+--   从未落地：直到收尾 6 之前，task_pauses 与 tasks 都没有 goal_enc 列，goal 一直是明文。
+--   （loop_checkpoints.goal_enc 是修 1 加的，那条是真的。）
 -- 旧列 messages/goal 保留作兼容，读取时优先 messages_enc/goal_enc，落库一律写加密列
 CREATE TABLE IF NOT EXISTS loop_checkpoints (
   id              TEXT PRIMARY KEY,
@@ -800,6 +835,227 @@ async function migrateMemoriesMerge(pool: Pool): Promise<void> {
   } catch (err) {
     console.warn('[db] DROP agent_memories 失败（忽略）：', (err as Error).message);
   }
+}
+
+/** 收尾 6 回填结果（给启动日志与验收脚本用；数字都是「这次真改了几行」） */
+/** 收尾 6 回填结果（给启动日志与验收脚本用；数字都是「这次真改了几行」） */
+export interface TaskGoalMigrationResult {
+  /** 没拿到 cipher → 一行没动，下次启动再试（fail-closed，不是「悄悄跳过当成功」） */
+  skipped: boolean;
+  /** task_pauses 里这次**真改了**的行数（加密或清明文） */
+  pauses: number;
+  /** tasks 里这次**真改了**的行数（加密或清明文） */
+  tasks: number;
+  /** 其中「明文有值、密文缺失或解不开」→ 这次真加密出来的行数 */
+  encrypted: number;
+  /**
+   * 密文解出来与明文**不一致**的行数。
+   * ★ 收尾 6 条件3（2026-09-24 用户拍板）：这种行**两份都留**，一行不动，
+   *   只在启动日志里 warn 出 id 交人判断 —— 自动清明文会丢掉「唯一一份能读的内容」，
+   *   自动覆盖密文会丢掉「另一份可能是更新的内容」，机器没有资格替人选。
+   */
+  mismatched: number;
+  /** 不一致行的定位符（`tasks#12` / `task_pauses#7`），最多 {@link MISMATCH_IDS_MAX} 条；只含 id 不含内容 */
+  mismatchedIds: string[];
+  /** 单行失败的行数（该行明文**原样留着**，下次启动再试；不是丢了） */
+  failed: number;
+}
+
+/** 不一致行 id 的日志/返回上限（几百行以上时只列前 N 条 + 总数，别把日志刷爆） */
+export const MISMATCH_IDS_MAX = 50;
+
+/**
+ * 收尾 6 | 把历史明文 goal 清成密文 —— **幂等**，每次启动都可以跑。
+ *
+ * 两张表两种形状：`task_pauses.goal`（TEXT）与 `tasks.payload->>'goal'` / `tasks.title`（JSONB + TEXT）。
+ *
+ * ★ 三种行、三种处置（**逐行判定，别记成一句「回填」**）：
+ *
+ *   1. **明文有值、密文缺失或解不开** → 自动加密：明文进 `goal_enc`，明文位置清掉。
+ *      这是唯一允许「自动写密文」的情况（`encrypted` 计这个数）。
+ *      `tasks` 取明文时 `payload.goal` **优先于** `title` —— title 是 `goal.slice(0,80)` 的截断值，
+ *      拿它加密会把完整目标砍成 80 字。
+ *
+ *   2. **密文可解、且与明文一致** → 明文只是冗余副本，清掉它（不丢任何内容）。
+ *      `tasks.title` 的「一致」按**前缀**判：`have.startsWith(title)` —— 因为 title 生来就是截断的。
+ *      title 不是密文的前缀时（人工设过的标题等）**不动它**：拿不准的东西不自动删。
+ *
+ *   3. **密文可解、但与明文不一致** → ★ 条件3：**整行不动，两份都留**，
+ *      计入 `mismatched` 并在启动日志 warn 出行 id，交人判断。
+ *      为什么不自动清：明文那份可能是唯一还能读的内容（密文可能是旧 DATA_KEY 封的、内容已过时），
+ *      密文那份可能是更完整的原文（明文是截断/脱敏过的）。机器没有资格替人选，
+ *      选错任何一边都是**不可逆的数据丢失**。宁可留着 + 吵一句，让人来看。
+ *
+ * ★ 扫描条件是「**明文还在不在**」，不是「goal_enc 有没有值」—— 这条是真库验收抓出来的：
+ *   第一版写的是 `WHERE goal_enc IS NULL AND ...`，看着幂等又省事，但库里真实存在
+ *   「goal_enc 已有值、明文列也还有值」的残行（灰度/回滚期间新旧代码各写一半、人工改过库）。
+ *   那种行永远满足不了 `goal_enc IS NULL` → 明文**永远清不掉**，而只造「纯老行」的验收照样全绿。
+ *   反证 M8 记录见 docs/acceptance/收尾6-goal加密-验收报告.md。
+ *
+ * ★ fail-closed（照抄 loop_checkpoints 的口径）：
+ *   · **拿不到 cipher → 一行都不动**，打 warn 返回 `skipped:true`，下次启动再试。
+ *     绝不允许「没有钥匙就把明文原样留着当已迁移」，也不允许写任何明文兜底列。
+ *   · 单行加密抛错 → 该行保持原样（明文还在），下次启动**再试这一行**；计数如实返回。
+ *
+ * ★ 结构性错误（表/列还不存在、库在恢复中）**抛出去**，交给调用方重试
+ *   （index.ts 的 migrateTaskEncryptionWithRetry）。两块各自独立跑：
+ *   task_pauses 失败不影响 tasks 那半继续尝试。
+ */
+export async function migrateTaskGoalEncryption(
+  pool: Pool,
+  cipher?: JsonCipher | null,
+): Promise<TaskGoalMigrationResult> {
+  const empty: TaskGoalMigrationResult = {
+    skipped: true,
+    pauses: 0,
+    tasks: 0,
+    encrypted: 0,
+    mismatched: 0,
+    mismatchedIds: [],
+    failed: 0,
+  };
+  if (!cipher) {
+    console.warn(
+      '[db] 收尾6 goal 密文回填**跳过**：没拿到 cipher（DATA_KEY）——' +
+        '明文行原样保留、绝不写兜底明文，下次启动自动再试',
+    );
+    return empty;
+  }
+
+  let pauses = 0;
+  let tasks = 0;
+  let encrypted = 0;
+  let mismatched = 0;
+  let failed = 0;
+  const mismatchedIds: string[] = [];
+  const structural: string[] = [];
+
+  /** 已有密文解不解得开：解得开就返回明文（可比对），解不开/没有就返回 null（需要重加密） */
+  const readable = (enc: string | null): string | null => {
+    if (!enc) return null;
+    try {
+      const txt = cipher.decryptText(enc);
+      return typeof txt === 'string' ? txt : null;
+    } catch {
+      return null;
+    }
+  };
+  const flagMismatch = (where: string): void => {
+    mismatched += 1;
+    if (mismatchedIds.length < MISMATCH_IDS_MAX) mismatchedIds.push(where);
+  };
+
+  // ---- task_pauses：明文列还在的行（不管 goal_enc 有没有值）-------------------------
+  try {
+    const r = await pool.query<{ id: string; goal: string; goal_enc: string | null }>(
+      `SELECT id, goal, goal_enc FROM task_pauses WHERE goal IS NOT NULL ORDER BY id`,
+    );
+    for (const row of r.rows) {
+      try {
+        const have = readable(row.goal_enc);
+        if (have === null) {
+          // 情形 1：明文有值、密文缺失或解不开 → 自动加密
+          const enc = cipher.encryptText(row.goal);
+          // `AND goal IS NOT NULL` 是并发兜底：两个进程同时回填也不会互相覆盖
+          await pool.query(`UPDATE task_pauses SET goal_enc = $2, goal = NULL WHERE id = $1 AND goal IS NOT NULL`, [
+            row.id,
+            enc,
+          ]);
+          pauses += 1;
+          encrypted += 1;
+        } else if (have === row.goal) {
+          // 情形 2：密文与明文一致 → 明文是冗余副本，清掉
+          await pool.query(`UPDATE task_pauses SET goal = NULL WHERE id = $1 AND goal IS NOT NULL`, [row.id]);
+          pauses += 1;
+        } else {
+          // 情形 3：不一致 → 两份都留，交人判断
+          flagMismatch(`task_pauses#${row.id}`);
+        }
+      } catch (err) {
+        failed += 1;
+        console.warn(`[db] task_pauses#${row.id} goal 加密失败（该行保留原样，下次再试）：`, (err as Error).message);
+      }
+    }
+  } catch (err) {
+    structural.push(`task_pauses: ${(err as Error).message}`);
+  }
+
+  // ---- tasks：payload.goal / title 还有值的行（不管 goal_enc 有没有值）--------------
+  try {
+    const r = await pool.query<{ id: string; title: string | null; payload: unknown; goal_enc: string | null }>(
+      `SELECT id, title, payload, goal_enc FROM tasks
+        WHERE (payload->>'goal') IS NOT NULL OR title IS NOT NULL
+        ORDER BY id`,
+    );
+    for (const row of r.rows) {
+      try {
+        const payload = (row.payload && typeof row.payload === 'object' ? row.payload : {}) as Record<string, unknown>;
+        // payload.goal 是**全长**明文；title 只有前 80 字（截断值）
+        const plainFull = typeof payload.goal === 'string' ? payload.goal : null;
+        const title = row.title ?? null;
+        const have = readable(row.goal_enc);
+
+        if (have === null) {
+          // 情形 1：自动加密（payload.goal 优先，title 是截断值只能当兜底）
+          const enc = cipher.encryptText(plainFull ?? title ?? '');
+          const rest: Record<string, unknown> = { ...payload };
+          delete rest.goal;
+          await pool.query(
+            `UPDATE tasks SET goal_enc = $2, payload = $3::jsonb, title = NULL
+              WHERE id = $1 AND ((payload->>'goal') IS NOT NULL OR title IS NOT NULL)`,
+            [row.id, enc, JSON.stringify(rest)],
+          );
+          tasks += 1;
+          encrypted += 1;
+          continue;
+        }
+
+        if (plainFull !== null && have !== plainFull) {
+          // 情形 3：密文与明文不一致 → **整行不动**，两份都留
+          flagMismatch(`tasks#${row.id}`);
+          continue;
+        }
+
+        // 情形 2：一致（或 payload 里根本没有 goal）→ 清掉明文副本
+        // title 只在「是密文的前缀」时才认定为当年抄的那份原文；其它情况不动
+        const titleIsRawCopy = title !== null && have.startsWith(title);
+        if (plainFull === null && !titleIsRawCopy) continue; // 无事可做（例如新式脱敏标题）
+        const rest: Record<string, unknown> = { ...payload };
+        delete rest.goal;
+        await pool.query(
+          `UPDATE tasks SET payload = $2::jsonb, title = $3
+            WHERE id = $1 AND ((payload->>'goal') IS NOT NULL OR title IS NOT NULL)`,
+          [row.id, JSON.stringify(rest), titleIsRawCopy ? null : title],
+        );
+        tasks += 1;
+      } catch (err) {
+        failed += 1;
+        console.warn(`[db] tasks#${row.id} goal 加密失败（该行保留原样，下次再试）：`, (err as Error).message);
+      }
+    }
+  } catch (err) {
+    structural.push(`tasks: ${(err as Error).message}`);
+  }
+
+  if (pauses || tasks || failed) {
+    console.log(
+      `[db] 收尾6 goal 密文回填：task_pauses ${pauses} 条、tasks ${tasks} 条` +
+        `（新加密 ${encrypted} 条、失败 ${failed} 条留待下次）`,
+    );
+  }
+  if (mismatched > 0) {
+    // ★ 条件3：只报 id、绝不报内容（内容就是我们要防的敏感目标）
+    console.warn(
+      `[db] 收尾6 ★ 密文与明文**不一致** ${mismatched} 行：两份都留着、一行没动，请人工判断 —— ` +
+        mismatchedIds.join('、') +
+        (mismatched > mismatchedIds.length ? ` …（共 ${mismatched} 行，只列前 ${mismatchedIds.length}）` : ''),
+    );
+  }
+  if (structural.length > 0) {
+    // 抛给调用方重试：多半是「表还没建 / 库还在崩溃恢复」，不是数据问题
+    throw new Error(`goal 密文回填未完成（可重试）：${structural.join('；')}`);
+  }
+  return { skipped: false, pauses, tasks, encrypted, mismatched, mismatchedIds, failed };
 }
 
 export async function migrate(pool: Pool): Promise<void> {

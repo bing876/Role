@@ -20,6 +20,7 @@
 import type { Pool } from 'pg';
 import type { JsonCipher } from '../crypto';
 import { writeCollabToAgentChat } from './collabChat';
+import { sweepDanglingFollowups } from './followup';
 
 export type RoutineTriggerType = 'interval' | 'cron' | 'event';
 
@@ -253,6 +254,11 @@ export function startRoutineSweeper(pool: Pool, cipher: JsonCipher, intervalMs =
   console.log(`[routines] 启动定时扫，每 ${intervalMs / 1000}s 一次`);
   const tick = async () => {
     await sweepDueRoutines(pool, cipher);
+    /**
+     * 批次 K：同一个 tick 顺手扫"掉线的活"（超期未回的委派 / 长期未恢复的挂起），
+     * 该提醒的主动写对话流催办。幂等由 last_followed_at 兜着，30 分钟内不会重复喊。
+     */
+    await sweepDanglingFollowups(pool, cipher);
   };
   // 启动后 10s 先扫一次
   setTimeout(tick, 10_000).unref?.();

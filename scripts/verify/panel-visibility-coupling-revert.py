@@ -37,10 +37,27 @@ FILES = [
 # 每个缺陷：(名字, 相对文件, 旧片段, 新片段, 期望变红的断言前缀)
 DEFECTS = [
     (
-        "① 收起态把舞台高度压成 0（尺寸归零 → 驾驶点不中）",
+        # ★ 2026-09-24（收尾 7）改锚点：原来注入的是「把 `height: 180px` 改成 `0px`」，
+        #   但第 25 步之后舞台已经**不写死高度**（由 flex 撑开），那段锚点根本不存在了。
+        #   现在改成往舞台规则里塞一个写死的 0 高度 —— 同样是要抓的那个坏法（尺寸归零 → 驾驶点不中）。
+        "① 舞台被写死 0 高度（尺寸归零 → 驾驶点不中）",
         "apps/desktop/src/browser/styles.css",
-        "  /* 收起也留一块看得见的页面（不是 2px） */\n  height: 180px;",
-        "  height: 0px;",
+        ".browserPanel__stage {\n  position: relative;\n  flex: 1 1 auto;",
+        ".browserPanel__stage {\n  position: relative;\n  height: 0px;  /* [注入缺陷] 写死 0 高度 */\n  flex: 1 1 auto;",
+        "D2",
+    ),
+    (
+        "①b 舞台被 display:none（webview 不可见 → 驾驶点不中）",
+        "apps/desktop/src/browser/styles.css",
+        ".browserPanel__stage {\n  position: relative;",
+        ".browserPanel__stage {\n  display: none;  /* [注入缺陷] */\n  position: relative;",
+        "D3",
+    ),
+    (
+        "①c 舞台不再由 flex 撑开（改回写死高度那套旧机制）",
+        "apps/desktop/src/browser/styles.css",
+        ".browserPanel__stage {\n  position: relative;\n  flex: 1 1 auto;",
+        ".browserPanel__stage {\n  position: relative;\n  height: 180px;  /* [注入缺陷] 回到写死高度 */",
         "D1",
     ),
     (

@@ -73,7 +73,8 @@ const DEFECTS: Defect[] = [
   },
   {
     desc: '派任务前不唤醒：AI 面对一张空页，用户以为"AI 不动了"（两条路径一起破坏）',
-    file: 'apps/desktop/src/App.tsx',
+    // ★ 片 7b：这两条路径搬进了 features/chat（`count: 2` 仍然是两条）
+    file: 'apps/desktop/src/features/chat/useChat.ts',
     from: 'const slept = browser.sleepOf(tabId);',
     to: 'const slept: undefined = undefined;',
     count: 2,

@@ -90,12 +90,19 @@ check(
     "\n".join(offenders) if offenders else f"共 {len(reads_expanded)} 处引用，全部在允许形态内",
 )
 
-# 打印实际读取点（ws.expanded 出现在哪两处）
+# ---------------------------------------------------------------- A2
+# ★ 2026-09-24（收尾 7）改写：这条原来断言「`expanded` 的真实读取点 == 2 处」。
+#   第 25 步之后 `expanded` 这套机制**整个退场**了：面板尺寸改由 flex 布局给
+#   （`.browserPanel__stage { flex: 1 1 auto; min-height: 0 }`），可见度那三档由
+#   ComputerVisibility 在外层表达，不再有一个布尔量去切高度。
+#   所以现在的不变量更强：**一处引用都不许有** —— 谁再把 `expanded` 请回来当逻辑开关，
+#   这条立刻红（那正是「可见性 → 改任务执行」最容易重新长出来的地方）。
 read_sites = [f"{f}:{n}" for f, n, s in reads_expanded if ALLOW_READ.search(s)]
 check(
-    "A2 对 `expanded` 的真实读取点 == 2 处（都在 BrowserPanel 的 UI 表达里）",
-    len(read_sites) == 2,
-    "读取点：" + ", ".join(read_sites),
+    "A2 `expanded` 这套机制已整个退场（0 处引用）—— 尺寸由 flex 给，不再靠布尔量切高度",
+    len(reads_expanded) == 0 and len(read_sites) == 0,
+    ("一处引用都没有（机制已退场）" if not reads_expanded
+     else "又出现了引用：" + ", ".join(f"{f}:{n}: {s}" for f, n, s in reads_expanded)),
 )
 
 # ---------------------------------------------------------------- B
@@ -179,35 +186,42 @@ check(
 
 # ---------------------------------------------------------------- D
 print("\n[D] 收起态到底改了什么？")
-print("    期望：只改舞台高度（180px，非 0），不改 display、不改宽高为 0、不卸载。")
+print("    期望：不改舞台的布局尺寸（第 25 步之后舞台由 flex 撑开，没有写死高度）、")
+print("          不改 display、不把宽高写成 0、不卸载。")
 
 css = read(BROWSER_CSS)
 stage_collapsed = re.search(r"\.browserPanel__stage\s*\{([^}]*)\}", css)
+stage_body = stage_collapsed.group(1) if stage_collapsed else ""
+# ★ `height:` 前面不许被 `min-` 顶着 —— min-height:0 是 flex 子项的常规防溢出写法，不是把高度归零
+h_collapsed = re.search(r"(?<!min-)height:\s*([^;]+);", stage_body)
+# 第 25 步之后 `.browserPanel--expanded .browserPanel__stage` 这条覆盖已经不存在了
 stage_expanded = re.search(r"\.browserPanel--expanded\s+\.browserPanel__stage\s*\{([^}]*)\}", css)
-h_collapsed = re.search(r"height:\s*([^;]+);", stage_collapsed.group(1)) if stage_collapsed else None
-h_expanded = re.search(r"height:\s*([^;]+);", stage_expanded.group(1)) if stage_expanded else None
 
-ok_h = bool(h_collapsed) and "180px" in h_collapsed.group(1)
 check(
-    "D1 收起态舞台高度是 180px（留了真实尺寸，不是 0）",
-    ok_h,
-    (".browserPanel__stage height = " + h_collapsed.group(1).strip()) if h_collapsed else "未找到",
+    "D1 舞台不写死高度，由 flex 撑开（flex:1 1 auto + min-height:0 + width:100%）—— 有页就有真实尺寸",
+    bool(stage_collapsed)
+    and re.search(r"flex:\s*1 1 auto", stage_body) is not None
+    and re.search(r"min-height:\s*0", stage_body) is not None
+    and re.search(r"width:\s*100%", stage_body) is not None,
+    (".browserPanel__stage = " + " ".join(stage_body.split())) if stage_collapsed else "未找到舞台规则",
 )
 
 check(
-    "D2 展开态舞台高度 = min(56vh, 620px)",
-    bool(h_expanded) and "56vh" in h_expanded.group(1),
-    (".browserPanel--expanded .browserPanel__stage height = " + h_expanded.group(1).strip()) if h_expanded else "未找到",
+    "D2 没有任何规则给舞台写死 height（收起/展开同一个尺寸；`--expanded` 那套覆盖已退场）",
+    h_collapsed is None and stage_expanded is None,
+    ("舞台里没有写死的 height，也没有 --expanded 覆盖"
+     if (h_collapsed is None and stage_expanded is None)
+     else f"写死的 height = {h_collapsed.group(1).strip() if h_collapsed else '(无)'}；--expanded 覆盖 = {'仍在' if stage_expanded else '(无)'}"),
 )
 
-# 舞台 / view 上不允许出现 display:none / height:0 / width:0
+# 舞台 / view 上不允许出现 display:none / height:0 / width:0（min-height:0 先剔掉再判）
 bad_css = []
 for m in re.finditer(r"(\.browserPanel__stage|\.browserPanel__view)[^{]*\{([^}]*)\}", css):
-    body = m.group(2)
-    if re.search(r"display:\s*none", body) or re.search(r"(height|width):\s*0", body):
-        bad_css.append(m.group(1).strip() + " -> " + body.strip().replace("\n", " "))
+    body = re.sub(r"min-height:\s*0\s*;", "", m.group(2))
+    if re.search(r"display:\s*none", body) or re.search(r"(?<!min-)(height|width):\s*0(px)?\s*;", body):
+        bad_css.append(m.group(1).strip() + " -> " + m.group(2).strip().replace("\n", " "))
 check(
-    "D3 舞台/webview 上没有任何 display:none 或 0 尺寸规则",
+    "D3 舞台/webview 上没有任何 display:none 或真 0 尺寸规则（min-height:0 是 flex 常规写法，不算）",
     len(bad_css) == 0,
     "\n".join(bad_css) if bad_css else "只有 opacity / z-index / pointer-events 这类不影响布局的属性",
 )
@@ -216,7 +230,7 @@ check(
 view_rule = re.search(r"\.browserPanel__view\s*\{([^}]*)\}", css)
 ok_fill = bool(view_rule) and "inset: 0" in view_rule.group(1) and "100%" in view_rule.group(1)
 check(
-    "D4 webview 靠 `inset:0 + 100%` 铺满舞台 —— 它的尺寸 = 舞台尺寸（收起时仍 180px）",
+    "D4 webview 靠 `inset:0 + 100%` 铺满舞台 —— 它的尺寸 = 舞台尺寸（舞台由 flex 撑开，收起也不归零）",
     ok_fill,
     "webview 尺寸跟随舞台，收起不归零" if ok_fill else "未找到铺满规则",
 )

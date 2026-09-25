@@ -69,4 +69,16 @@ exports.DEFAULT_SETTINGS = {
     resourceSysMemFloorMB: 1536,
 };
 __exportStar(require("./tools"), exports);
+/**
+ * 批次 J（2026-09-24）：`@点名` 的确定性解析器。
+ *
+ * ★ 这是本包**第二份**运行时代码（第一份是 tools.ts），但两者能被谁 import 的口径不同：
+ *   · 服务端：走包名运行时 import（与 `SENSITIVE_TARGET_RE` 同一条路，需要 `npm run build -w @ai-workbench/shared`）；
+ *   · 桌面**渲染层**：直接 import 本包的**源文件**（相对路径），Vite 会把它内联进产物，
+ *     不依赖 dist 有没有 build 过；
+ *   · 桌面 **Electron 主进程**：**永远不要**运行时 import 本包（tsc 直出、打包产物里没有
+ *     node_modules，启动即崩）—— 见 tools.ts 文件头那条警告。点名解析只在渲染层用，不需要进主进程。
+ * 全仓只许有一份实现，`npm run verify:mention` 的第 ⑧ 段会扫全仓钉住这件事。
+ */
+__exportStar(require("./mention"), exports);
 //# sourceMappingURL=index.js.map

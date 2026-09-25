@@ -1,5 +1,9 @@
 # 本地嵌入式数据库文件
-data/
+# ★ 必须写成 `/data/`（锚定仓库根）：写成 `data/` 是**全局通配**，
+#   会把任何层级的 data/ 目录都吞掉 —— 2026-09-24 发现它已吞掉
+#   `workbench-ui/src/data/contacts.ts`（设计原型的联系人数据，一直提交不上来，
+#   导致仓库里的 workbench-ui 编译不起来）。详见 批次M 侦查报告 §12。
+/data/
 apps/server/data/
 
 # 依赖
@@ -117,3 +121,24 @@ docs/acceptance/**/*backup-before-purge*.json
 docs/acceptance/**/users-before-*.json
 docs/acceptance/**/*_export.json
 docs/acceptance/**/*-dump.json
+
+# ── 2026-09-24 补（收尾6 那轮） ──────────────────────────────────
+# r4 发车验收的**可再生**取证产物：scripts/verify/r4-dispatch-acceptance.mjs 每次跑
+# 都会用 LABEL（默认 HEAD）重写这份 json，内容只有时间戳与 SSE 字节数在变。
+# 留在版本库里的后果是「每次跑 npm run verify 都脏树」，容易被误提交进不相关的批次。
+# 同目录的 r4-acceptance-main-old.json 是**一次性基线**（LABEL=main-old 手工跑的对照），继续跟踪。
+docs/acceptance/r4-dispatch/r4-acceptance-HEAD.json
+docs/acceptance/r4-dispatch/server-HEAD.log
+
+# ── 2026-09-24 补（批次 J · @点名换人）──────────────────────────────
+# mention-e2e 的**可再生**取证产物：每次跑 scripts/verify/mention-e2e.mjs 都会重写，
+# 内容里只有时间戳/消息 id 在变 —— 留在版本库里就是「每跑一次脏一次树」（r4 那轮已经踩过）。
+# 真正要长期留着的证据**抄进** docs/acceptance/批次J-@点名换人-验收报告.md（那份跟踪）。
+docs/acceptance/mention/*.json
+docs/acceptance/mention/*.jsonl
+docs/acceptance/mention/*.log
+
+# 收尾 7 · H 可见度端到端（verify:visibility:e2e）的可再生产物：日志与汇总 JSON 每次跑都会重写。
+# 要长期留着的证据抄进 docs/acceptance/收尾7-H电脑可见度接线-I模型真路由-验收报告.md（那份跟踪）。
+docs/acceptance/visibility/*.log
+docs/acceptance/visibility/*.json

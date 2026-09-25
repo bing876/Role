@@ -1,7 +1,11 @@
 /**
  * 批次 D | 重启恢复 — 借 LangGraph checkpoint 思路：循环状态落库，服务重启能续跑正在进行的 job
  * 修 1（安全）：messages 若为明文 JSONB，改为加密——整列 messages_enc TEXT 走 cipher，goal_enc 同理
- * 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，R2 当年专门给 task_pauses 加 goal_enc
+ * 依据：本仓库 messages.content_enc / memories.content_encrypted 全是密文，任务目标也必须密文
+ * ★ 更正（收尾 6，2026-09-23）：这里以前写「R2 当年专门给 task_pauses 加 goal_enc」——**那是错的**。
+ *   R2 只是把「tasks.payload.goal 明文」记进 docs/待办-R2残留-goal明文-20260922.md 的**决议**，从未落地；
+ *   task_pauses.goal_enc / tasks.goal_enc 是收尾 6 才真正建列并回填的（见 db.ts migrateTaskGoalEncryption）。
+ *   本文件（loop_checkpoints）的 goal_enc 是修 1 加的，与本批无关。
  *
  * 设计：
  * - 循环状态（LoopSession）落库到 loop_checkpoints 表，每次 advance 后更新
@@ -87,7 +91,14 @@ export async function saveCheckpoint(pool: Pool, session: LoopSession, cipher?: 
     }
     // 修 3 幂等：记录 pending_call_id 与已执行过的 tool_call_ids，重启后去重
     const pendingCallId = (session as any).pendingCallId ?? null;
-    const executedIds = (session as any).executedToolIds ?? (session as any).usedTools ?? [];
+    /**
+     * ★ 收尾 9（2026-09-25 验收抓到的修 3 缺陷）：**不许**兜底到 `usedTools`。
+     *   `usedTools` 里是**工具名**（'open_url'），这一列存的是 **tool_call id**（'call_179…'）——
+     *   原来 `?? usedTools` 在 `executedToolIds` 未初始化时把名字写进了 call id 列，
+     *   重启后 `executed.includes(callId)` 的比对（id 对名字）永远不命中，
+     *   跨重启去重形同虚设。现在：未初始化就当"还没执行过"（空数组），语义干净。
+     */
+    const executedIds = Array.isArray((session as any).executedToolIds) ? (session as any).executedToolIds : [];
     await pool.query(
       `INSERT INTO loop_checkpoints (id, user_id, agent_id, conversation_id, wc_id, goal, goal_enc, messages, messages_enc, pending_call_id, executed_tool_ids, step, status, tool_names, kind, parent_loop_id, chain, updated_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now())

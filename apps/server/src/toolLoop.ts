@@ -601,6 +601,14 @@ export function startLoop(env: ServerEnv, input: StartLoopInput): LoopSession {
     lastSnapshot: null,
     pendingCallId: null,
     usedTools: [],
+    /**
+     * ★ 收尾 9（2026-09-25 验收抓到的修 3 缺陷）：这里**必须**初始化成空数组。
+     *   原来没有这一行 → 第一次「下发前落库」时 `executedToolIds` 是 undefined，
+     *   `saveCheckpoint` 就走了 `?? usedTools` 的兜底，把**工具名**（open_url…）写进了
+     *   `executed_tool_ids` 列 —— 而重启后的去重比对的是 **call id**，名字永远比不中，
+     *   去重在"跨重启"这条路上形同虚设（本进程的内存里是对的，一重启就废）。
+     */
+    executedToolIds: [],
     advancing: false,
     pause: null,
     toolNames:

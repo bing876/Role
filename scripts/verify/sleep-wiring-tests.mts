@@ -22,7 +22,13 @@ const read = (p: string): string => readFileSync(path.join(ROOT, p), 'utf8');
 
 const ws = read('apps/desktop/src/browser/useBrowserWorkspace.ts');
 const panel = read('apps/desktop/src/browser/BrowserPanel.tsx');
-const app = read('apps/desktop/src/App.tsx');
+/**
+ * ★ 2026-09-25（片 7b）：「派任务前先唤醒」这几条接线随 `sendChat` / `startAgentTask`
+ *   搬进了 `features/chat/useChat.ts`。探针**跟着代码走** —— 把两处拼起来看，
+ *   含义一字未改（唤醒拦截仍然必须在发车前、且顺序是"先唤醒再等句柄"）。
+ */
+const app =
+  read('apps/desktop/src/App.tsx') + '\n' + read('apps/desktop/src/features/chat/useChat.ts');
 const main = read('apps/desktop/electron/main.ts');
 const preload = read('apps/desktop/electron/preload.ts');
 const shared = read('packages/shared/src/index.ts');
@@ -104,10 +110,15 @@ log('');
 log('=== ⑤ ★ 派任务前唤醒（否则 AI 面对空页，用户以为"AI 不动了"）===');
 {
   const a = stripComments(app);
-  check('★ 主聊天路径（prepareDrive）有唤醒拦截', /prepareDrive[\s\S]{0,400}sleepOf\(/.test(a));
-  check('★ 「继续/开始任务」路径（startAgentTask）也有', /startAgentTask[\s\S]{0,900}sleepOf\(/.test(a));
+  /**
+   * ★ 锚点从「函数名」改成「函数定义头」（`xxx = async`）：
+   *   这些名字现在也出现在组合层的解构里（`} = useChat({ startAgentTask, … })`），
+   *   按名字取第一次出现会取到解构那一行 —— 探针跟着代码走，但取的是**定义**。
+   */
+  check('★ 主聊天路径（prepareDrive）有唤醒拦截', /prepareDrive = async[\s\S]{0,400}sleepOf\(/.test(a));
+  check('★ 「继续/开始任务」路径（startAgentTask）也有', /startAgentTask = async[\s\S]{0,900}sleepOf\(/.test(a));
   check('唤醒后再 awaitWebContentsId（顺序反了照样拿不到句柄）', (() => {
-    for (const fn of ['prepareDrive', 'startAgentTask']) {
+    for (const fn of ['prepareDrive = async', 'startAgentTask = async']) {
       const start = a.indexOf(fn);
       if (start < 0) return false;
       const seg = a.slice(start, start + 1400);
