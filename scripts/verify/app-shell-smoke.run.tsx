@@ -662,6 +662,15 @@ await check('⑨-3 搜索是对真名单的实时过滤（打字 → 滤掉；�
 });
 
 await check('⑨-4 「＋」弹层只有真操作：新建智能体 → 真 POST /agents，行出现且被选中', async () => {
+  // G1（2026-09-25,规格 C1 收紧）：「＋ 添加」只在小助（管家）上下文生效 ——
+  // 先切到小助（97），＋ 才放行（⑨-2 刚把 active 落在 98 卡布,直接点 ＋ 会被门控拦下）。
+  const rowXz = qa('.contact-item').find((r) => r.getAttribute('data-agent-id') === '97') as Element;
+  assert.ok(rowXz, '没有小助（97）的行');
+  await act(async () => {
+    click(rowXz, '切到小助');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
   await act(async () => {
     click(q('.add-btn'), '＋ 按钮');
     await new Promise((r) => setTimeout(r, 0));

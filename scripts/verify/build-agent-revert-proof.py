@@ -17,7 +17,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 CHAT = REPO / 'apps' / 'server' / 'src' / 'routes' / 'chat.ts'
 
-BUILD_LINE = '              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, buildIntent);'
+BUILD_LINE = '              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, xiaozhuId, buildIntent);'
 REPLY_LINE = '              const builtMsg = `已建好「${built.name}」：${buildIntent.duty}。直接和TA聊就行，对话里说"建一个XXX"就能继续建同事，不挡你。`;'
 
 MUTATIONS = [

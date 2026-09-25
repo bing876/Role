@@ -907,9 +907,11 @@ export default function App() {
    */
   const pickCreator = (list: AgentView[]): AgentView | null => {
     const pid = curProjectRef.current;
+    // G1（2026-09-25,规格 C1 收紧）：**只有小助（管家, kind='assistant'）能建智能体**。
+    // 服务端闸同口径（POST /agents 只放 assistant）；前端只认小助,母鸡/普通智能体一律不挑（不猜）。
     return (
       list.find(
-        (a) => a.canCreateAgents === true && (pid === null || a.projectId === undefined || a.projectId === pid),
+        (a) => a.kind === 'assistant' && a.canCreateAgents === true && (pid === null || a.projectId === undefined || a.projectId === pid),
       ) ?? null
     );
   };
@@ -932,7 +934,7 @@ export default function App() {
         creator = pickCreator(fresh.agents);
       }
       if (!creator) {
-        setAgentNote('这个项目里没有能建智能体的角色（母鸡 / 自带小助），先新建一个项目再试。');
+        setAgentNote('这个项目里没有小助（管家），建智能体得由管家来办。');
         return;
       }
       const r = await authFetchJson<AgentCreateResult>('/agents', {
@@ -979,7 +981,7 @@ export default function App() {
         creator = pickCreator(fresh.agents);
       }
       if (!creator) {
-        setAgentNote('这个项目里没有能建智能体的角色（母鸡 / 自带小助），先新建一个项目再试。');
+        setAgentNote('这个项目里没有小助（管家），建智能体得由管家来办。');
         return;
       }
       const r = await authFetchJson<AgentCreateResult>('/agents', {
@@ -1697,6 +1699,13 @@ export default function App() {
   }));
   const sidebarAgents: AgentView[] = agents.length > 0 ? agents : curProjectId !== null ? [] : loginAgentsFallback;
   const curAgent = sidebarAgents.find((a) => a.id === curAgentId) ?? null;
+  /**
+   * G1（2026-09-25,规格 C1 收紧）：「＋ 添加」只在小助（管家）上下文生效。
+   * xiaozhuId = 当前项目里的小助（kind='assistant'）；addEnabled = 正在跟小助聊 + 不忙。
+   * 不在小助上下文 → 按钮置灰（服务端同样只放 assistant,双保险）。
+   */
+  const xiaozhuId = sidebarAgents.find((a) => a.kind === 'assistant')?.id ?? null;
+  const addEnabled = !agentBusy && curAgentId !== null && curAgentId === xiaozhuId;
   /** M2':侧栏搜索 = 对真名单做实时过滤（空 = 全名单） */
   const filteredAgents = agentQuery.trim()
     ? sidebarAgents.filter((a) => a.name.toLowerCase().includes(agentQuery.trim().toLowerCase()))
@@ -1806,8 +1815,8 @@ export default function App() {
           <button
             className="rail-quick-add"
             aria-label="快捷新建智能体"
-            title="新建智能体"
-            disabled={agentBusy}
+            title={addEnabled ? '新建智能体' : '只有在小助（管家）这儿才能建智能体'}
+            disabled={!addEnabled}
             onClick={() => void addAgent()}
             type="button"
           >
@@ -1855,8 +1864,12 @@ export default function App() {
           type="button"
         />
         <div className={`add-popup${showAgentPopup ? ' open' : ''}`}>
-          <div className="opt" onClick={() => { setShowAgentPopup(false); void addAgent(); }}>
-            <span>{agentBusy ? '创建中…' : '新建智能体'}</span>
+          <div
+            className={`opt${addEnabled ? '' : ' opt--disabled'}`}
+            title={addEnabled ? undefined : '只有在小助（管家）这儿才能建智能体'}
+            onClick={() => { if (addEnabled) { setShowAgentPopup(false); void addAgent(); } }}
+          >
+            <span>{agentBusy ? '创建中…' : addEnabled ? '新建智能体' : '新建智能体（仅小助可建）'}</span>
           </div>
           {curAgent && curAgent.deletable && (
             <div className="opt opt--danger" onClick={() => { setShowAgentPopup(false); void deleteAgent(curAgent.id); }}>

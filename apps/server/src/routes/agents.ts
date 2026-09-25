@@ -397,11 +397,13 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
           : errJson(reply, 404, '调用者智能体不存在或不是你的');
       }
       const caller = found.caller;
-      if (!caller.canCreateAgents) {
+      // G1（2026-09-25,规格 C1 收紧）：只有**小助（管家, kind='assistant'）**能建智能体。
+      // 「＋添加」只在小助上下文生效 —— 母鸡/普通智能体当调用者一律 403（防线在服务端,不靠前端门控）。
+      if (caller.kind !== 'assistant' || !caller.canCreateAgents) {
         return errJson(
           reply,
           403,
-          `「${caller.name}」没有创建智能体的权限 —— 只有项目里的母鸡和自带的「小助」可以建智能体。`,
+          `「${caller.name}」不能建智能体 —— 只有自带的小助（管家）可以建智能体。`,
         );
       }
       const projectId = caller.projectId;
