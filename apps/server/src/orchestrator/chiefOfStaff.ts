@@ -306,6 +306,17 @@ export async function routeTask(
   return null;
 }
 
+/** 路由方法 → 人话（内部 method 是代码标识符，不能直接甩进用户可见的卡片） */
+const ROUTE_METHOD_LABEL: Record<string, string> = {
+  duty_match: '按职责匹配',
+  keyword_weighted: '按关键词匹配',
+  fuzzy_match: '模糊匹配',
+  hen_fallback: '兜底交给管家',
+  assistant_fallback: '兜底交给助手',
+  explicit: '用户指定',
+  keep_current: '沿用当前智能体',
+};
+
 export async function logRouteDecision(
   pool: Pool,
   cipher: JsonCipher,
@@ -314,14 +325,15 @@ export async function logRouteDecision(
   fromName = '系统',
 ): Promise<void> {
   try {
+    // kind='route' 自带【协同·路由】前缀；detail 里**不再**重复写前缀（嵌套【】= 占位符残留）
     await writeCollabToAgentChat(pool, cipher, decision.toAgentId, {
-      kind: 'system',
+      kind: 'route',
       fromId: decision.toAgentId,
       fromName,
       toId: decision.toAgentId,
       toName: decision.toAgentName,
       status: 'routed',
-      detail: `【协同·路由】${decision.method} → ${decision.toAgentName}：${decision.reason} | 任务：${task.slice(0, 100)}${decision.warning ? ` | 警告：${decision.warning}` : ''}`,
+      detail: `${ROUTE_METHOD_LABEL[decision.method] ?? decision.method} → ${decision.toAgentName}：${decision.reason} | 任务：${task.slice(0, 100)}${decision.warning ? ` | 警告：${decision.warning}` : ''}`,
     });
   } catch {}
 }

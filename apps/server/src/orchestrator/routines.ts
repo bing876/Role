@@ -167,25 +167,21 @@ export async function triggerRoutine(
   const task = routine.task_template;
   const name = routine.name;
   try {
-    // 1. 写 messages（进对话流，折叠摘要）
-    const conv = await pool.query<{ id: string }>('SELECT id FROM conversations WHERE agent_id=$1 ORDER BY id DESC LIMIT 1', [agentId]);
-    if (conv.rows.length > 0) {
-      const convId = Number(conv.rows[0].id);
-      const text = `【协同·例行】${name}：${task.slice(0, 200)}（Routine ID:${routine.id}）`;
-      const enc = cipher.encryptText(text);
-      await pool.query(`INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1,'assistant',$2)`, [convId, enc]);
-    }
-    // 2. 写 collabChat（双重保障，前端可据此渲染折叠卡）
+    // 1. 写对话流：**一张**例行卡（kind='routine' 自带【协同·例行】前缀）。
+    //    以前这里先直接 INSERT 一条、再走 collabChat 又写一条（「双重保障」）→
+    //    每次触发连甩两张同类卡，第二张还嵌套【协同·系统】套【协同·例行】。
+    //    2026-09-25 输出纪律③：单次触发只出一张。
     await writeCollabToAgentChat(pool, cipher, agentId, {
-      kind: 'system',
+      kind: 'routine',
       fromId: agentId,
       fromName: name,
       toId: agentId,
-      toName: `Routine:${name}`,
+      toName: name,
       status: 'routine',
-      detail: `【协同·例行】${name} 触发：${task.slice(0, 200)}`,
+      detail: `${name}：${task.slice(0, 200)}`,
+      delegationId: Number(routine.id),
     });
-    // 3. 更新时间戳
+    // 2. 更新时间戳
     const next = computeNextRun(routine.trigger_type as RoutineTriggerType, routine.trigger_config, new Date());
     await pool.query(`UPDATE agent_routines SET last_run_at=now(), next_run_at=$2, updated_at=now() WHERE id=$1`, [routine.id, next]);
     console.log(`[routines] 触发 Routine ${routine.id}「${name}」→ Agent ${agentId}`);
