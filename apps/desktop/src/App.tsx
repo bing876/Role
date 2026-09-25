@@ -2658,8 +2658,7 @@ export default function App() {
                 *   用户真正要一眼看出的是「这段对话里换过人」，所以只在与**上一条助手气泡**
                 *   不是同一个人时才挂（第一条有 speaker 的也会挂 —— 前面没有可比的）。
                 * · speaker 缺失（老数据 / 服务端没给）→ 什么都不挂，**不拿当前智能体冒充**。
-                * · 版式只给了最小可读样式（小字、半透明、右对齐）；1:1 的像素还原等用户的 HTML/CSS，
-                *   className 已经留好（msg__speaker），到时候直接改样式表就行。
+                * · 版式见 design/11-chat-bubbles.css 的 .msg__speaker（小字、半透明、右对齐）。
                 */}
               {(() => {
                 const sp = m.role === 'assistant' ? m.speaker : undefined;
@@ -2678,7 +2677,6 @@ export default function App() {
                     className="msg__speaker"
                     data-agent-id={sp.id}
                     title={`这句话是「${sp.name}」说的（智能体 #${sp.id}）`}
-                    style={{ fontSize: 11, opacity: 0.72, margin: '2px 0', textAlign: 'right' }}
                   >
                     {sp.name}
                   </div>

@@ -188,15 +188,21 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ agent: { id: nid, name: agentCreateCount === 1 ? '新员' : '新员乙', kind: 'worker', deletable: true, canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null, conversationId: 500 + nid, status: 'idle' } });
   }
   if (path === '/agents') return json({ agents: AGENTS });
-  // 批次 M-4' ⑪-2:真发送走 useChat 的 /chat/stream（SSE；帧格式与服务端一字不差）
+  // 批次 M-4' ⑪-2 / M-5' ⑫-2:真发送走 useChat 的 /chat/stream（SSE；帧格式与服务端一字不差）。
+  // 先推一帧 search:start,250ms 后才推 delta + search:done + done ——
+  // 让「正在搜索：…」那行提示在流式中真实可见（⑫-2 的判据）。
   if (path === '/chat/stream') {
     const enc = new TextEncoder();
     return new Response(
       new ReadableStream<Uint8Array>({
         start(c) {
-          c.enqueue(enc.encode('data: {"delta":"收到你的招呼，我待命中。"}\n\n'));
-          c.enqueue(enc.encode('event: done\ndata: {"sources": []}\n\n'));
-          c.close();
+          c.enqueue(enc.encode('event: search\ndata: {"phase":"start","query":"天气"}\n\n'));
+          setTimeout(() => {
+            c.enqueue(enc.encode('data: {"delta":"收到你的招呼，我待命中。"}\n\n'));
+            c.enqueue(enc.encode('event: search\ndata: {"phase":"done","query":"天气","results":2}\n\n'));
+            c.enqueue(enc.encode('event: done\ndata: {"sources": []}\n\n'));
+            c.close();
+          }, 250);
         },
       }),
       { status: 200, headers: { 'content-type': 'text/event-stream' } },
@@ -870,6 +876,102 @@ await check('⑪-4 样式红线:规则在 design/ 且已挂入口;旧 .inputBar 
   assert.ok(!/\.inputBar\s+input\s*\{/.test(styles), '旧后代选择器 .inputBar input 还留在 styles.css（组件已搬走）');
   assert.ok(!/\.inputBar\s+button\s*\{/.test(styles), '旧后代选择器 .inputBar button 还留在 styles.css（组件已搬走）');
   assert.ok(!/\.inputBar__end\s*\{/.test(styles), '旧 .inputBar__end 规则还留在 styles.css');
+});
+
+log('');
+log(`--- ⑫ 聊天区（批次 M-5'）：气泡体系接真会话数据,顺手修 .msg 双定义 ---`);
+await check('⑫-1 聊天区:chatNote 真 × 能关;历史气泡 + 来源标注是 /chat/history 真数据', async () => {
+  // ⑪-3 的 tidy 回执还在（期间没发过话、没切过人）→ 真 × 关掉它
+  const note = q('.chatNote');
+  assert.ok(note && (note.textContent ?? '').includes('整理完了'), 'chatNote 不该是 ⑪-3 的 tidy 回执');
+  await act(async () => {
+    click(q('.chatNote__x'), '关闭提示');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(q('.chatNote') === null, '点 × 没关掉提示（真 handler 被摘?）');
+  // ⑩-4 刚新建的「新员乙」本来就没有历史（新智能体 = 空会话,这也是真数据）——
+  // 切回 97 小助（启动时载过历史）看真历史气泡
+  const row97 = q('.contact-item[data-agent-id="97"]');
+  assert.ok(row97, '缺 97 小助 的名单行');
+  await act(async () => {
+    click(row97, '切回 97 小助');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('历史气泡出现', () => {
+    const c = q('.chat');
+    return c !== null && [...c.querySelectorAll('.msg.assistant')].some(
+      (m) => (m.textContent ?? '').includes('这是从网页查到的回答。'),
+    );
+  }, 60);
+  const chat = q('.chat');
+  assert.ok(chat, '.chat 会话容器缺失');
+  const title = chat.querySelector('.sources__title');
+  const domain = chat.querySelector('.sources__domain');
+  assert.ok(title && (title!.textContent ?? '').includes('示例文章'), '来源标题不是 history 真数据');
+  assert.ok(domain && (domain!.textContent ?? '').includes('example.com'), '来源域名不是 history 真数据');
+  const fakeBubbles = [...chat.querySelectorAll('.msg')].filter(
+    (m) => (m.textContent ?? '').includes('假气泡'),
+  );
+  assert.equal(fakeBubbles.length, 0, '出现写死的假气泡');
+});
+await check('⑫-2 搜索提示跟真 SSE 帧走（start → done 两次真迁移）', async () => {
+  const field = q('.inputbar-field');
+  assert.ok(field, '缺输入框');
+  await act(async () => {
+    await setTextInput(field, '今天天气怎么样', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  // SSE 桩先推 search:start → 「正在搜索：天气」必须真实出现（不是渲染时写死）
+  await waitFor('搜索提示（start 帧）', () => {
+    const h = q('.searchHint');
+    return h !== null && (h.textContent ?? '').includes('正在搜索：天气');
+  }, 60);
+  // 250ms 后 search:done 帧 → 文案换成结果数;流结束提示行消失
+  await waitFor('搜索完成（done 帧 / 流结束）', () => {
+    const h = q('.searchHint');
+    return h === null || (h.textContent ?? '').includes('2 条结果');
+  }, 60);
+});
+await check('⑫-3 流式气泡:真 streamText + .caret,不是假动画圆点', async () => {
+  const field = q('.inputbar-field');
+  assert.ok(field, '缺输入框');
+  await act(async () => {
+    await setTextInput(field, '再问一句', '输入栏');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await act(async () => {
+    field.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  // 250ms 窗口内:流式气泡在(光标 ▍ 只存在于流式气泡)、还没有假 .tdot
+  await waitFor('流式气泡出现', () => q('.chat .msg.assistant .caret') !== null, 60);
+  assert.ok(!q('.chat .tdot'), '出现基准的假 thinking 圆点（不该搬）');
+  // 流结束后:caret 消失,又多一条真回复气泡（SSE 桩的固定回复文案）
+  await waitFor('流结束,caret 消失', () => q('.chat .msg.assistant .caret') === null, 120);
+  const replyCount = [...(q('.chat')?.querySelectorAll('.msg.assistant') ?? [])].filter(
+    (m) => (m.textContent ?? '').includes('待命中'),
+  ).length;
+  assert.ok(replyCount >= 2, `两次真发送后应至少 2 条回复气泡（实际 ${replyCount}）`);
+});
+await check('⑫-4 样式红线:11-chat-bubbles.css 在场且 .msg 单一 .msg 定义;旧规则随组件消失', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '11-chat-bubbles.css'), 'utf8');
+  assert.ok(/\.chat\s*\{/.test(css), '11-chat-bubbles.css 缺 .chat 容器规则');
+  // ★ 双定义修复的守门:.msg 基础规则全文件只许出现一次
+  const msgDefs = (css.match(/^\.msg\s*\{/gm) ?? []).length;
+  assert.equal(msgDefs, 1, `.msg 基础规则定义了 ${msgDefs} 次（双定义又回来了,该修基准 59/139 行那种重定义）`);
+  assert.ok(/\.msg\.user\s*\{/.test(css) && /\.msg\.assistant::before/.test(css), '缺 .msg.user / .msg.assistant 尾巴规则');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./11-chat-bubbles.css'), '聊天区 CSS 没挂进设计入口');
+  const styles = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css'), 'utf8');
+  assert.ok(!/\.msg\s*\{/.test(styles), '旧 .msg 规则还留在 styles.css（组件已搬走）');
+  assert.ok(!/\.msg\.user\s*\{/.test(styles), '旧 .msg.user 规则还留在 styles.css');
+  assert.ok(!/\.searchHint\s*\{/.test(styles), '旧 .searchHint 规则还留在 styles.css');
+  assert.ok(!/\.welcomeCard\s*\{/.test(styles), '旧 .welcomeCard 规则还留在 styles.css');
 });
 
 log('');

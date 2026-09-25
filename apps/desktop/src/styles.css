@@ -167,11 +167,9 @@ body {
  *   ① 会话层（.chat + .inputbar）—— 正常流，z-index 10；
  *   ② 浏览器层（.browserLayer）—— 绝对定位铺满，z-index 20。
  * 全屏时 ② 压过 ①；退出全屏后 ② 降为 z-index 0 + 不可见，会话层自然露出来。
+ * （① 的 position:relative/z-index:10 随 .chat 搬进了 design/11-chat-bubbles.css，
+ *   批次 M-5'；本注释保留分层语义。）
  */
-.chat {
-  position: relative;
-  z-index: 10;
-}
 
 /*
  * 批次 M-2 · 第四列（浏览器区）—— 用户 2026-09-25 定稿：
@@ -299,34 +297,8 @@ body {
   border: 1px solid #e2e2e4;
 }
 
-.chat {
-  flex: 1;
-  padding: 12px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.msg {
-  max-width: 70%;
-  padding: 8px 10px;
-  border-radius: 10px;
-  line-height: 1.35;
-  font-size: 14px;
-}
-
-.msg.assistant {
-  align-self: flex-start;
-  background: #fff;
-  border: 1px solid var(--border);
-}
-
-.msg.user {
-  align-self: flex-end;
-  background: #dcf3ff;
-  border: 1px solid #cde8fb;
-}
+/* .chat / .msg 旧规则 —— 批次 M-5' 删除：聊天区容器 + 气泡体系搬进
+   design/11-chat-bubbles.css（.chat 层级 z-index:10 也一并过去）。 */
 
 /* .inputBar 旧规则 —— 批次 M-4' 删除：输入栏搬进 design/04-inputbar.css
    （.inputbar pill 式；.inputBar input / .inputBar button / .inputBar__end
@@ -565,105 +537,8 @@ body {
   flex: 0 0 auto;
 }
 
-/* ---- 第 6 步：打字机光标 + 聊天提示条（error/notice，不是 AI 的话）---- */
-.caret {
-  display: inline-block;
-  margin-left: 1px;
-  color: #6b7280;
-  animation: caretBlink 1s steps(1) infinite;
-}
-@keyframes caretBlink {
-  50% { opacity: 0; }
-}
-.chatNote {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 4px;
-  padding: 7px 10px;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: #92400e;
-  background: #fef3c7;
-  border: 1px solid #fcd34d;
-  border-radius: 8px;
-}
-.chatNote__x {
-  margin-left: auto;
-  border: none;
-  background: transparent;
-  color: #92400e;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-/* ---- 第 26 步：联网搜索的过程提示 ----------------------------------------
-   刻意做得"轻"：一行灰色小字 + 一道细左边线，不抢聊天气泡的注意力。
-   它对应的是**轻量搜索**（不打开任何网页），所以绝不能长得像浏览器卡片或任务条。 */
-.searchHint {
-  margin: 4px 4px 2px;
-  padding: 2px 8px;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #6b7280;
-  border-left: 2px solid #cbd5e1;
-}
-
-/* ---- 第 26 步：来源标注（助手气泡下方的可点链接）----
-   设计意图：回答正文照旧是"话"，来源单独一行小字挂在下面，
-   像 ChatGPT 那样"看得出出处"，但不把网址揉进正文。
-   每行 = 标题 + 域名；点一条跳原始网页（走系统默认浏览器）。
-   没搜过的回复整块不渲染，所以这里不需要"空态"样式。 */
-.sources {
-  display: flex;
-  gap: 6px;
-  margin: 2px 4px 4px;
-  padding-top: 6px;
-  border-top: 1px dashed #e5e7eb;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.sources__label {
-  flex: none;
-  color: #9ca3af;
-  user-select: none;
-}
-
-.sources__list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px 12px;
-  min-width: 0;
-}
-
-.sources__item {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  max-width: 100%;
-  color: #2563eb;
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.sources__item:hover .sources__title {
-  text-decoration: underline;
-}
-
-.sources__title {
-  max-width: 260px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sources__domain {
-  flex: none;
-  color: #9ca3af;
-  font-size: 11px;
-}
-
+/* .caret / .chatNote / .searchHint / .sources —— 批次 M-5' 删除：
+   随聊天区搬进 design/11-chat-bubbles.css（样式值原样）。 */
 /* ---- 第 7 步：任务卡上的“最近步”小列表（主进程 agent 事件镜像，丑点没事）---- */
 .agentSteps {
   margin: 6px 0;
@@ -961,71 +836,8 @@ body {
   100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 
-/* ---------- 欢迎卡片与快捷操作 ---------- */
-.welcomeCard {
-  background: linear-gradient(135deg, #f0f7ff 0%, #fafafa 100%);
-  border: 1px solid #dbeafe;
-  border-radius: 10px;
-  padding: 20px;
-  margin: 16px 8px;
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.04);
-}
+/* .welcomeCard —— 批次 M-5' 删除：随聊天区搬进 design/11-chat-bubbles.css。 */
 
-.welcomeCard__title {
-  margin: 0 0 8px 0;
-  font-size: 16px;
-  color: #1e3a8a;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.welcomeCard__desc {
-  font-size: 13px;
-  color: #475569;
-  line-height: 1.6;
-  margin-bottom: 14px;
-}
-
-.welcomeCard__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.welcomeCard__btn {
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  color: #1e293b;
-  padding: 7px 14px;
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  transition: all 0.15s ease;
-}
-
-.welcomeCard__btn:hover {
-  border-color: #3b82f6;
-  color: #2563eb;
-  background: #f8faff;
-  transform: translateY(-1px);
-}
-
-.welcomeCard__btn--primary {
-  background: #2563eb;
-  border-color: #2563eb;
-  color: #ffffff;
-  font-weight: 600;
-}
-
-.welcomeCard__btn--primary:hover {
-  background: #1d4ed8;
-  border-color: #1d4ed8;
-  color: #ffffff;
-}
 
 
 /* 建完能改人设：编辑浮层 */
