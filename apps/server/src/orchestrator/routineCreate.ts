@@ -37,11 +37,12 @@ export interface RoutineCreateInput {
 }
 
 export async function createRoutineFromMessage(pool: Pool, opts: RoutineCreateInput): Promise<RoutineCreateResult> {
-  const intent = parseRoutineIntent(opts.message);
-  if (!intent) return { kind: 'not-a-routine' };
-
+  // 名册先加载:F2b 节奏前置句「每天09:00让小助…」切"名字|任务"要靠它做精确前缀(不猜)
   const roster = await loadProjectRoster(pool, opts.userId, opts.projectId);
   const rosterNames = roster.map((r) => r.name);
+
+  const intent = parseRoutineIntent(opts.message, { knownAgents: rosterNames });
+  if (!intent) return { kind: 'not-a-routine' };
 
   // ---------------- ① 名字解析:只认**精确**名册名,解析不到不猜
   let agentId: number;

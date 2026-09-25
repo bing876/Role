@@ -4,7 +4,7 @@
 往**抽出去的 feature 源码**里注入「把代码搬出 App.tsx 时最可能犯的错」，
 行为验收网 `verify:logic` 必须每次都变红、且命中对应断言：
 
-  （名单已长到 K/M/G/P/A/T/F3/C/B/N 十组；N = M8' 搬 AuthScreen/AgentGuide 的回归；下面只写前四条的来历）
+  （名单已长到 K/M/G/P/A/T/F3/C/B/N/L 十一组；N = M8' 搬 AuthScreen + C1 chips 的回归；L = C3 协同折叠卡；下面只写前四条的来历）
 
   K1 丢守卫：`load` 里删掉「切号后晚到的响应不许覆盖列表」
   K2 放宽校验：扩展名白名单里塞进 .exe
@@ -35,7 +35,7 @@ TASKS = FEATURES / 'tasks' / 'useTasks.ts'
 APP_TSX = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
 CHAT = FEATURES / 'chat' / 'useChat.ts'
 AUTHSCREEN = FEATURES / 'auth' / 'AuthScreen.tsx'
-GUIDE = FEATURES / 'chat' / 'AgentGuide.tsx'
+CHIPS = FEATURES / 'chat' / 'PersonaChips.tsx'  # C1：AgentGuide.tsx 已删,三问 = PersonaChips chips
 
 MUTATIONS = [
     {
@@ -91,7 +91,7 @@ MUTATIONS = [
         'name': 'confirm 去掉本地过滤（等服务端重拉 —— 界面会闪一下）',
         'anchor': "      setPending((prev) => prev.filter((m) => m.id !== id));\n      void loadUser();",
         'replace': "      void loadUser();",
-        'expect': '待确认：点「确认」',
+        'expect': 'C4：对话流里点「确认，生效」',
     },
     {
         'file': MEMORY,
@@ -426,13 +426,40 @@ MUTATIONS = [
         'expect': 'F5',
     },
     {
-        'file': GUIDE,
+        'file': CHIPS,
         'id': 'N3',
         'visible': True,
-        'name': 'AgentGuide 确认不再调 onSave（引导卡永远收不掉、人设存不上）',
-        'anchor': '      await onSave({ name: name.trim(), who: who.trim(), tone: tone.trim(), duty: duty.trim() });\n',
+        'name': 'chips 全答完不再调 onComplete（三问答完不收、人设存不上 —— C1 收尾断链）',
+        'anchor': '    if (all) onComplete(next);\n',
         'replace': '',
         'expect': '⑬-2',
+    },
+    # ---- C3：协同进对话流（折叠卡）----
+    {
+        'file': APP_TSX,
+        'id': 'L1',
+        'visible': True,
+        'name': '把 C3 打回去：协同消息不再渲染成折叠卡（退回纯文本气泡,挤占对话流）',
+        'anchor': (
+            "              {m.role === 'assistant' && isCollabMessage(m.text) ? (\n"
+            "                <CollabCard text={m.text} />\n"
+            "              ) : (\n"
+            "                <div className={`msg ${m.role}`}>{m.text}</div>\n"
+            "              )}\n"
+        ),
+        'replace': "              <div className={`msg ${m.role}`}>{m.text}</div>\n",
+        'expect': '⑰-1',
+    },
+    # ---- C4：记忆确认在对话流里（不弹抽屉）----
+    # ---- C4：记忆确认在对话流里（不弹抽屉）----
+    {
+        'file': APP_TSX,
+        'id': 'R1',
+        'visible': True,
+        'name': '把 C4 打回去：对话流里不再渲染记忆确认卡（确认退回抽屉路径,用户找不到）',
+        'anchor': '          {pendingMem.length > 0 && (\n',
+        'replace': '          {false && pendingMem.length > 0 && (  // 反证注入：C4 打回 —— 对话流没有确认卡\n',
+        'expect': '对话流里长出确认卡',
     },
 ]
 

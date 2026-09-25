@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""批次 M-6'「模态（登录页/人设引导/人设编辑）」反证：把关键代码改坏 → verify:logic 必须变红 → 立刻还原。
-M1 是用户点名的反证：**屏幕上显示真实数据而非写死假数据**（引导确认送写死的假 persona）。
+"""批次 M-6' + 规格 C1「模态（登录页/三问 chips/人设编辑）」反证：把关键代码改坏 → verify:logic 必须变红 → 立刻还原。
+M1 是用户点名的反证：**屏幕上显示真实数据而非写死假数据**（chips 答完送写死的假 persona）。
 
 用法： python3 scripts/verify/modal-revert-proof.py
 原理： 每条"改坏"都对应验收里的一条断言（⑬-x 或既有的 F5/登录断言）。
@@ -21,18 +21,19 @@ OUTDIR = os.path.join(REPO, 'docs', 'acceptance', 'app-shell')
 
 STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'design', '09-modal.css')
 APP = os.path.join(REPO, 'apps', 'desktop', 'src', 'App.tsx')
-# M8'：引导确认 / 登录按钮随组件外迁（锚点跟组件走）
-GUIDE = os.path.join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'AgentGuide.tsx')
+# M8'：登录按钮随组件外迁；C1：三问 chips 组件（AgentGuide.tsx 已删,锚点跟组件走）
+CHIPS = os.path.join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'PersonaChips.tsx')
 AUTH = os.path.join(REPO, 'apps', 'desktop', 'src', 'features', 'auth', 'AuthScreen.tsx')
 
 # 每条缺陷：名字 / 文件 / 原文 / 改坏后 / 期望变红的断言关键字
 DEFECTS = [
     {
-        # 用户点名的反证:引导确认必须把**用户真填的** persona 送服务端 —— 换成写死假值,⑬-2 必须变红。
-        'name': 'M1 引导确认送写死的假 persona（不再是用户真填的）',
-        'file': GUIDE,
-        'old': "onSave({ name: name.trim(), who: who.trim(), tone: tone.trim(), duty: duty.trim() });",
-        'new': "onSave({ name: '写死甲', who: '写死乙', tone: '写死丙', duty: '写死丁' } as AgentPersona);  // 反证注入",
+        # 用户点名的反证:chips 答完落库必须用**用户真答的** persona —— 落库那行换成写死假值,⑬-2 必须变红。
+        # （注：不能只改 PersonaChips 的 next —— 它只污染最后提交的那个字段,而 ⑬-2 断言的是 who/tone。）
+        'name': 'M1 chips 答完落库送写死的假 persona（不再是用户真答的）',
+        'file': APP,
+        'old': "      await savePersona(d.agentId, { name: d.name, who: d.who, tone: d.tone, duty: d.duty });",
+        'new': "      await savePersona(d.agentId, { name: '写死甲', who: '写死乙', tone: '写死丙', duty: '写死丁' }); // 反证注入",
         'expect': ['⑬-2'],
     },
     {
@@ -74,6 +75,14 @@ DEFECTS = [
                 "}"),
         'new': "/* 反证注入：.guide__table th 规则被删掉了 */",
         'expect': ['⑬-4'],
+    },
+    {
+        # C1：chips 挂着时往主输入框打字 → 即消失。把这条收尾撤掉,⑬-2b 必须变红。
+        'name': 'M6 打字不收起 chips（输入框一有字 chips 该消失,断链）',
+        'file': APP,
+        'old': "              if (v && chipsDraft) void finishChips(null);\n",
+        'new': "",
+        'expect': ['⑬-2b'],
     },
 ]
 

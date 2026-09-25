@@ -35,7 +35,7 @@ const app = fs.readFileSync(appPath,'utf8');
 must(app.includes('quickBuildAgent'), 'App.tsx 有 quickBuildAgent（对话式建，立刻建好不挡你）');
 must(app.includes('colleagueProposal') || app.includes('建议先建这几位同事'), 'App.tsx 有同事提议快捷建按钮');
 must(!app.includes('className="driveBar"') || app.includes('批次 E：driveBarAct 已移除'), 'App.tsx 已砍掉 driveBar 仪表盘（砍掉一切仪表盘）');
-must(app.includes('建一个销售助手') || app.includes('建一个'), 'App.tsx placeholder 提示对话式建智能体');
+must(app.includes('创建小美') || app.includes('建一个'), 'App.tsx placeholder 提示对话式建智能体（C1 句式：创建 XXX）');
 
 const dbPath = path.join(root,'apps/server/src/db.ts');
 const db = fs.readFileSync(dbPath,'utf8');
@@ -48,13 +48,13 @@ function detectBuildIntentJS(message) {
   const buildRe = /(建|创建|新建|来个|来一个|需要|想要|加个|加一个|招个|招一个).{0,12}(助手|同事|智能体|机器人|专员|经理|师|手|员|顾问|管家|客服|销售|运营|开发|设计|产品|测试|调研|写作)/;
   if (!buildRe.test(t)) return null;
   if (/^我是/.test(t) && t.length < 30) return null;
-  const m1 = t.match(/(?:建|创建|新建|来个|来一个|需要|想要|加个|加一个|招个|招一个)\s*一个?\s*([^\s，。,.!！?？]{2,12})(?:助手|同事|智能体|机器人|专员|经理)?[，。,.!！]?[，,]?\s*(?:负责|帮我|干|做)?\s*(.+)?/);
+  const m1 = t.match(/(?:建|创建|新建|来个|来一个|需要|想要|加个|加一个|招个|招一个)\s*(?:一个|个)?\s*([^\s，。,.!！?？]{2,12})(?:助手|同事|智能体|机器人|专员|经理)?[，。,.!！]?[，,]?\s*(?:负责|帮我|干|做)?\s*(.+)?/);
   if (m1) {
     const name = m1[1].trim();
     const duty = (m1[2] ?? '').trim().slice(0, 120);
     if (name.length >= 2) return { name: name.slice(0,24), duty: duty || `${name}相关工作`, raw: t };
   }
-  const m2 = t.match(/(?:建|创建)\s*一个?\s*([^\s，。,.!！?？]{2,12})/);
+  const m2 = t.match(/(?:建|创建)\s*(?:一个|个)?\s*([^\s，。,.!！?？]{2,12})/);
   if (m2) {
     const name = m2[1].trim();
     if (name.length >=2 && name.length <=12) return { name: name.slice(0,24), duty: `${name}相关工作`, raw: t };

@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { sameNode } from './lib/dom-assert.mts';
 
@@ -229,7 +229,7 @@ let TASK: { id: number; status: string; goal: string; steps: string[]; unread: b
   id: 55, status: 'done', goal: '整理季度数据', steps: ['读表', '算数'], unread: true,
   summary: '一共 12 张表，结论在第 3 页', docTitle: '季度数据整理', unreadHint: '结果文档已生成', outline: ['目标', '过程', '结论'],
 };
-/** ★ M-6' ⑬-2：冒烟期间真新建的智能体（引导确认 = 真 POST 回写 persona） */
+/** ★ C1 ⑬-2：冒烟期间真新建的智能体（chips 答完 = 真 POST 回写 persona） */
 const createdAgents: Array<Record<string, unknown>> = [];
 const createdAgentIds: number[] = [];
 let createdSeq = 1;
@@ -312,9 +312,12 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ ok: true, currentProjectId });
   }
   if (path === '/agents' && init?.method === 'POST') {
+    /** C1：+Add 真服务端行为 = 建好即 ready + 默认人设（不再是 pending） */
+    const nm = `新员丙${createdSeq}`;
     const a = {
-      id: 990 + createdSeq, name: `新员丙${createdSeq}`, kind: 'worker', deletable: true,
-      canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null,
+      id: 990 + createdSeq, name: nm, kind: 'worker', deletable: true,
+      canCreateAgents: false, projectId: 7, personaStatus: 'ready',
+      persona: { name: nm, who: `一个专注${nm}的同事`, tone: '简洁、直接', duty: `${nm}相关工作` },
       conversationId: 900 + createdSeq, status: 'idle',
     };
     createdSeq += 1;
@@ -358,7 +361,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     const qs2 = new URLSearchParams(url.split('?')[1] ?? '');
     const aid = Number(qs2.get('agentId') ?? '');
     if (aid === 98) return json({ conversationId: 502, messages: [{ id: 901, role: 'user', text: '八号的历史' }, { id: 902, role: 'assistant', text: '我是卡布' }] });
-    return json({ conversationId: 501, messages: [{ id: 900, role: 'assistant', text: '九七号的历史' }] });
+    /** 规格 C3：服务端 collabChat 写进主会话的协同消息（【协同·xxx】前缀,真格式）→ 前端必须渲染成折叠卡 */
+    return json({ conversationId: 501, messages: [
+      { id: 900, role: 'assistant', text: '九七号的历史' },
+      { id: 903, role: 'assistant', text: '【协同·派单】小助 → 小美：盯一下店铺数据，半小时后回话（ID:12）' },
+    ] });
   }
   if (path === '/memory/user') return json({ items: USER_MEM });
   const pm = /^\/agents\/(\d+)\/memory$/.exec(path);
@@ -614,12 +621,22 @@ await act(async () => {
 });
 await flush();
 
-await check('三个入口显示服务端返回的条数（用户 2 / 项目 1 / 待确认 2）', async () => {
+await check('C4：侧栏只剩只读入口（用户 2 / 项目 1）；待确认以确认卡出现在**对话流**里（无抽屉式「待确认（N）」）', async () => {
   await waitFor('记忆入口出现', () => doc.body.textContent!.includes('用户记忆（2）'));
-  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|项目记忆|待确认/.test(t));
+  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|项目记忆/.test(t));
   assert.ok(labels.some((t) => t.includes('用户记忆（2）')), `用户记忆条数不对：${labels.join(' | ')}`);
   assert.ok(labels.some((t) => t.includes('项目记忆（1）')), `项目记忆条数不对：${labels.join(' | ')}`);
-  assert.ok(labels.some((t) => t.includes('待确认（2）')), `待确认条数不对：${labels.join(' | ')}`);
+  // C4 红线：侧栏不许再有「待确认」抽屉式入口
+  assert.ok(!qa('aside.sidebar .btn').some((b) => (b.textContent ?? '').includes('待确认')),
+    '侧栏又出现「待确认」面板入口（C4：确认在对话流里,不弹抽屉）');
+  // 待确认记忆（321 决定 / 322 事实）以确认卡出现在对话流
+  await waitFor('对话流里长出确认卡', () => qa('.memConfirmCard').length === 2, 60);
+  const cards = qa('.memConfirmCard');
+  assert.equal(cards.length, 2, `确认卡数量不对：${cards.length}`);
+  assert.match(cards[0].textContent ?? '', /记忆·决定/, '种类徽标（决定）缺失');
+  assert.match(cards[0].textContent ?? '', /决定用 A 方案/, '卡片内容不是服务端回来的真数据');
+  assert.match(cards[1].textContent ?? '', /记忆·事实/, '种类徽标（事实）缺失');
+  assert.match(cards[1].textContent ?? '', /项目代号是猎户座/, '第二条内容不对');
 });
 
 await check('展开用户记忆：列出两条，且「忘掉」走 POST /memory/forget（带 layer 与 id）', async () => {
@@ -638,22 +655,43 @@ await check('展开用户记忆：列出两条，且「忘掉」走 POST /memory
   assert.deepEqual(body, { layer: 'user', id: 301 }, `body 不对：${JSON.stringify(body)}`);
 });
 
-await check('待确认：点「确认」走 POST /memories/confirm（{ids:[id]}），该条立刻消失，并回一句人话', async () => {
-  const btn = qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('待确认'));
-  click(btn ?? null, '待确认入口');
-  await flush(3);
-  const before = qa('.memList__row--pending').length;
-  assert.equal(before, 2, `待确认行数不对：${before}`);
-
-  click(qa('.memList__confirm')[0], '确认第一条');
+await check('C4：对话流里点「确认，生效」→ POST /memories/confirm（{ids:[id]}），卡立刻消失,回一句人话', async () => {
+  const card0 = qa('.memConfirmCard')[0];
+  const goBtn = [...card0.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('确认，生效'))!;
+  assert.ok(goBtn, '确认卡上没有「确认，生效」按钮');
+  click(goBtn, '对话流里确认第一条');
   await waitFor('发出 /memories/confirm', () => requests.some((r) => r.path === '/memories/confirm'));
   await flush(3);
-  const after = qa('.memList__row--pending').length;
-  assert.equal(after, before - 1, `确认后没有立刻少一条（${before} → ${after}）`);
   const req = requests.filter((r) => r.path === '/memories/confirm').pop()!;
   const body = JSON.parse(String(req.body)) as { ids?: number[] };
   assert.deepEqual(body, { ids: [321] }, `body 不对：${JSON.stringify(body)}`);
+  assert.equal(qa('.memConfirmCard').length, 1, '确认后确认卡没立刻消失');
   assert.match(doc.body.textContent ?? '', /已确认一条记忆，今后会按它执行。/, '聊天流里没有人话提示');
+});
+
+await check('C4：对话流里点「不用」→ POST /memories/reject（{ids:[id]}），卡消失', async () => {
+  const card = qa('.memConfirmCard')[0];
+  assert.ok(card, '前置：还剩一条确认卡');
+  const rejectBtn = [...card.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('不用'))!;
+  click(rejectBtn ?? null, '对话流里拒绝');
+  await waitFor('发出 /memories/reject', () => requests.some((r) => r.path === '/memories/reject'));
+  await flush(3);
+  const req = requests.filter((r) => r.path === '/memories/reject').pop()!;
+  const body = JSON.parse(String(req.body)) as { ids?: number[] };
+  assert.deepEqual(body, { ids: [322] }, `body 不对：${JSON.stringify(body)}`);
+  assert.equal(qa('.memConfirmCard').length, 0, '「不用」之后确认卡没消失');
+});
+
+await check('C4 样式红线：17-mem-confirm.css 在场且挂入口；抽屉旧规则从设计 CSS 删净', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '17-mem-confirm.css'), 'utf8');
+  assert.ok(/\.memConfirmCard\s*\{/.test(css) && /\.memConfirmCard__btn--go\s*\{/.test(css), '确认卡规则缺失');
+  assert.ok(/border-left:\s*3px solid #d98a1f/.test(css), '确认卡缺左侧 accent 线（该和协同卡区分开）');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./17-mem-confirm.css'), '确认卡 CSS 没挂进设计入口');
+  const all = readdirSync(join(REPO, 'apps', 'desktop', 'src', 'design'))
+    .filter((f) => f.endsWith('.css')).map((f) => readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', f), 'utf8'))
+    .join('\n').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!all.includes('.memList--pending') && !all.includes('.btn--pending'), '抽屉旧规则没删净（C4：确认在对话流里）');
 });
 
 const memRequestCount = requests.length;
@@ -1633,10 +1671,10 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
 await act(async () => rootSend.unmount());
 
 // ---------------------------------------------------------------------------
-// ⑬ 模态（批次 M-6'）—— 登录页 / 人设引导 / 人设编辑：真登录、真引导、真人设
+// ⑬ 模态（批次 M-6' + 规格 C1）—— 登录页 / 三问 chips / 人设编辑：真登录、真 chips、真人设
 // ---------------------------------------------------------------------------
 log('');
-log(`--- ⑬ 模态（批次 M-6'）：登录页 / 人设引导 / 人设编辑 —— 真登录、真引导、真人设 ---`);
+log(`--- ⑬ 模态（M-6' + C1）：登录页 / 三问 chips / 人设编辑 —— 真登录、真 chips、真人设 ---`);
 
 /** 往任意 React 受控输入框打字（与 typeIntoInput 同机制，参数化元素） */
 async function typeInto(el: Element | null, text: string, label: string): Promise<void> {
@@ -1668,39 +1706,112 @@ await check('⑬-1 F4：恢复占位态与真登录页各带类（--checking / -
   authMeFails = false;
 });
 
-await check('⑬-2 AgentGuide：新建智能体的人设是真填的（确认 = 真 POST /agents/:id/persona）', async () => {
+await check('⑬-2 C1 chips：新建智能体走输入框上方 chips（答完 = 真 POST /agents/:id/persona）', async () => {
   const root = await mountApp(true);
   await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
   // 项目 7 的名单 = 小助（98 卡布是项目 8 的，不在这条名单里）
   await waitFor('名单就绪', () =>
     qa('.contact-item').some((r) => (r.textContent ?? '').includes('小助')), 60);
-  // 顶部快捷 ＋ = 真 POST /agents（personaStatus pending → 会话流挂人设引导）
+  // 顶部快捷 ＋ = 真 POST /agents（C1：建好即 ready + 默认人设 → 输入框上方摆三问 chips）
   await act(async () => {
     click(q('.rail .rail-quick-add'), '＋ 快捷创建');
     await new Promise((r) => setTimeout(r, 0));
   });
-  await waitFor('人设引导出现', () => q('.guide') !== null, 60);
-  assert.ok(q('.guide'), '新智能体 persona pending 却没挂 .guide 人设引导');
-  const inputs = qa('.guide input.guide__input');
-  assert.equal(inputs.length, 4, `引导表应 4 个输入框（实际 ${inputs.length}）`);
-  const vals = ['猎户座', '一个只懂供应链的老手', '直来直去，不绕弯', '盯库存、写补货单'];
-  for (let i = 0; i < 4; i += 1) await typeInto(inputs[i], vals[i], `引导第 ${i + 1} 格`);
-  await act(async () => {
-    click(q('.guide .guide__ok'), '引导确认');
-    await new Promise((r) => setTimeout(r, 0));
-  });
   const aid = createdAgentIds[createdAgentIds.length - 1];
+  assert.ok(aid, '＋ 没建成智能体');
+  await waitFor('chips 行出现', () => q('.personaChips') !== null, 60);
+  assert.ok(q('.personaChips'), '新智能体没在输入框上方摆三问 chips（C1）');
+  assert.ok(!q('.guide'), '旧 .guide 引导表又出现了（C1 已废）');
+  // 三组快速选项各点一个（可点）—— 全答完 → onComplete → 真 POST
+  const qs = () => qa('.personaChips .personaChips__q');
+  assert.equal(qs().length, 3, `非占位名应 3 组（它是谁/怎么说话/干什么,实际 ${qs().length}）`);
+  const pick = async (qtxt: string, opt: string, label: string) => {
+    const item = qs().find((el) => (el.textContent ?? '').includes(qtxt));
+    assert.ok(item, `找不到「${label}」那组`);
+    const btn = [...item!.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes(opt));
+    assert.ok(btn, `「${label}」没有「${opt}」选项`);
+    click(btn!, label);
+    await flush(2); // 两次点击之间的时间差：让「已答」态渲染回去（下一组才能看到 touched）
+  };
+  await pick('它是谁', '一个深耕这行的专业老手', 'who 快速选项');
+  await pick('怎么说话', '短句、直接', 'tone 快速选项');
+  await pick('干什么', '就按', 'duty 快速选项（保留原话提取值）');
   await waitFor('persona POST 发出', () =>
     requests.some((r) => r.method === 'POST' && r.path === `/agents/${aid}/persona`), 60);
-  // 原话逐字带给服务端（真数据，不是渲染时写死）
+  // chips 点选值逐字带给服务端（真数据,不是渲染时写死）
   const body = JSON.parse(String(
     requests.filter((r) => r.method === 'POST' && r.path === `/agents/${aid}/persona`).pop()!.body,
   )) as Record<string, unknown>;
-  assert.equal(body.who, '一个只懂供应链的老手', 'persona 没把原话逐字带给服务端');
-  // 服务端把 personaStatus 置 ready → 引导撤掉 + 真回执进 chatNote
-  await waitFor('引导消失', () => q('.guide') === null, 60);
+  assert.equal(body.who, '一个深耕这行的专业老手', 'persona 没把 chips 点选值带给服务端');
+  assert.equal(body.tone, '短句、直接', 'tone 没带对');
+  // 答完 → chips 收起 + 真回执进 chatNote
+  await waitFor('chips 消失', () => q('.personaChips') === null, 60);
   assert.ok((q('.chatNote')?.textContent ?? '').includes('已就位'), '真 savePersona 的回执没显示');
   await act(async () => root.unmount());
+});
+
+await check('⑬-2b C1 chips：「可自己写」内联输入（Enter 提交）+ 打字进主输入框即消失', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('名单就绪', () =>
+    qa('.contact-item').some((r) => (r.textContent ?? '').includes('小助')), 60);
+  await act(async () => {
+    click(q('.rail .rail-quick-add'), '＋ 快捷创建');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const aid = createdAgentIds[createdAgentIds.length - 1];
+  await waitFor('chips 行出现', () => q('.personaChips') !== null, 60);
+  // 「可自己写」：干什么组点「✎ 自己写」→ 内联 input → Enter 提交
+  const dutyItem = qa('.personaChips .personaChips__q').find((el) => (el.textContent ?? '').includes('干什么'))!;
+  assert.ok(dutyItem, '找不到 duty 组');
+  click([...dutyItem.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('自己写'))!, '自己写');
+  await flush(2);
+  const inline = dutyItem.querySelector('input') as HTMLInputElement | null;
+  assert.ok(inline, '「自己写」没出内联输入框');
+  await typeInto(inline, '盯仓库补货，写上架清单', 'duty 内联输入');
+  await act(async () => {
+    inline!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok((dutyItem.textContent ?? '').includes('盯仓库补货'), '内联输入 Enter 后没变成 ✓ 值');
+  // who/tone 用快速选项补齐 → 全答完 → POST（含自己写的 duty）
+  const pick = async (qtxt: string, opt: string) => {
+    const item = qa('.personaChips .personaChips__q').find((el) => (el.textContent ?? '').includes(qtxt));
+    assert.ok(item, `找不到「${qtxt}」那组`);
+    const btn = [...item!.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes(opt));
+    assert.ok(btn, `「${qtxt}」没有「${opt}」选项`);
+    click(btn!, qtxt);
+    await flush(2);
+  };
+  await pick('它是谁', '一个深耕这行的专业老手');
+  await pick('怎么说话', '温和、细致');
+  await waitFor('persona POST 发出', () =>
+    requests.some((r) => r.method === 'POST' && r.path === `/agents/${aid}/persona`), 60);
+  const body = JSON.parse(String(
+    requests.filter((r) => r.method === 'POST' && r.path === `/agents/${aid}/persona`).pop()!.body,
+  )) as Record<string, unknown>;
+  assert.equal(body.duty, '盯仓库补货，写上架清单', '自己写的 duty 没逐字带给服务端');
+  await waitFor('chips 消失', () => q('.personaChips') === null, 60);
+  await act(async () => root.unmount());
+  // 再开一轮：chips 挂着时往主输入框打字 → 即消失（已答部分照常落库）
+  const root2 = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('名单就绪', () =>
+    qa('.contact-item').some((r) => (r.textContent ?? '').includes('小助')), 60);
+  await act(async () => {
+    click(q('.rail .rail-quick-add'), '＋ 快捷创建');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  const aid2 = createdAgentIds[createdAgentIds.length - 1];
+  await waitFor('chips 行出现', () => q('.personaChips') !== null, 60);
+  const mainInput = q('.inputbar-field') as HTMLInputElement;
+  assert.ok(mainInput, '找不到主输入框');
+  await typeInto(mainInput, '帮我看看今天的销量', '主输入框');
+  await waitFor('chips 消失（打字即走）', () => q('.personaChips') === null, 60);
+  assert.ok(mainInput.value.length > 0, '主输入框的字丢了（不该清用户输入）');
+  void aid2;
+  await act(async () => root2.unmount());
 });
 
 await check('⑬-3 personaEdit：编辑浮层 draft = 当前智能体真 persona；取消不发请求', async () => {
@@ -1726,8 +1837,8 @@ await check('⑬-3 personaEdit：编辑浮层 draft = 当前智能体真 persona
   assert.ok(overlay, '人设编辑浮层没打开');
   const inputs = qa('.personaEditOverlay input.guide__input');
   assert.equal(inputs.length, 4, `编辑浮层应 4 个输入框（实际 ${inputs.length}）`);
-  // draft 必须等于 ⑬-2 填的真 persona（不是占位符、不是空）
-  assert.equal((inputs[1] as HTMLInputElement).value, '一个只懂供应链的老手', '浮层 draft 不是该智能体的真 persona');
+  // draft 必须等于 ⑬-2 用 chips 答的真 persona（不是占位符、不是空）
+  assert.equal((inputs[1] as HTMLInputElement).value, '一个深耕这行的专业老手', '浮层 draft 不是该智能体的真 persona');
   // 取消 = 只关浮层，一个请求都不许发
   const cancelBtn = [...overlay!.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('取消')) as Element;
   await act(async () => {
@@ -1740,15 +1851,23 @@ await check('⑬-3 personaEdit：编辑浮层 draft = 当前智能体真 persona
   await act(async () => root.unmount());
 });
 
-await check('⑬-4 样式红线：09-modal.css 在场且挂入口；.authCard h3 / .guide__table th/td 随组件搬走；旧规则消失', () => {
+await check('⑬-4 样式红线：09-modal.css 在场且挂入口；C1 后 .guide 容器/__ok/__del 消失,共享样式保留；chips 规则在 15-persona-chips.css', () => {
   const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '09-modal.css'), 'utf8');
   assert.ok(/\.authWrap\s*\{/.test(css), '09-modal.css 缺 .authWrap 规则');
   assert.ok(/\.authWrap--login\s*\{/.test(css) && /\.authWrap--checking\s*\{/.test(css), 'F4 的 --login/--checking 修饰类缺失');
   assert.ok(/\.authCard h3\s*\{/.test(css), '后代选择器 .authCard h3 没随组件搬走');
   assert.ok(/\.guide__table th\s*\{/.test(css) && /\.guide__table td\s*\{/.test(css), '后代选择器 .guide__table th/td 没随组件搬走');
-  assert.ok(/\.personaEditOverlay\s*\{/.test(css) && /\.guide\s*\{/.test(css), '缺 .guide / .personaEditOverlay 规则');
+  assert.ok(/\.personaEditOverlay\s*\{/.test(css), '缺 .personaEditOverlay 规则');
+  assert.ok(/\.guide__head\s*\{/.test(css) && /\.guide__input\s*\{/.test(css), '人设编辑浮层共享样式（__head/__input）丢了');
+  assert.ok(!/\.guide\s*\{/.test(css) && !/\.guide__ok\s*\{/.test(css) && !/\.guide__del\s*\{/.test(css),
+    'C1：.guide 容器 / __ok / __del 旧规则该删（引导表已废）');
+  const chips = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '15-persona-chips.css'), 'utf8');
+  assert.ok(/\.personaChips\s*\{/.test(chips) && /\.personaChips__chip\s*\{/.test(chips), 'chips 规则缺失');
+  assert.ok(/\.personaChips__chip--done\s*\{/.test(chips) && /\.personaChips__chip--write\s*\{/.test(chips) && /\.personaChips__skip\s*\{/.test(chips),
+    'chips 修饰类缺失（--done/--write/skip）');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./09-modal.css'), '模态 CSS 没挂进设计入口');
+  assert.ok(idx.includes('./15-persona-chips.css'), 'C1 chips CSS 没挂进设计入口');
   // M9'：文件级红线 —— styles.css 已整体删除（.auth*/.guide*/.personaEdit* 全在 09-modal.css）
   assert.ok(
     !existsSync(join(REPO, 'apps', 'desktop', 'src', 'styles.css')),
@@ -1768,13 +1887,18 @@ await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.t
   assert.ok(!app.includes('function AgentGuide('), 'AgentGuide 还定义在 App.tsx（M8\' 没搬?）');
   assert.ok(!/const SETTINGS_FALLBACK/.test(app), 'SETTINGS_FALLBACK 还定义在 App.tsx（M8\' 没搬?）');
   assert.ok(app.includes("AuthScreen, useAuth } from './features/auth'"), 'App 没从 features/auth 引 AuthScreen');
-  assert.ok(app.includes("AgentGuide, useChat } from './features/chat'"), 'App 没从 features/chat 引 AgentGuide');
+  assert.ok(app.includes("CollabCard, PersonaChips, isCollabMessage, useChat } from './features/chat'"), 'App 没从 features/chat 引 C1 chips / C3 折叠卡');
+  const chatImport = app.split('\n').find((l) => l.includes("from './features/chat'")) ?? '';
+  assert.ok(!chatImport.includes('AgentGuide'), 'App 还在从 features/chat 引 AgentGuide（C1 已删）');
+  assert.ok(!/<AgentGuide[\s/>]/.test(app), 'App.tsx 还在渲染 <AgentGuide/>（C1 已删）');
   assert.ok(app.includes("from './shared/settings'"), 'App 没从 shared/settings 引 SETTINGS_FALLBACK');
   const asrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'auth', 'AuthScreen.tsx'), 'utf8');
   assert.ok(asrc.includes('export function AuthScreen(') && asrc.includes('authWrap--login'), 'AuthScreen.tsx 不完整（缺 F4 的 --login 修饰类?）');
   assert.ok(asrc.includes('localStorage.setItem(TOKEN_KEY, sess.token)'), 'AuthScreen.tsx 丢了登录成功存 token 那步');
-  const gsrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'AgentGuide.tsx'), 'utf8');
-  assert.ok(gsrc.includes('export function AgentGuide(') && gsrc.includes('guide__table'), 'AgentGuide.tsx 不完整（缺引导表?）');
+  // C1：AgentGuide.tsx 已删（三问改 chips）；PersonaChips 在新家
+  assert.ok(!existsSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'AgentGuide.tsx')), 'AgentGuide.tsx 又出现了（C1 已删：三问改 chips）');
+  const gsrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'features', 'chat', 'PersonaChips.tsx'), 'utf8');
+  assert.ok(gsrc.includes('export function PersonaChips(') && gsrc.includes('personaChips__chip'), 'PersonaChips.tsx 不完整（缺 chips 主体?）');
   const ssrc = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'shared', 'settings.ts'), 'utf8');
   assert.ok(ssrc.includes('export const SETTINGS_FALLBACK'), 'shared/settings.ts 缺 SETTINGS_FALLBACK');
 });
@@ -1796,6 +1920,59 @@ await check('⑮-2 M8\' 行为：登录页搬走后 ⚡ 快捷登录照旧走真
   assert.ok(q('.app') !== null, '快捷登录后工作台没出来（搬走的登录页接线断了?）');
   assert.ok(dom.window.localStorage.getItem('workbench.token'), '快捷登录后 token 没存本地（搬动丢了登录那步?）');
   await act(async () => root.unmount());
+});
+
+
+// ---------------------------------------------------------------------------
+// ⑰ C3 协同（2026-09-25 规格）：协同进对话流（折叠卡）—— 默认收起一行,点开全文,无抽屉
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑰ C3 协同：【协同·xxx】消息渲染成折叠卡（默认收起一行,点开全文,无抽屉/仪表盘） ---`);
+
+await check('⑰-1 C3：协同消息渲染成折叠卡（默认收起,点开看全文,再点收起）', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  await waitFor('协同卡出现', () => q('.collabCard') !== null, 60);
+  assert.ok(q('.collabCard'), '【协同·派单】消息没渲染成折叠卡（C3）');
+  // 默认收起：全文不在 DOM 里,只有一行摘要
+  assert.ok(q('.collabCard__body') === null, '协同卡默认是展开的（C3 要求默认收起一行摘要）');
+  const headText = q('.collabCard__head')?.textContent ?? '';
+  assert.ok(headText.includes('协同·派单'), '一行摘要没有种类（协同·派单）');
+  assert.ok(headText.includes('小助 → 小美'), '一行摘要没有谁→谁');
+  assert.ok(headText.includes('展开'), '没有「展开」入口');
+  // 点开 → 全文（真数据,不是写死）
+  await act(async () => {
+    click(q('.collabCard__head'), '展开协同卡');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const body = q('.collabCard__body');
+  assert.ok(body, '点开后全文没出现');
+  assert.ok((body?.textContent ?? '').includes('盯一下店铺数据，半小时后回话（ID:12）'), '展开的全文不是服务端写进来的真协同内容');
+  assert.ok((q('.collabCard')?.textContent ?? '').includes('协同·派单'), '展开态还留着种类徽标');
+  // 再点 → 收起
+  await act(async () => {
+    click(q('.collabCard__head'), '收起协同卡');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(q('.collabCard__body') === null, '再点一次没收起');
+  // 普通消息不受影响（还是 .msg 气泡,没被折叠卡吞）
+  assert.ok(qa('.msg').some((el) => (el.textContent ?? '').includes('九七号的历史')), '普通助手消息没了（协同判定误伤?）');
+  // C3 红线：没有独立协同抽屉/仪表盘/指派板
+  assert.ok(!q('[class*="collabPanel"]') && !q('[class*="dashboard"]') && !q('[class*="assignBoard"]'),
+    '出现了独立协同面板/仪表盘/指派板（C3 红线：协同只进对话流）');
+  await act(async () => root.unmount());
+});
+
+await check('⑰-2 C3 样式红线：16-collab-card.css 在场且挂入口；一行摘要裁切 + 左侧 accent 线', () => {
+  const css = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '16-collab-card.css'), 'utf8');
+  assert.ok(/\.collabCard\s*\{/.test(css) && /\.collabCard__head\s*\{/.test(css) && /\.collabCard__body\s*\{/.test(css),
+    '折叠卡规则缺失（.collabCard/__head/__body）');
+  assert.ok(/border-left:\s*3px solid var\(--accent\)/.test(css), '折叠卡缺左侧 accent 线（视觉上该"退后一档"）');
+  assert.ok(/text-overflow:\s*ellipsis/.test(css), '一行摘要缺 ellipsis 裁切（会挤占对话流）');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./16-collab-card.css'), '折叠卡 CSS 没挂进设计入口');
 });
 
 log('');

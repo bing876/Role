@@ -5,10 +5,11 @@
    本文件按编号规矩收桌面的真模态体系，样式值照搬旧 styles.css（原注释保留）：
    · 登录页 AuthScreen（.authWrap 一族）—— 真登录（/auth/* 真端点、
      手机验证码 / XYZ+密码 / 微信三 tab）；
-   · 人设引导 AgentGuide（.guide 一族）—— 新建智能体（persona pending）
-     时挂在会话流里，确认 = 真 POST /agents/:id/persona；
    · 人设编辑浮层（.personaEditOverlay）—— 真 draft = 当前智能体真 persona，
      确认 = 真 POST /agents/:id/persona。
+   （旧「人设引导 AgentGuide」已于 2026-09-25 规格 C1 移除：三问改输入框上方一行
+     chips,规则随组件进 design/15-persona-chips.css；.guide 容器 / __ok / __del 随
+     组件删除,__head / __table / __input 仍被人设编辑浮层共用,保留。）
    ★ F4 修复（批次 M-2' 起挂账，用户拍板阶段 2 修）：`.authWrap` 一名两义 ——
      真登录页与「正在恢复登录状态…」占位页共用一个类名，靠"占位页里没有
      .authTabs"区分（片 5 已踩过假绿：用 .authWrap 判"回到登录页"把"卡在
@@ -88,16 +89,7 @@
   word-break: break-all;
 }
 
-/* ---- 人设引导（AgentGuide：新建智能体 persona pending 时挂会话流） ---- */
-.guide {
-  align-self: stretch;
-  flex: 0 0 auto;
-  margin: 4px 0 8px;
-  padding: 12px;
-  border: 1px solid #c7d2fe;
-  border-radius: 10px;
-  background: #f8faff;
-}
+/* ---- 人设表格（AgentGuide 已随规格 C1 移除；__head/__table 样式现由「人设编辑浮层」独用） ---- */
 .guide__head {
   font-weight: 700;
   margin-bottom: 4px;
@@ -107,8 +99,9 @@
   border-collapse: collapse;
   margin: 8px 0 2px;
 }
-/* 后代选择器（M6' 必查项）：th/td 在 .guide__table 内 —— 组件整体搬走，
-   规则随组件进本文件（引导表与人设编辑浮层共用这张表） */
+/* 后代选择器：th/td 在 .guide__table 内。
+   规格 C1（2026-09-25）：旧 AgentGuide 引导表（.guide 容器 / __head / __ok / __del）已删，
+   三问改输入框上方 chips（design/15-persona-chips.css）；此表样式保留给人设编辑浮层。 */
 .guide__table th {
   width: 84px;
   padding: 4px 8px 4px 0;
@@ -134,12 +127,6 @@
 }
 .guide__input:focus {
   border-color: var(--accent);
-}
-.guide__ok {
-  width: auto;
-}
-.guide__del {
-  color: #b91c1c;
 }
 
 /* ---- 建完能改人设：编辑浮层（盖在中栏上，.middle 是定位上下文） ---- */

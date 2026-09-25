@@ -14,6 +14,10 @@
  *      随后 /agents 里真的多了这一个智能体(数量 +1、名字对得上)。
  *   T2 问句「建一个智能体是什么意思」→ 不建(agent 数量不变),正常回落 LLM(桩模型有回话)。
  *   T3 无关键词「今天天气不错」→ 不建,回落 LLM。
+ *   T4 规格 C1(2026-09-25):「创建小美，帮我盯店铺数据」任意名字 → 立刻建好 + meta 带 newAgent
+ *      (左栏即现真名字的数据源)+ 默认人设且 duty 从原话提取。
+ *   T5 任务对象「帮我建个文件夹」→ 不建(是活,不是同事)。
+ *   T6 非名词「我需要帮助」→ 不建(不能建出叫「帮助」的同事)。
  *
  * 用法:node scripts/verify/build-agent-e2e.mjs
  */
@@ -222,6 +226,36 @@ async function main() {
   chk('T3 无关键词「今天天气不错」→ 不建,回落 LLM',
     (list3.json?.agents ?? []).length === count0 + 1 && r3.status === 200 && r3.deltaText.length > 0,
     `数量=${(list3.json?.agents ?? []).length} 回话:${r3.deltaText.slice(0, 60)}`);
+
+  // ---------------- T4 规格 C1:任意名字「创建小美」→ 立刻建好 + meta 带 newAgent(左栏数据源) ----------------
+  const r4 = await chatStream(token, { agentId: xiaozhu.id, message: '创建小美，帮我盯店铺数据' });
+  const list4 = await api(`/agents?projectId=${proj}`, { token });
+  const agents4 = list4.json?.agents ?? [];
+  const meimu = agents4.find((a) => a.name === '小美');
+  chk('T4-a 「创建小美，帮我盯店铺数据」→ 库里真多出「小美」(数量 +1,任意名字,不要求角色词)',
+    agents4.length === count0 + 2 && meimu !== undefined,
+    `数量 ${count0 + 1}→${agents4.length} 名字 ${JSON.stringify(agents4.map((a) => a.name))}`);
+  chk('T4-b SSE meta 带 newAgent(id/name/persona,左栏即现真名字的数据源)',
+    !!r4.meta?.newAgent && Number(r4.meta.newAgent.id) === Number(meimu?.id) && r4.meta.newAgent?.name === '小美',
+    `meta.newAgent=${JSON.stringify(r4.meta?.newAgent)?.slice(0, 160)}`);
+  chk('T4-c 新智能体带默认人设(who/tone 非空,立刻能聊)且 duty 从原话提取',
+    !!meimu?.persona && typeof meimu.persona.duty === 'string' && meimu.persona.duty.includes('盯店铺数据')
+      && !!(meimu.persona.who && meimu.persona.tone),
+    `persona=${JSON.stringify(meimu?.persona)?.slice(0, 160)}`);
+
+  // ---------------- T5 任务对象不建(「帮我建个文件夹」是活,不是同事) ----------------
+  const r5 = await chatStream(token, { agentId: xiaozhu.id, message: '帮我建个文件夹' });
+  const list5 = await api(`/agents?projectId=${proj}`, { token });
+  chk('T5 任务对象「帮我建个文件夹」→ 不建,回落 LLM',
+    (list5.json?.agents ?? []).length === count0 + 2 && r5.status === 200 && r5.deltaText.length > 0,
+    `数量=${(list5.json?.agents ?? []).length} 回话:${r5.deltaText.slice(0, 60)}`);
+
+  // ---------------- T6 非名词不建(「我需要帮助」不能建出叫「帮助」的同事) ----------------
+  const r6 = await chatStream(token, { agentId: xiaozhu.id, message: '我需要帮助' });
+  const list6 = await api(`/agents?projectId=${proj}`, { token });
+  chk('T6 非名词「我需要帮助」→ 不建,回落 LLM',
+    (list6.json?.agents ?? []).length === count0 + 2 && r6.status === 200 && r6.deltaText.length > 0,
+    `数量=${(list6.json?.agents ?? []).length} 回话:${r6.deltaText.slice(0, 60)}`);
 
   console.log('');
   console.log('=== 结论 ===');

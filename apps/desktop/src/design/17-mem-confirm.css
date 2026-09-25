@@ -1,0 +1,77 @@
+/* 17-mem-confirm —— 产品交互规格 C4（2026-09-25）：记忆确认在对话流里,不弹抽屉。
+   待确认记忆（decision/fact）渲染成会话流里的确认卡：「确认，生效」/「不用」。
+   视觉：比 .msg 更"待办"一档（暖色浅底 + 左侧 accent 线,与协同卡的冷色区分）。 */
+
+.memConfirmCard {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #e8d9b0;
+  border-left: 3px solid #d98a1f;
+  border-radius: 10px;
+  background: #fdf7ec;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.memConfirmCard__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+/* 种类小徽标（决定 / 事实 / 偏好） */
+.memConfirmCard__kind {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #f6e7c6;
+  color: #a05e0d;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.memConfirmCard__note {
+  color: #a08350;
+  font-size: 12px;
+}
+
+.memConfirmCard__content {
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memConfirmCard__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.memConfirmCard__btn {
+  padding: 3px 12px;
+  border: 1px solid #d9c48f;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.memConfirmCard__btn:hover {
+  border-color: #d98a1f;
+  background: #fdf2dc;
+}
+
+.memConfirmCard__btn--go {
+  border-color: #d98a1f;
+  background: #d98a1f;
+  color: #fff;
+  font-weight: 500;
+}
+
+.memConfirmCard__btn--go:hover {
+  background: #c07a17;
+}

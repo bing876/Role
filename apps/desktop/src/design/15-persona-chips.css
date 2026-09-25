@@ -1,0 +1,102 @@
+/* 15-persona-chips —— 产品交互规格 C1（2026-09-25）：三问 = 输入框上方一行 chips。
+   替代旧 .guide 大表格（已随 AgentGuide 删除,规则不跟组件走的旧货清干净）：
+   可点（快速选项）/ 可自己写（内联输入框）/ 可跳过；打字 / 跳过 / 答完即消失。
+   形态：一条浅底胶囊行,跟 .inputbar 同一视觉族（圆角/留白对齐输入栏）。 */
+
+.personaChips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.personaChips__label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* 一个问题 = 一组 chip（标签 + 选项 + 自己写） */
+.personaChips__q {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.personaChips__ql {
+  color: var(--text-weak);
+  font-size: 12.5px;
+}
+
+.personaChips__chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.personaChips__chip:hover {
+  border-color: var(--accent);
+  background: #f5f8ff;
+}
+
+/* 「✎ 自己写」：虚线描边,和实心选项区分 */
+.personaChips__chip--write {
+  border-style: dashed;
+  color: var(--text-weak);
+}
+
+.personaChips__chip--write:hover {
+  color: var(--accent);
+}
+
+/* 已答：折叠成一枚「✓ 值」,点一下可再改 */
+.personaChips__chip--done {
+  border-color: var(--accent);
+  background: #eef4ff;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.personaChips__input {
+  width: 150px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: #fff;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  outline: none;
+}
+
+/* 「跳过」靠右收边：不是按钮组,是一句小声的退路 */
+.personaChips__skip {
+  margin-left: auto;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-weak);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.personaChips__skip:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.04);
+}

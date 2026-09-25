@@ -16,8 +16,7 @@ body.viewport{
 /* ============ 批次 M-7'：桌面共享 UI 原语（旧 styles.css 迁入，值原样） ============
    这些是桌面全局按钮/文字原语，不属于某个组件 —— 收在 base 编号位。
    注意导入顺序：02 先于 04/06/10 导入，后面文件里的同权重覆写（如
-   .loopGone__warn / .driveBar__go / .btn--pending）靠"后导入者赢"生效，
-   与旧 styles.css 单一文件内的顺序语义一致。 */
+   .loopGone__warn）靠"后导入者赢"生效，与旧 styles.css 单一文件内的顺序语义一致。 */
 .btn {
   padding: 6px 10px;
   border: 1px solid #ccc;
@@ -40,17 +39,8 @@ body.viewport{
   border-color: #111827;
 }
 
-/* 记忆确认卡：待确认态按钮（琥珀） */
-.btn--pending {
-  border-color: #f59e0b;
-  background: #fffbeb;
-  color: #92400e;
-  font-weight: 600;
-}
-
-.btn--pending:hover {
-  background: #fef3c7;
-}
+/* 规格 C4（2026-09-25）：旧侧栏「待确认」抽屉已移除,其琥珀按钮样式 .btn--pending
+   随之删除 —— 确认卡样式改在 design/17-mem-confirm.css（对话流里的 .memConfirmCard）。 */
 
 .small {
   color: var(--text-weak);

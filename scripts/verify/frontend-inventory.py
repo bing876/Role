@@ -104,7 +104,7 @@ def main() -> int:
     data['files']['browser/styles.css'] = lines_of(BROWSER_STYLES)
     data['files']['channels/styles.css'] = lines_of(CHANNELS_STYLES)
 
-    # ---- hook 普查（按组件分段；M8' 后 AuthScreen/AgentGuide 已搬进 features/）----
+    # ---- hook 普查（按组件分段；M8' 后 AuthScreen 已搬进 features/；规格 C1 后 AgentGuide → PersonaChips）----
     def fn_span(text: str, head: str) -> tuple[int, int]:
         """顶格 `function <head>(` 起到第一个顶格 `}`，返回 (起, 止) 1-based 行号。"""
         ln_ = text.split('\n')
@@ -113,13 +113,13 @@ def main() -> int:
         return a + 1, b + 1
 
     auth_ln = read(SRC / 'features' / 'auth' / 'AuthScreen.tsx').split('\n')
-    guide_ln = read(SRC / 'features' / 'chat' / 'AgentGuide.tsx').split('\n')
+    chips_ln = read(SRC / 'features' / 'chat' / 'PersonaChips.tsx').split('\n')
     a_a, a_b = fn_span('\n'.join(auth_ln), 'export function AuthScreen(')
-    g_a, g_b = fn_span('\n'.join(guide_ln), 'export function AgentGuide(')
+    g_a, g_b = fn_span('\n'.join(chips_ln), 'export function PersonaChips(')
     app_a, app_b = fn_span(app, 'export default function App()')
     regions = {
         'AuthScreen': ('features/auth/AuthScreen.tsx', a_a, a_b),
-        'AgentGuide': ('features/chat/AgentGuide.tsx', g_a, g_b),
+        'PersonaChips': ('features/chat/PersonaChips.tsx', g_a, g_b),
         'App': ('App.tsx', app_a, app_b),
     }
     for name, (fname, a, b) in regions.items():
