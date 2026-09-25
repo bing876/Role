@@ -80,12 +80,12 @@ start-dev.cmd 误删 `postmaster.pid`、`watchdog.cmd` 每 10s 反复删 pid + �
 - ★★★ **`ENABLE_DEV_MOCK_LLM=1` 会被真 `DEEPSEEK_API_KEY` 顶掉**（`env.ts:301` 是真 key 优先）
   ⇒ 「不联网、不烧 token」的验收脚本**实际在调真 API**：结果不确定 + 花用户的钱。
   修法：脚本里**显式**加 `DEEPSEEK_API_KEY: 'mock'`（`loop-kill9-db` / `r4-dispatch-acceptance` 已修）。
-- ★★ **Windows 下验收脚本的四类固定崩法**（都在 Linux 上是对的，所以一直没暴露）：
+- ★★ **Windows 下验收脚本的四类固定崩法**（Linux 上都是对的，所以一直没暴露）：
   ① `spawn('npx')` / `subprocess.run(['npx',…])` → **ENOENT**（CreateProcess 不解析 `.cmd`）⇒ 改 `node + node_modules/tsx/dist/cli.mjs`；
-  ② `path.relative` 给 `routes\agent.ts`，而白名单是 `/` 拼的 ⇒ 永远红 ⇒ `.split(path.sep).join('/')`；
+  ② `path.relative` 给 `tasks\agent.ts` 而白名单是 `/` 拼的 ⇒ 永远红 ⇒ `.split(path.sep).join('/')`；
   ③ `new URL(...).pathname` 给 `/C:/...` ⇒ esbuild `Could not resolve` ⇒ 改 `join(repoRoot,…)`；
-  ④ 行尾：`read()` 要归一 CRLF→LF；**还原文件要按字节**（`read_bytes`/`write_bytes`），
-     `write_text` 会把 `\n` 翻成 `os.linesep`、把已有的 `\r\n` 变成 `\r\r\n`。
+  ④ 行尾：`read()` 归一 CRLF→LF；**还原文件必须按字节**（`read_bytes`/`write_bytes`）。
+  （逐脚本明细见 `2026-09-25.md` 下午那节）
 - 自己起全套环境、自己收干净、**端口另起**；8901 被 `douyin_tray.exe` 占；8787 服务端、5173 vite
 - 探针 `main()` 里 `return 2` 会跳过收尾 ⇒ 用 `__main__` 的 `try/finally: cleanup_all()`
 - ★ 触发 `target=_blank` / React 合成事件必须**完整鼠标序列** `mouseMoved → mousePressed(1) → mouseReleased(0)`（`.click()` 静默失效）
