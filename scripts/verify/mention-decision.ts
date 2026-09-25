@@ -23,6 +23,25 @@
  *       R-C（整条只有 @名字 → 反问，不调模型）/ 拍板1（@ 与名字之间有空格不算）/
  *       邮箱里的 @ 不算 / 名单外不算 / 拍板2（只认第一个命中）/
  *       告知由谁开口（绝不让正忙的那个替自己开口）/ 确定性 / unknown 透传
+ *
+ * ★★★ 为什么本文件是 `.ts` 而**不是** `.mts`（2026-09-25 修，改之前先读这段）
+ * ---------------------------------------------------------------------------
+ * 这一层必须**直接改服务端的内存状态**（`markAgentBusy` 写 registry、`startLoop`
+ * 建循环），再断言 `resolveChatMention` 看得见。这就要求「测试 import 到的 registry」
+ * 与「mention.ts 内部 import 到的 registry」**是同一个模块实例**。
+ *
+ * 但 `apps/server` 是 **CommonJS**（tsconfig `module: CommonJS` + package.json 无 `type`），
+ * 而 `.mts` 强制 **ESM**。tsx 下 ESM 入口去 import CJS 模块时会**另起一份实例** ⇒
+ *   · 测试的 markAgentBusy 写进实例 A
+ *   · mention.ts → agentStatus.ts → registry.ts 读的是实例 B
+ * ⇒ 忙标记永远看不见，11 条 R-A/busy 断言全红（表现为「决定是 switch，不是 busy」）。
+ *
+ * 实测对照（同一段代码、只换扩展名）：
+ *   .ts  入口 → agentStatus 内部 busy=1 → working → 判定 busy   ✅
+ *   .mts 入口 → agentStatus 内部 busy=0 → idle    → 判定 switch ❌
+ *
+ * 所以**不要把它改回 `.mts`**；同理，任何要读写服务端内存状态的验收脚本都得用 `.ts`。
+ * 只测纯函数（如 J1 解析器 mention-parse.mts）的脚本不受影响，`.mts` 照旧。
  */
 import assert from 'node:assert/strict';
 import {

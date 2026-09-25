@@ -3,9 +3,22 @@
  * 目标：确保只有一份定义，聊天与编排共用，且参数契约一致。
  */
 import assert from 'node:assert/strict';
-import { WEB_SEARCH_TOOL_DEFINITION, WEB_SEARCH_TOOL_NAME } from '../../apps/server/src/search/toolDef';
-import { WEB_SEARCH_TOOL as CHAT_TOOL } from '../../apps/server/src/search/chatTool';
-import { WEB_SEARCH_SERVER_TOOL } from '../../apps/server/src/orchestrator/search';
+import { createRequire } from 'node:module';
+/**
+ * ★★★ 服务端三个模块必须用 `require`（CJS 图）载入，**不能**用 `import`（2026-09-25 修）
+ * ---------------------------------------------------------------------------
+ * 本文件是 `.mts`（ESM），而 `apps/server` 是 **CommonJS**（tsconfig `module: CommonJS`
+ * + package.json 无 `type`）。tsx 下两者**各有一份模块图**，于是
+ * `orchestrator/search` 的 `export const WEB_SEARCH_SERVER_TOOL = WEB_SEARCH_TOOL_DEFINITION`
+ * 指向的是**另一份实例**里的对象 ⇒ 断言「与 toolDef 同对象」变成
+ * `Values have same structure but are not reference-equal`。
+ * 结构相等、引用不等 = 双实例的指纹（产品代码本身没问题）。
+ * ★ 以后往本文件加服务端模块，一律走下面的 `req`。
+ */
+const req = createRequire(import.meta.url);
+const { WEB_SEARCH_TOOL_DEFINITION, WEB_SEARCH_TOOL_NAME } = req('../../apps/server/src/search/toolDef') as typeof import('../../apps/server/src/search/toolDef');
+const { WEB_SEARCH_TOOL: CHAT_TOOL } = req('../../apps/server/src/search/chatTool') as typeof import('../../apps/server/src/search/chatTool');
+const { WEB_SEARCH_SERVER_TOOL } = req('../../apps/server/src/orchestrator/search') as typeof import('../../apps/server/src/orchestrator/search');
 import { SENSITIVE_TARGET_RE } from '../../packages/shared/src/tools';
 
 let fails = 0, passes = 0;

@@ -18,14 +18,27 @@
  * 用法：npx tsx scripts/verify/orc-e2e.mts
  */
 import assert from 'node:assert/strict';
-import { ORCH_DEFAULTS, resolveOrchestratorEnv, type OrchestratorEnv, type ServerEnv } from '../../apps/server/src/env';
-import { makeCipher } from '../../apps/server/src/crypto';
-import { makePool, migrate } from '../../apps/server/src/db';
-import { advance, startLoop } from '../../apps/server/src/toolLoop';
-import { initOrchestrator, setOrchestratorDepsForTest } from '../../apps/server/src/orchestrator/tools';
-import { SUB_AGENT_TOOL_NAMES } from '../../apps/server/src/toolRegistry';
-import { resetRegistryForTest, initRegistry, agentBusyCount, isAgentWaiting } from '../../apps/server/src/orchestrator/registry';
-import { subLoopCount, listSubLoops } from '../../apps/server/src/orchestrator/subLoops';
+import { createRequire } from 'node:module';
+/**
+ * ★★★ 服务端模块必须用 `require`（CJS 图）载入，**不能**用 `import`（2026-09-25 修）
+ * 原因同 orc-delegate.mts 头注释：`.mts`(ESM) 与 `apps/server`(CJS) 在 tsx 下各有一份
+ * 模块图，`import` 拿到的 registry / toolLoop / subLoops 与生产代码内部 require 到的
+ * 不是同一个实例 ⇒ 子循环、忙碌、等待等状态断言全红。以后加服务端模块一律走 `req`。
+ */
+import type { OrchestratorEnv, ServerEnv } from '../../apps/server/src/env';
+const req = createRequire(import.meta.url);
+const { ORCH_DEFAULTS, resolveOrchestratorEnv } = req('../../apps/server/src/env') as typeof import('../../apps/server/src/env');
+const { makeCipher } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
+const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
+const { advance, startLoop } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
+const { initOrchestrator, setOrchestratorDepsForTest } = req(
+  '../../apps/server/src/orchestrator/tools',
+) as typeof import('../../apps/server/src/orchestrator/tools');
+const { SUB_AGENT_TOOL_NAMES } = req('../../apps/server/src/toolRegistry') as typeof import('../../apps/server/src/toolRegistry');
+const { resetRegistryForTest, initRegistry, agentBusyCount, isAgentWaiting } = req(
+  '../../apps/server/src/orchestrator/registry',
+) as typeof import('../../apps/server/src/orchestrator/registry');
+const { subLoopCount, listSubLoops } = req('../../apps/server/src/orchestrator/subLoops') as typeof import('../../apps/server/src/orchestrator/subLoops');
 
 let fails = 0;
 let passes = 0;

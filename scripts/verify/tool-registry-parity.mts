@@ -17,21 +17,38 @@
  * 或：npm run verify:tools
  */
 import assert from 'node:assert/strict';
-import {
+import { createRequire } from 'node:module';
+/**
+ * ★★★ 服务端的两个模块必须用 `require`（CJS 图）载入，**不能**用 `import`（2026-09-25 修）
+ * ---------------------------------------------------------------------------
+ * 本文件是 `.mts`（ESM，第 ⑥ 段有顶层 await，改不成 `.ts`），而 `apps/server` 是
+ * **CommonJS**（tsconfig `module: CommonJS` + package.json 无 `type`）。
+ *
+ * tsx 下这两种模块系统**各有一份模块图**：ESM 侧 `import` 进来的 `toolRegistry`
+ * 与 `toolLoop` 内部 `require('./toolRegistry')` 拿到的**不是同一个实例**。
+ * 实测（`serverToolRegistry === require(...).serverToolRegistry` → false）：
+ * 用 import 那侧 `registerServerTool('parity_echo')` 注册，`advance()` 在 require 那侧
+ * 查不到 ⇒ ⑥ 段三条断言全红（工具没被执行、回执没进历史、没有第二次问模型）。
+ *
+ * 用 `createRequire` 载入 ⇒ 测试与生产代码共用同一个 CJS 实例，注册即可见。
+ * ★ 以后往本文件加服务端模块时，一律走这个 `req`，别退回 `import`。
+ */
+const req = createRequire(import.meta.url);
+const {
   LOOP_TOOLS,
   advance,
   sanitizeToolCall,
   sanitizeToolCallLegacy,
   startLoop,
-  toolToAction as serverToolToAction,
-  toolToActionLegacy as serverToolToActionLegacy,
+  toolToAction: serverToolToAction,
+  toolToActionLegacy: serverToolToActionLegacy,
   useLegacyToolPath,
-} from '../../apps/server/src/toolLoop';
-import {
+} = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
+const {
   LOOP_TOOL_NAMES,
   registerServerTool,
   serverToolRegistry,
-} from '../../apps/server/src/toolRegistry';
+} = req('../../apps/server/src/toolRegistry') as typeof import('../../apps/server/src/toolRegistry');
 import {
   BROWSER_TOOL_DEFINITIONS,
   BROWSER_TOOL_NAMES,

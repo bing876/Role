@@ -108,7 +108,10 @@ check('[交叉] 全仓再扫:tasks 写点文件只允许 {routes/agent.ts, db.ts
   };
   walk(serverSrc);
   for (const p of files) {
-    const rel = path.relative(serverSrc, p);
+    // ★ 必须归一成 `/`（2026-09-25 修）：`path.relative` 在 Windows 返回 `routes\agent.ts`，
+    //   而下面的白名单是 `/` 拼的 ⇒ 在 Windows 上**永远红**（Linux/macOS 绿）。
+    //   这是「测试只在本机红」的典型形状 —— 会让人去怀疑代码，而不是怀疑测试。
+    const rel = path.relative(serverSrc, p).split(path.sep).join('/');
     assert(rel === 'routes/agent.ts' || rel === 'db.ts', `发现新的 tasks 写点:${rel} —— 新口子必须先过脱敏审计`);
   }
 });

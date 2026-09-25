@@ -34,7 +34,11 @@ async function main(): Promise<void> {
   const outfile = join(outDir, 'ui-test.mjs');
 
   await build({
-    entryPoints: [new URL('./orc-channels-ui.run.tsx', import.meta.url).pathname],
+    // ★ 必须用 `join(repoRoot, ...)`，不能用 `new URL(...).pathname`（2026-09-25 修）：
+    //   后者在 Windows 上给出 `/C:/Users/...`（多一个前导斜杠），esbuild 直接
+    //   `Could not resolve "/C:/..."` 崩掉 —— Linux/macOS 上是对的，所以一直没暴露。
+    //   同目录的 app-shell-smoke.mts / app-logic-smoke.mts 本来就是这么写的。
+    entryPoints: [join(repoRoot, 'scripts', 'verify', 'orc-channels-ui.run.tsx')],
     bundle: true,
     platform: 'node',
     // ★ 必须 esm：测试里用了顶层 await（jsdom 全局要在 import react-dom **之前**铺好，

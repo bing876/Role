@@ -44,7 +44,7 @@
     "live": "node scripts/live.mjs",
     "clean": "node scripts/clean.mjs",
     "verify:mention:parse": "tsx scripts/verify/mention-parse.mts",
-    "verify:mention:decision": "tsx scripts/verify/mention-decision.mts",
+    "verify:mention:decision": "tsx scripts/verify/mention-decision.ts",
     "verify:mention:desktop": "tsx scripts/verify/mention-desktop.mts",
     "verify:mention:e2e": "npm run build -w @ai-workbench/shared && npm run build -w @ai-workbench/server && node scripts/verify/mention-e2e.mjs",
     "verify:typecheck": "npx --no-install tsc -p packages/shared/tsconfig.json --noEmit && npx --no-install tsc -p apps/desktop/tsconfig.json --noEmit && npx --no-install tsc -p apps/desktop/tsconfig.electron.json --noEmit && npx --no-install tsc -p apps/server/tsconfig.json --noEmit && node scripts/verify/typecheck-gate.mjs",

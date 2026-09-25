@@ -18,16 +18,26 @@
  */
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { ORCH_DEFAULTS, type ServerEnv } from '../../apps/server/src/env';
-import { makeCipher, signToken } from '../../apps/server/src/crypto';
-import { makePool, migrate } from '../../apps/server/src/db';
-import { registerLoopRoutes } from '../../apps/server/src/routes/loop';
-import { registerChannelRoutes } from '../../apps/server/src/routes/channels';
-import { initOrchestrator } from '../../apps/server/src/orchestrator/tools';
-import { getLoop } from '../../apps/server/src/toolLoop';
-import { ensureChannel, addChannelMessage, insertDelegation } from '../../apps/server/src/orchestrator/channels';
-import { orchestrationBlockFor } from '../../apps/server/src/orchestrator/roster';
-import { resolveOrchestratorEnv } from '../../apps/server/src/env';
+import { createRequire } from 'node:module';
+/**
+ * ★★★ 服务端模块必须用 `require`（CJS 图）载入，**不能**用 `import`（2026-09-25 修）
+ * 原因同 orc-delegate.mts 头注释：`.mts`(ESM) 与 `apps/server`(CJS) 在 tsx 下各有一份
+ * 模块图，`import` 拿到的 toolLoop / registry 与生产代码内部 require 到的不是同一个实例
+ * ⇒ 测试建好的循环在路由里查不到。以后加服务端模块一律走 `req`。
+ */
+import type { ServerEnv } from '../../apps/server/src/env';
+const req = createRequire(import.meta.url);
+const { ORCH_DEFAULTS, resolveOrchestratorEnv } = req('../../apps/server/src/env') as typeof import('../../apps/server/src/env');
+const { makeCipher, signToken } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
+const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
+const { registerLoopRoutes } = req('../../apps/server/src/routes/loop') as typeof import('../../apps/server/src/routes/loop');
+const { registerChannelRoutes } = req('../../apps/server/src/routes/channels') as typeof import('../../apps/server/src/routes/channels');
+const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
+const { getLoop } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
+const { ensureChannel, addChannelMessage, insertDelegation } = req(
+  '../../apps/server/src/orchestrator/channels',
+) as typeof import('../../apps/server/src/orchestrator/channels');
+const { orchestrationBlockFor } = req('../../apps/server/src/orchestrator/roster') as typeof import('../../apps/server/src/orchestrator/roster');
 
 let fails = 0;
 let passes = 0;

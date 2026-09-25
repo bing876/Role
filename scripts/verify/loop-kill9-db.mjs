@@ -61,6 +61,20 @@ const CHILD_ENV = {
   DATA_KEY: 'a'.repeat(64),
   PHONE_PEPPER: 'b'.repeat(64),
   ENABLE_DEV_MOCK_LLM: '1',
+  /**
+   * ★★★ 必须显式把 key 也压成 'mock'（2026-09-25 修）—— 只设 ENABLE_DEV_MOCK_LLM 是**不够**的。
+   *
+   * env.ts:301 的取值顺序是
+   *   `process.env.DEEPSEEK_API_KEY || (ENABLE_DEV_MOCK_LLM === '1' ? 'mock' : '')`
+   * ⇒ **真 key 优先**。只要开发机/CI 的环境里（或 `apps/server/.env` 里）有真的
+   * DEEPSEEK_API_KEY，这一句 `ENABLE_DEV_MOCK_LLM: '1'` 就**被静默无视**，worker 会去调
+   * 真 DeepSeek API。后果有两层：
+   *   ① 本测试依赖确定的工具序列（open_url → read_page → stop），真模型给什么全看运气
+   *      ⇒ 变成随机红（实测 3/3 红，且失败点每次都不一样）；
+   *   ② **每跑一次都在烧用户的真 token**，而脚本头注释还写着「不联网、不烧 token」。
+   * 显式覆盖成 'mock' 之后，modelRouter 的每一条路由拿到的都是 'mock'，llm.ts 才走桩。
+   */
+  DEEPSEEK_API_KEY: 'mock',
   PORT: '39999', // worker 不起 HTTP，只是 env.ts 要求一个合法端口
 };
 

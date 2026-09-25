@@ -70,10 +70,23 @@ async function bootServer() {
     SMS_MOCK: '1',
     NODE_ENV: 'development',
     ENABLE_DEV_MOCK_LLM: '1',
+    /**
+     * ★★★ 必须显式把 key 也压成 'mock'（2026-09-25 修）—— 只设 ENABLE_DEV_MOCK_LLM 是**不够**的。
+     * env.ts:301 是 `process.env.DEEPSEEK_API_KEY || (ENABLE_DEV_MOCK_LLM === '1' ? 'mock' : '')`
+     * ⇒ **真 key 优先**。环境里（或 apps/server/.env 里）有真 key 时，上面那句桩开关被静默无视，
+     * 服务端会去调真 DeepSeek API —— 与本脚本头注释「不联网、不烧 token」直接矛盾，
+     * 而且每跑一次都在花用户的钱。显式覆盖后 modelRouter 每条路由都是 'mock'，llm.ts 才走桩。
+     */
+    DEEPSEEK_API_KEY: 'mock',
   };
   const logPath = path.join(OUT_DIR, `server-${LABEL}.log`);
   const log = fs.createWriteStream(logPath);
-  const child = spawn('npx', ['tsx', 'apps/server/src/index.ts'], { cwd: REPO, env });
+  // ★ 不能用 `spawn('npx', ...)`（2026-09-25 修）：Windows 的 CreateProcess 只按 `.exe`
+  //   补后缀，**不会**经 PATHEXT 找到 `npx.cmd` ⇒ 直接 `spawn npx ENOENT` 崩在起服务端这步，
+  //   整个 verify:r4 跑不起来（Linux/macOS 上一直是对的，所以从没暴露）。
+  //   改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 shell 引号。
+  const tsxCli = path.join(REPO, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const child = spawn(process.execPath, [tsxCli, 'apps/server/src/index.ts'], { cwd: REPO, env });
   child.stdout.pipe(log);
   child.stderr.pipe(log);
 

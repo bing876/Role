@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -46,8 +48,14 @@ MUTATIONS = [
 
 
 def run_acceptance() -> tuple[int, str]:
+    # ★ 不能用 ['npx', 'tsx', ...]（2026-09-25 修）：Windows 的 CreateProcess 只按 `.exe`
+    #   补后缀，**不会**经 PATHEXT 找到 `npx.cmd` ⇒ FileNotFoundError: [WinError 2]，
+    #   反证脚本在真跑验收前就崩了（Linux/macOS 一直正常，所以从没暴露）。
+    #   改成「node + 本地 tsx CLI」，跨平台且不依赖 PATH 里的 npx。
+    tsx_cli = os.path.join(REPO, 'node_modules', 'tsx', 'dist', 'cli.mjs')
+    node = shutil.which('node') or 'node'
     proc = subprocess.run(
-        ['npx', 'tsx', 'scripts/verify/handoff-redact.mts'],
+        [node, tsx_cli, 'scripts/verify/handoff-redact.mts'],
         cwd=REPO,
         capture_output=True,
         text=True,

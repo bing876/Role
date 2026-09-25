@@ -17,19 +17,32 @@
  * 用法：npx tsx scripts/verify/orc-park.mts
  */
 import assert from 'node:assert/strict';
-import { ORCH_DEFAULTS, type OrchestratorEnv, type ServerEnv } from '../../apps/server/src/env';
-import { makeCipher } from '../../apps/server/src/crypto';
-import { makePool, migrate } from '../../apps/server/src/db';
-import {
-  advance,
-  getLoop,
-  resumeLoop,
-  pauseLoop,
-  startLoop,
-  stopLoop,
-} from '../../apps/server/src/toolLoop';
-import { initOrchestrator } from '../../apps/server/src/orchestrator/tools';
-import { liveJobCount } from '../../apps/server/src/orchestrator/registry';
+import { createRequire } from 'node:module';
+/**
+ * ★★★ 服务端模块必须用 `require`（CJS 图）载入，**不能**用 `import`（2026-09-25 修）
+ * ---------------------------------------------------------------------------
+ * 本文件是 `.mts`（ESM），而 `apps/server` 是 **CommonJS**（tsconfig `module: CommonJS`
+ * + package.json 无 `type`）。tsx 下两者**各有一份模块图**：ESM 侧 `import` 进来的
+ * `toolLoop` / `registry` 与生产代码内部 `require` 到的**不是同一个实例**。
+ *
+ * 症状：循环里 `spawn_workers` 建的 job 落在 CJS 实例，而本文件断言的
+ * `liveJobCount()`（ESM 实例）恒为 0 ⇒ 「前置条件：该有一个 job 在跑」直接崩，
+ * 连带 ⑥⑦⑧ 三段全红。产品代码没问题，是测试拿错了实例。
+ *
+ * ★ 以后往本文件加服务端模块，一律走下面的 `req`，别退回 `import`。
+ *   （只测纯函数、不碰跨模块内存状态的脚本不受影响，`.mts` 照旧可用。）
+ */
+import type { OrchestratorEnv, ServerEnv } from '../../apps/server/src/env';
+
+const req = createRequire(import.meta.url);
+const { ORCH_DEFAULTS } = req('../../apps/server/src/env') as typeof import('../../apps/server/src/env');
+const { makeCipher } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
+const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
+const { advance, getLoop, resumeLoop, pauseLoop, startLoop, stopLoop } = req(
+  '../../apps/server/src/toolLoop',
+) as typeof import('../../apps/server/src/toolLoop');
+const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
+const { liveJobCount } = req('../../apps/server/src/orchestrator/registry') as typeof import('../../apps/server/src/orchestrator/registry');
 
 let fails = 0;
 let passes = 0;
