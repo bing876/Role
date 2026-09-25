@@ -539,6 +539,11 @@ function agentColor(a: AgentView): string {
   return `hsl(${hue} 62% 60%)`;
 }
 
+/** M3':第一列头像块的那一个字（真数据：会话对外号 / 打码手机号首字，都没有就 U） */
+function userAvatarChar(u: { xyz_id?: string; phone_masked?: string | null }): string {
+  return (u.xyz_id || u.phone_masked || 'U').slice(0, 1).toUpperCase();
+}
+
 /** M2':行第二行的真实状态人话（服务端 statusDetail 优先；否则沿用既有状态逻辑） */
 function agentStatusLine(a: AgentView): string {
   if (a.statusDetail) return a.statusDetail;
@@ -1964,6 +1969,108 @@ export default function App() {
       style={{ '--browser-w': `${col.colWidth}px`, '--sb-w': `${sb.sbWidth}px` } as React.CSSProperties}
     >
       {/*
+        M3':第一列（玻璃栏）—— 结构跟设计基准 workbench-ui 的 Rail,内容全是真功能:
+        顶部 = 用户头像块（真:登录会话对外号首字）;中段 = 两颗**真**视图开关
+        （与旧顶栏按钮同源,第四列状态接线一字未动）+ 条件渲染的编辑人设;
+        其下 = 真名单 chip（与第二列同数据源,点击 = 真切换）+ ＋ 真新建。
+        微信 5 tab（假子视图）/ 汉堡（无真功能）不搬。
+      */}
+      <nav className="rail" aria-label="主导航">
+        <div
+          className="menu-btn"
+          title={session ? (session.user.phone_masked || session.user.xyz_id || '已登录账号') : '未登录'}
+        >
+          <span className="user-avatar-ico" aria-hidden="true">
+            {session ? userAvatarChar(session.user) : '·'}
+          </span>
+        </div>
+        <button
+          type="button"
+          className={`tab tab--chat ${!col.colOpen || browser.view !== 'fullscreen' ? ' selected' : ''}`}
+          style={{ top: 72 }}
+          onClick={() => {
+            browser.exitFullscreen();
+            col.hideColumn();
+          }}
+          aria-label="对话模式"
+          title="💬 对话"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <path d="M4 5.5h16v11H9l-5 4z" strokeLinejoin="round" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className={`tab tab--browser ${browser.view === 'fullscreen' && col.colOpen ? ' selected' : ''}`}
+          style={{ top: 122 }}
+          onClick={() => {
+            if (browser.tabs.length === 0) {
+              browser.openNewTab();
+            }
+            browser.showFullscreen();
+            col.openColumn();
+          }}
+          aria-label="启用浏览器"
+          title="🌐 启用内嵌浏览器工作台（没有标签页时自动打开主页）"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+            <circle cx="12" cy="12" r="8.5" />
+            <path d="M3.5 12h17" />
+            <path d="M12 3.5c2.5 2.3 3.8 5.2 3.8 8.5s-1.3 6.2-3.8 8.5c-2.5-2.3-3.8-5.2-3.8-8.5s1.3-6.2 3.8-8.5z" />
+          </svg>
+          {browser.tabCount > 0 && <span className="workbenchNav__badge">{browser.tabCount}</span>}
+          {browser.drivingIds.length > 0 && <span className="workbenchNav__driving" title="AI 正在操作网页" />}
+        </button>
+        {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
+          <button
+            type="button"
+            className="tab tab--persona"
+            style={{ top: 172 }}
+            onClick={() => openPersonaEdit(curAgent)}
+            aria-label="编辑人设"
+            title="编辑人设：名称 / 它是谁 / 怎么说话 / 干什么"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+              <path d="M14.5 5.5l4 4L8 20H4v-4z" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+        <div className="agent-list" aria-label="智能体">
+          {sidebarAgents.map((a) => (
+            <div
+              key={a.id}
+              role="button"
+              tabIndex={0}
+              className={`agent-chip${a.id === curAgentId ? ' selected' : ''}${justAddedAgentId === a.id ? ' agent-pop' : ''}`}
+              title={a.name}
+              aria-label={a.name}
+              style={{ '--c1': agentColor(a) } as React.CSSProperties}
+              onClick={() => selectAgent(a)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  selectAgent(a);
+                }
+              }}
+            >
+              {agentGlyph(a)}
+            </div>
+          ))}
+          <button
+            className="rail-quick-add"
+            aria-label="快捷新建智能体"
+            title="新建智能体"
+            disabled={agentBusy}
+            onClick={() => void addAgent()}
+            type="button"
+          >
+            <i className="qadd-h" />
+            <i className="qadd-v" />
+          </button>
+        </div>
+      </nav>
+
+      {/*
         左侧：**智能体列表**（自带「小助」+ 用户点「添加」建的）。
         第 15 步起这里不再是一个写死的联系人——一个智能体一行，点一行就换一份聊天。
         「＋ 添加」不弹独立设置窗、不开新 BrowserWindow：服务端建好智能体 + 空会话，直接切过去。
@@ -2357,62 +2464,7 @@ export default function App() {
 
       {/* 中间：**钉住的浏览器工作区**（tab + URL 栏 + 当前页）+ 聊天区 */}
       <main className="middle">
-        {/* 常驻工作台顶栏：随时随地切换【对话模式】与【浏览器工作台】 */}
-        <header className="workbenchNav">
-          <div className="workbenchNav__meta">
-            <span className="workbenchNav__name">
-              {curAgent ? `🤖 ${curAgent.name}` : 'AI 工作台'}
-            </span>
-            <span className="workbenchNav__status">在线</span>
-            {curState?.current_task && (
-              <span className="small" style={{ color: '#6b7280', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={curState.current_task}>
-                · {curState.current_task}
-              </span>
-            )}
-          </div>
-          <div className="workbenchNav__views">
-            <button
-              type="button"
-              className={`workbenchNav__btn workbenchNav__btn--chat ${!col.colOpen || browser.view !== 'fullscreen' ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => {
-                browser.exitFullscreen();
-                col.hideColumn();
-              }}
-            >
-              💬 对话
-            </button>
-            <button
-              type="button"
-              className={`workbenchNav__btn workbenchNav__btn--browser ${browser.view === 'fullscreen' && col.colOpen ? 'workbenchNav__btn--active' : ''}`}
-              onClick={() => {
-                if (browser.tabs.length === 0) {
-                  browser.openNewTab();
-                }
-                browser.showFullscreen();
-                col.openColumn();
-              }}
-              title="启用内嵌浏览器工作台（没有标签页时自动打开主页）"
-            >
-              🌐 启用
-              {browser.tabCount > 0 && <span className="workbenchNav__badge">{browser.tabCount}</span>}
-              {browser.drivingIds.length > 0 && <span className="workbenchNav__driving" title="AI 正在操作网页" />}
-            </button>
-            {/*
-              多智能体编排 · 内部频道入口。
-              ★ 只是视图开关，不影响任何一路驾驶（与上面两个按钮同一性质）。
-            */}
-            {curAgent && curAgent.kind !== 'assistant' && curAgent.personaStatus === 'ready' && (
-              <button
-                type="button"
-                className="workbenchNav__btn"
-                onClick={() => openPersonaEdit(curAgent)}
-                title="建完也能改人设：改名称/它是谁/怎么说话/干什么"
-              >
-                ✏️ 编辑人设
-              </button>
-            )}
-          </div>
-        </header>
+        {/* M3': 常驻顶栏已改为第一列 rail（见 .app 的第一个孩子）—— 视图开关同源迁移,第四列接线未动 */}
 
         {/*
           多智能体编排 · 内部频道面板（只读）。

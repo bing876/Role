@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""批次 M-2「第四列」反证：把关键代码改坏 → verify:shell 必须变红 → 立刻还原。
+"""批次 M-3'「Rail 第一列」反证：把关键代码改坏 → verify:shell 必须变红 → 立刻还原。
+R1 是用户点名的反证：**屏幕上显示真实数据而非写死假数据**。
 
-用法： python3 scripts/verify/browser-column-revert.py
+用法： python3 scripts/verify/rail-revert-proof.py
 原理： 每条"改坏"都对应验收里的一条断言（④ golden 或 ⑧-x）。
        注入后跑 scripts/verify/app-shell-smoke.mts（verify:shell），
        期望**恰好**那条断言变红 —— 证明断言不是摆设；跑完按原始字节还原。
@@ -19,79 +20,56 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 OUTDIR = os.path.join(REPO, 'docs', 'acceptance', 'app-shell')
 PY = sys.executable
 
-STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'styles.css')
+STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'design', '07-rail.css')
 APP = os.path.join(REPO, 'apps', 'desktop', 'src', 'App.tsx')
-HOOK = os.path.join(REPO, 'apps', 'desktop', 'src', 'app', 'useBrowserColumn.ts')
+HOOK = os.path.join(REPO, 'apps', 'desktop', 'src', 'app', 'useBrowserColumn.ts')  # R 系列探针都在 App.tsx / 07-rail.css
 
 # 每条缺陷：名字 / 文件 / 原文 / 改坏后 / 期望变红的断言关键字
 DEFECTS = [
     {
-        'name': 'C1 隐藏态改用 display:none（webview 尺寸归零 → 驾驶坐标失效）',
+        # 用户点名的反证:rail 的 chip 必须接真名单 —— 换成写死的假 chip,⑩-1 必须变红。
+        'name': 'R1 rail chip 换成写死假数据（不再是真名单）',
+        'file': APP,
+        'old': ("        <div className=\"agent-list\" aria-label=\"智能体\">\n"
+                "          {sidebarAgents.map((a) => ("),
+        'new': ("        <div className=\"agent-list\" aria-label=\"智能体\">\n"
+                "          {([{ id: -1, name: '假chip甲' }, { id: -2, name: '假chip乙' }] as AgentView[]).map((a) => (  // 反证注入"),
+        'expect': ['⑩-1'],
+    },
+    {
+        # chip 点不切换人 = 假切换。
+        'name': 'R2 chip 点击不切换智能体',
+        'file': APP,
+        'old': "              onClick={() => selectAgent(a)}\n              onKeyDown={(e) => {",
+        'new': "              onClick={() => { /* 反证注入:点了不切换 */ }}\n              onKeyDown={(e) => {",
+        'expect': ['⑩-2'],
+    },
+    {
+        # 「启用」tab 不再弹第四列 = 视图开关假了(接线被摘)。
+        'name': 'R3 「启用」tab 不再弹第四列（接线被摘）',
+        'file': APP,
+        'old': ("            if (browser.tabs.length === 0) {\n"
+                "              browser.openNewTab();\n"
+                "            }\n"
+                "            browser.showFullscreen();\n"
+                "            col.openColumn();"),
+        'new': ("            browser.showFullscreen();  // 反证注入:不再 openColumn,列不弹"),
+        'expect': ['「🌐 启用」→ 列回来'],
+    },
+    {
+        # 快捷 ＋ 换回占位假动作 = 真新建没了。
+        'name': 'R4 快捷 ＋ 换回假占位（不真 POST）',
+        'file': APP,
+        'old': "            onClick={() => void addAgent()}\n            type=\"button\"",
+        'new': "            onClick={() => { alert('创建智能体（占位）'); }}\n            type=\"button\"",
+        'expect': ['⑩-4'],
+    },
+    {
+        'name': 'R5 第一列壳加 display:none（常驻列被藏掉）',
         'file': STYLES,
-        'old': (".browserLayer--hidden {\n"
-                "  transform: translateX(calc(100% + 16px));\n"),
-        'new': (".browserLayer--hidden {\n"
-                "  display: none;\n"
-                "  transform: translateX(calc(100% + 16px));\n"),
-        'expect': ['transform 移出视野'],
-    },
-    {
-        'name': 'C2 「🌐 启用」不再弹列（触发② 失效）',
-        'file': APP,
-        'old': ("                browser.showFullscreen();\n"
-                "                col.openColumn();\n"
-                "              }}\n"
-                '              title="启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
-        'new': ("                browser.showFullscreen();\n"
-                "                /* 反证注入：不再 openColumn —— 点了启用列也不弹 */\n"
-                "              }}\n"
-                '              title="启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
-        'expect': ['「💬 对话」→ 隐藏形态'],
-    },
-    {
-        'name': 'C3 覆盖阈值改 Infinity（拖再宽也进不了覆盖形态）',
-        'file': HOOK,
-        'old': ("export function overlayThresholdPx(frameWidth: number): number {\n"
-                "  return Math.max(480, Math.round(frameWidth * 0.6));\n"
-                "}"),
-        'new': ("export function overlayThresholdPx(frameWidth: number): number {\n"
-                "  void frameWidth; // 反证注入：阈值改死，永远进不了覆盖形态\n"
-                "  return Infinity;\n"
-                "}"),
-        'expect': ['过阈值 → 覆盖形态'],
-    },
-    {
-        'name': 'C4 宽度不再写 localStorage（记忆上次宽度失效）',
-        'file': HOOK,
-        'old': "      localStorage.setItem(BROWSER_COL_STORAGE_KEY, String(colWidth));\n",
-        'new': "      /* 反证注入：不再记忆宽度 */\n",
-        'expect': ['workbench.browserCol'],
-    },
-    {
-        'name': 'C5 层里给 BrowserPanel 多包一层 div（webview 祖先链被破坏 → golden 必须咬住）',
-        'file': APP,
-        'old': ("            <BrowserPanel\n"
-                "              ws={browser}\n"
-                "              agentLabel={agents.find((a) => a.id === curAgentId)?.name}\n"
-                "              /*\n"
-                "               * 第 27 步：求助卡模式下的几何（wcId + 那块\"窗口\"的位置）。\n"
-                "               * 非 embed 态时 wcId 为 null，面板会完全按老逻辑渲染 —— 零影响。\n"
-                "               */\n"
-                "              embed={{ wcId: browser.embedWcId, rect: embedRect }}\n"
-                "            />        </div>\n"),
-        'new': ("            <div data-column-revert-mutation>\n"
-                "            <BrowserPanel\n"
-                "              ws={browser}\n"
-                "              agentLabel={agents.find((a) => a.id === curAgentId)?.name}\n"
-                "              /*\n"
-                "               * 第 27 步：求助卡模式下的几何（wcId + 那块\"窗口\"的位置）。\n"
-                "               * 非 embed 态时 wcId 为 null，面板会完全按老逻辑渲染 —— 零影响。\n"
-                "               */\n"
-                "              embed={{ wcId: browser.embedWcId, rect: embedRect }}\n"
-                "            />\n"
-                "            </div>\n"
-                "        </div>\n"),
-        'expect': ['祖先链与 golden 一致'],
+        'old': ".rail {\n  position: relative;\n",
+        'new': ".rail {\n  display: none;\n  position: relative;\n",
+        'expect': ['⑩-5'],
     },
 ]
 
@@ -141,7 +119,7 @@ def run_shell():
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
     print('=' * 78)
-    print('反证：把「第四列」的关键代码改坏 → verify:shell 必须变红 → 立刻还原')
+    print('反证：把「Rail 第一列」的关键代码改坏 → verify:shell 必须变红 → 立刻还原')
     print('=' * 78)
 
     # ---- 指纹自检：先确认源码就是"正确的那一版"，否则后面的结论全错 ----

@@ -158,8 +158,9 @@
 }
 
 /* ---------- 第二↔第三列可拖动分隔条（基准 06-sidebar.css 尾段；桌面端适配④：left 只算 --sb-w） ---------- */
+/* M3' 起第一列变成竖 rail：分隔条要躲过 rail 再贴住侧栏右缘 */
 .splitter {
-  position: absolute; top: 0; left: calc(var(--sb-w, 250px) - 4px); width: 8px; height: 100%;
+  position: absolute; top: 0; left: calc(var(--rail-w, 60px) + var(--sb-w, 250px) - 4px); width: 8px; height: 100%;
   cursor: col-resize; background: transparent; z-index: 6; touch-action: none;
 }
 .splitter::after {

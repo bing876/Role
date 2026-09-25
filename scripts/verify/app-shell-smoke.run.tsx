@@ -163,6 +163,7 @@ const emitBridge = (channel: string, payload?: unknown): number => {
 // 3. fetch 桩 —— App 启动要打一串接口；未识别的路径记下来（不许静默假装成功）
 // ---------------------------------------------------------------------------
 const requestedPaths: string[] = [];
+let agentCreateCount = 0;   // 真创建桩:⑨-4 / ⑩-4 各建一个,id 不撞
 const PROJECT = { id: 7, name: '默认项目', isCurrent: true, isDefault: true, henAgentId: null };
 const AGENTS = [
   { id: 97, name: '小助', kind: 'assistant', deletable: false, canCreateAgents: true, projectId: 7, personaStatus: 'ready', persona: null, conversationId: 501, status: 'idle' },
@@ -181,7 +182,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   requestedPaths.push(path);
   if (path === '/auth/me') return json({ user: { id: 1, phone: '13800000000', xyz: '' }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
   if (path === '/projects') return json({ projects: [PROJECT], currentProjectId: 7 });
-  if (path === '/agents' && init?.method === 'POST') return json({ agent: { id: 99, name: '新员', kind: 'worker', deletable: true, canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null, conversationId: 503, status: 'idle' } });
+  if (path === '/agents' && init?.method === 'POST') {
+    agentCreateCount += 1;
+    const nid = 98 + agentCreateCount;   // 第 1 次 → 99,第 2 次 → 100
+    return json({ agent: { id: nid, name: agentCreateCount === 1 ? '新员' : '新员乙', kind: 'worker', deletable: true, canCreateAgents: false, projectId: 7, personaStatus: 'pending', persona: null, conversationId: 500 + nid, status: 'idle' } });
+  }
   if (path === '/agents') return json({ agents: AGENTS });
   if (path === '/chat/state') return json({ conversationId: 501, state: STATE });
   // 批次 M-2:第四列触发①需要会话内链接 → 给当前智能体的历史一条带 sources 的助手消息
@@ -429,9 +434,9 @@ await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', as
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
   await flush(2);
-  // 只看「对话 / 浏览器」两颗（顶栏还可能有「编辑人设」等按钮，点它们会开弹窗，与视图无关）
-  const btns = qa('.workbenchNav__btn').filter((b) => /对话|启用/.test(b.textContent ?? ''));
-  assert.equal(btns.length, 2, `顶栏视图按钮不是 2 颗（${btns.length} 颗）`);
+  // M3':视图开关迁到第一列 rail 的两颗 tab（与旧顶栏按钮同源）
+  const btns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
+  assert.equal(btns.length, 2, `rail 视图 tab 不是 2 颗（${btns.length} 颗）`);
   let viewChanges = 0;
   for (const b of btns) {
     await act(async () => {
@@ -515,7 +520,7 @@ await check('⑧-3 向右收回（回阈值以下）→ 第四列形态,聊天�
 });
 
 await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏≠卸载）;「🌐 启用」→ 列回来', async () => {
-  const navBtns = qa('.workbenchNav__btn').filter((b) => /对话|启用/.test(b.textContent ?? ''));
+  const navBtns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
   await act(async () => {
     click(navBtns[0], '💬 对话');
     await new Promise((r) => setTimeout(r, 0));
@@ -535,7 +540,7 @@ await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏�
 });
 
 await check('⑧-5 触发①:点会话内链接（来源）→ 列从隐藏弹出（内嵌浏览器打开）', async () => {
-  const navBtns = qa('.workbenchNav__btn').filter((b) => /对话|启用/.test(b.textContent ?? ''));
+  const navBtns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
   await act(async () => {
     click(navBtns[0], '💬 对话');
     await new Promise((r) => setTimeout(r, 0));
@@ -686,6 +691,86 @@ await check('⑨-7 样式红线：第二列常驻（不许 display:none / 宽 0�
   assert.ok(/\.contact-item\.active\s*\{/.test(design), '选中态 .contact-item.active 规则缺失');
   const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
   assert.ok(idx.includes('./06-sidebar.css') && idx.includes('./08-search.css'), '侧栏/搜索 CSS 没挂进设计入口');
+});
+
+log('');
+log('--- ⑩ Rail（批次 M-3\'）：第一列玻璃栏 —— 真头像 / 真视图开关 / 真名单 chip / 真新建 ---');
+
+await check('⑩-1 rail 在场,chip 是真名单（个数/名字与第二列一致,选中同步）', () => {
+  assert.ok(q('.rail'), '第一列 .rail 不在');
+  const chips = qa('.rail .agent-chip');
+  const rows = qa('.contact-item');
+  assert.equal(chips.length, rows.length, `chip 数(${chips.length}) ≠ 第二列行数(${rows.length})`);
+  const rowNames = rows.map((r) => r.querySelector('.contact-name')?.textContent ?? '');
+  for (const c of chips) {
+    assert.ok(rowNames.includes(c.getAttribute('title') ?? ''), `chip 的 title「${c.getAttribute('title')}」不在真名单里`);
+  }
+  const selChip = q('.rail .agent-chip.selected');
+  assert.ok(selChip, 'rail 没有选中 chip');
+  const activeRow = q('.contact-item.active');
+  assert.ok(activeRow, '第二列没有 active 行');
+  const activeName = activeRow!.querySelector('.contact-name')?.textContent ?? '';
+  assert.equal(selChip!.getAttribute('title'), activeName, '选中 chip 与第二列 active 行不是同一个智能体');
+});
+
+await check('⑩-2 点 chip 真切换智能体（与第二列 active 行同步）', async () => {
+  const chipXiaozhu = qa('.rail .agent-chip').find((c) => c.getAttribute('title') === '小助') as Element;
+  assert.ok(chipXiaozhu, '没有「小助」chip');
+  await act(async () => {
+    click(chipXiaozhu, 'chip 小助');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const activeId2 = q('.contact-item.active')?.getAttribute('data-agent-id') ?? null;
+  assert.equal(activeId2, '97', '点 chip 没把当前智能体切过去');
+  const selTitle = q('.rail .agent-chip.selected')?.getAttribute('title') ?? null;
+  assert.equal(selTitle, '小助', 'rail 选中态没跟着动');
+});
+
+await check('⑩-3 视图开关与旧顶栏同源:「启用」→ 第四列弹出;「对话」→ 隐藏(webview 不卸载)', async () => {
+  const layerBefore = q('.browserLayer') as Element;
+  assert.ok(layerBefore, '浏览器层不在(前置状态不对?)');
+  await act(async () => {
+    click(q('.tab--browser'), '🌐 启用 tab');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const openCls = q('.browserLayer')?.getAttribute('class') ?? '';
+  assert.ok(!openCls.includes('browserLayer--hidden'), `点「启用」后第四列应可见: ${openCls}`);
+  await act(async () => {
+    click(q('.tab--chat'), '💬 对话 tab');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  const hiddenCls = q('.browserLayer')?.getAttribute('class') ?? '';
+  assert.ok(hiddenCls.includes('browserLayer--hidden'), `点「对话」后应隐藏: ${hiddenCls}`);
+  assert.ok(layerBefore === q('.browserLayer'), '切视图把浏览器层元素换掉了');
+});
+
+await check('⑩-4 顶部头像块是真会话数据;快捷 ＋ 是真新建', async () => {
+  const ico = q('.rail .menu-btn .user-avatar-ico');
+  assert.ok(ico, '头像块的字缺失');
+  // 桩账号没有对外号也没有打码手机号 → 按规则回落 'U'(真逻辑,不是假数据)
+  assert.equal((ico!.textContent ?? '').trim(), 'U', `头像字不是从真会话数据推出来的: ${ico?.textContent}`);
+  const before = qa('.rail .agent-chip').length;
+  await act(async () => {
+    click(q('.rail .rail-quick-add'), '＋ 快捷创建');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('新 chip 出现', () => qa('.rail .agent-chip').length === before + 1, 60);
+  const newChip = qa('.rail .agent-chip')[before];
+  assert.equal(newChip.getAttribute('title'), '新员乙', '快捷创建的 chip 不是真新建的智能体');
+});
+
+await check('⑩-5 样式红线:第一列常驻(无 display:none),选中态真 class 在位', () => {
+  const rail = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '07-rail.css'), 'utf8');
+  const m = rail.match(/\.rail\s*\{([^}]*)\}/);
+  assert.ok(m, 'design/07-rail.css 里找不到 .rail 规则');
+  assert.ok(!/display\s*:\s*none/.test(m![1]), '第一列常驻,不许 display:none');
+  const railAgent = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '12-rail-agent.css'), 'utf8');
+  assert.ok(/\.agent-chip\.selected\s*\{/.test(railAgent), '选中态 .agent-chip.selected 规则缺失');
+  const idx = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', 'index.css'), 'utf8');
+  assert.ok(idx.includes('./07-rail.css') && idx.includes('./12-rail-agent.css'), 'rail CSS 没挂进设计入口');
 });
 
 log('');

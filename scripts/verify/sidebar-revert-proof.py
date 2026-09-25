@@ -117,7 +117,7 @@ def run_shell():
                            cwd=REPO, stdout=f, stderr=subprocess.STDOUT, timeout=900)
     txt = read_raw(log)
     fails = [x.strip() for x in re.findall(r'^\s*✗\s*(.+)$', txt, re.M)]
-    npass = len(re.findall(r'^\s*✓', txt))
+    npass = len(re.findall(r'^\s*✓', txt, re.M))
     return r.returncode, fails, npass, log
 
 

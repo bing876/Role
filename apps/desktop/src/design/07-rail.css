@@ -1,0 +1,97 @@
+/* 07-rail —— 批次 M-3'：第一列（玻璃栏）搬入设计基准 workbench-ui。
+   来源：workbench-ui/src/styles/07-rail.css（.rail 壳 / .menu-btn / .tab / .rail-quick-add）。
+   原规则照搬、原注释保留。
+   桌面端适配（本应用是满窗 app，不是基准里的浮动窗口 / 微信壳）：
+   ① .frame 浮动窗口不存在 → .rail 用 flex 流布局（.app 的孩子），不再 absolute；
+      满窗 app 没有 20px 圆角窗口 → 圆角归零；
+   ② 微信 5 tab（消息/联系人/收藏/文件/朋友圈，PNG 图标 + 假子视图）不搬 ——
+      桌面第一列放**真**视图开关：💬 对话 / 🌐 启用（第四列状态接线，与旧顶栏按钮同源）、
+      ✏️ 编辑人设（条件渲染，真操作）。图标用内联 SVG（桌面没有基准的 PNG 资产）；
+   ③ 汉堡（基准开设置弹层，桌面没有设置弹层）不搬 —— 不做死按钮；
+   ④ .tab 的定位由基准的 top:72+i*50 改为 72 / 122（+172 人设），
+      .agent-list 让位到 top:224（基准 54 是「头像态 tab 隐藏」的前提，桌面双 tab 常驻）。 */
+
+.rail {
+  position: relative;
+  width: var(--rail-w, 60px);
+  flex: 0 0 auto;
+  height: 100%;
+  z-index: 4;   /* 基准图层序：第一列背景层（玻璃之上、第二列背景之下） */
+  background: linear-gradient(107.76deg, rgba(255, 255, 255, 0.15) -1.16%, rgba(255, 255, 255, 0.1) 100%);
+  -webkit-backdrop-filter: blur(30px);
+  backdrop-filter: blur(30px);
+}
+
+/* 顶部用户头像块（真数据：登录会话的对外号/打码手机号首字；基准 menu-btn 是按钮，
+   桌面没有「点头像开弹层」的真功能 → 用 div 纯展示，不做死按钮） */
+.menu-btn {
+  position: absolute; left: calc((var(--rail-w, 60px) - var(--rail-avatar, 38px)) / 2); top: 14px;
+  width: var(--rail-avatar, 38px); height: var(--rail-avatar, 38px); border-radius: 11px;
+  background: linear-gradient(135deg, #7c5cff 0%, #4f8bff 100%);
+  display: grid; place-items: center; overflow: hidden;
+  aspect-ratio: 1 / 1;
+  user-select: none;
+}
+.menu-btn .user-avatar-ico {
+  color: #fff; font-weight: var(--fw-medium); font-size: 16px; line-height: 1;
+  font-family: inherit; user-select: none;
+}
+
+/* Tab 按钮（基准 34×34 + squircle hover 高亮 + 选中 scale(1.06)，照搬；
+   图标从 PNG 背景改内联 SVG 子元素） */
+.tab {
+  position: absolute; left: calc((var(--rail-w, 60px) - 34px) / 2); width: 34px; height: 34px;
+  background-color: transparent !important;   /* 显式覆盖 <button> 默认 buttonface 灰底 */
+  border: 0; padding: 0; cursor: pointer;
+  display: grid; place-items: center;
+  color: rgba(255, 255, 255, 0.85);
+  transition: opacity .28s ease, transform .35s ease;
+}
+.tab.selected { transform: scale(1.06); }
+.tab:hover { filter: brightness(1.18); }
+.tab::before {
+  content: ""; position: absolute; z-index: -1;
+  left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: 42px; height: 42px; border-radius: 14px;          /* 圆润边角的正方形高亮 */
+  background: rgba(255, 255, 255, 0.16);
+  opacity: 0; transition: opacity .2s ease; pointer-events: none;
+}
+.tab:hover::before { opacity: 1; }
+.tab svg { width: 20px; height: 20px; display: block; }
+/* 微信风未读/驾驶红点（基准 .tab .badge，照搬） */
+.tab .badge {
+  position: absolute; top: -3px; right: -3px;
+  width: 10px; height: 10px; border-radius: 50%; background: #fa5151;
+  box-shadow:
+    0 0 0 1.5px rgba(255, 255, 255, 0.85),
+    0 0 0 3px rgba(20, 22, 30, 0.55);
+  pointer-events: none; z-index: 2;
+}
+
+/* 「＋」快捷创建方块（基准 07-rail.css 尾段，照搬） */
+.rail-quick-add {
+  position: relative; flex: 0 0 var(--rail-avatar, 38px);
+  width: var(--rail-avatar, 38px); height: var(--rail-avatar, 38px); box-sizing: border-box; border-radius: 11px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  cursor: pointer; padding: 0; z-index: 4;
+  display: grid; place-items: center;
+  transition: transform .12s ease, background .15s ease;
+}
+.rail-quick-add .qadd-h,
+.rail-quick-add .qadd-v {
+  position: absolute; left: 50%; top: 50%;
+  background: rgba(255, 255, 255, 0.92); border-radius: 2px;
+  transform: translate(-50%, -50%);
+}
+.rail-quick-add .qadd-h { width: 13px; height: 3px; }
+.rail-quick-add .qadd-v { width: 3px; height: 13px; }
+.rail-quick-add:hover { background: rgba(255, 255, 255, 0.18); }
+.rail-quick-add:active { transform: scale(0.92); }
+
+@keyframes agentChipPop {
+  0%   { transform: scale(0.5);  opacity: 0; }
+  60%  { transform: scale(1.10); opacity: 1; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+.agent-chip.agent-pop { animation: agentChipPop .40s cubic-bezier(.34, 1.56, .64, 1) both; }

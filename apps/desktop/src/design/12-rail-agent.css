@@ -1,0 +1,38 @@
+/* 12-rail-agent —— 批次 M-3'：第一列智能体方块（.agent-list / .agent-chip）。
+   来源：workbench-ui/src/styles/12-rail-agent.css（头像态布局 + 选中态），原规则照搬。
+   桌面端适配：
+   ① 基准里 .agent-list 只在「头像态」（.frame.agent，点顶栏头像才显）里 display:flex，
+      平时 display:none —— 桌面的视图开关是**常驻双 tab**（对话/启用），没有那个切换态，
+      所以 agent-list 恒显（display:flex），top 从 54 让位到 224（双 tab + 人设钮之下）；
+   ② 基准 chip 的点击 = onQuickAdd（占位假动作）；桌面 chip 点击 = **真切换智能体**
+      （与第二列列表同一真数据源，选中态与第二列 active 行同步）；
+   ③ 基准 chip 是星标 PNG（--av / has-photo）；桌面没有头像图资产 → 白淡底 + 真字符
+      （agentGlyph：小助固定「助」，自建取名字首字），--c1/--c2 按 id 确定性派生。 */
+
+.agent-list {
+  position: absolute; left: 0; top: 224px; bottom: 24px; width: var(--rail-w, 60px);
+  display: flex; flex-direction: column; align-items: center; gap: 10px; z-index: 3;
+  overflow-y: auto; overflow-x: hidden;
+  padding: 8px 0;
+}
+.agent-list::-webkit-scrollbar { width: 0; height: 0; }
+
+.agent-chip {
+  position: relative;
+  width: var(--rail-avatar, 38px); height: var(--rail-avatar, 38px); border-radius: 11px; border: 0;
+  cursor: pointer; box-sizing: border-box; flex: 0 0 auto;
+  background-color: color-mix(in srgb, var(--c1) 16%, #ffffff);
+  color: color-mix(in srgb, var(--c1) 70%, #1a1a22);
+  font-weight: var(--fw-medium); font-size: 15px; line-height: 1; font-family: inherit;
+  display: grid; place-items: center;
+  box-shadow: none;
+  transition: transform .25s cubic-bezier(.22, .8, .24, 1), filter .25s ease,
+             box-shadow .25s ease;
+}
+.agent-chip:hover { transform: scale(1.06); filter: brightness(1.08); }
+/* 选中态（Round 67→69：白色描边「框选住」，offset 1.5 留小缝隙） */
+.agent-chip.selected {
+  transform: scale(1.06);
+  outline: 2px solid #fff;
+  outline-offset: 1.5px;
+}

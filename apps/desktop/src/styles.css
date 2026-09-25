@@ -955,82 +955,23 @@ body {
 }
 
 /* ---------- 工作台顶栏与视图切换 ---------- */
-.workbenchNav {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
-  z-index: 25;
-  flex-shrink: 0;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
-}
 
-.workbenchNav__meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
-.workbenchNav__name {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--text-main, #1f2937);
-}
 
-.workbenchNav__status {
-  font-size: 12px;
-  color: #10b981;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
 
-.workbenchNav__status::before {
-  content: '';
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #10b981;
-}
 
-.workbenchNav__views {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: #f3f4f6;
-  padding: 3px;
-  border-radius: 6px;
-}
 
-.workbenchNav__btn {
-  border: none;
-  background: transparent;
-  padding: 5px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  color: #4b5563;
-  border-radius: 4px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  transition: all 0.15s ease;
-}
 
-.workbenchNav__btn:hover {
-  color: #111827;
-  background: rgba(255, 255, 255, 0.6);
-}
 
-.workbenchNav__btn--active {
-  background: #ffffff !important;
-  color: #2563eb !important;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  font-weight: 600;
-}
+
+
+
+
+
+
+
+
+
 
 .workbenchNav__badge {
   background: #2563eb;

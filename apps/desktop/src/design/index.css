@@ -6,5 +6,7 @@
 @import './01-tokens.css';
 @import './02-base.css';
 @import './06-sidebar.css';
+@import './07-rail.css';
 @import './08-search.css';
+@import './12-rail-agent.css';
 @import './99-theme.css';

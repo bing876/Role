@@ -12,7 +12,7 @@
      用时间戳 + 页内 DOM 变化证明任务在后台**照常往下跑**（不是"没报错"，是"步骤真的完成了"）
   C. 点「🌐 启用」重新展开 → 能看到最新状态、画面没卡死
 批次 M-2 适配（2026-09-25）:隐藏机制从 opacity:0 小图标 改为 第四列 transform 移出视野;
-触发从小图标改为顶栏「🌐 启用」钮(.workbenchNav__btn--browser);
+触发从小图标改为第一列 rail 的「启用」tab(.tab--browser,批次 M-3' 顶栏钮迁到 rail);
 A 段开页后要显式点「启用」(列由用户触发,AI 开页不再自动弹列)。
   D. 全程断言 webview **尺寸与挂载不变**（这条是硬约束：尺寸归零会让驾驶坐标全失效）
 
@@ -277,7 +277,7 @@ def first_existing(*cands):
 LAYER_JS = r"""
 (() => {
   const layer = document.querySelector('.browserLayer');
-  const enableBtn = document.querySelector('.workbenchNav__btn--browser');
+  const enableBtn = document.querySelector('.tab--browser');
   const panel = document.querySelector('.browserPanel');
   const toggle = document.querySelector('.browserPanel__toggle');
   const middle = document.querySelector('.middle');
@@ -346,7 +346,7 @@ def exit_fullscreen():
 def click_enable():
     c = P.Cdp()
     try:
-        return c.click_rect('.workbenchNav__btn--browser')
+        return c.click_rect('.tab--browser')
     finally:
         try:
             c.ws.close()
