@@ -439,3 +439,51 @@
   color: var(--text-weak);
   word-break: break-all;
 }
+
+/* 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话 */
+.routinesPanel {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.routinesPanel__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.routinesPanel__row:hover { background: rgba(255, 255, 255, 0.06); }
+.routinesPanel__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.routinesPanel__state {
+  font-size: 11px;
+  color: #46b57c;
+  flex: 0 0 auto;
+}
+.routinesPanel__state--off { color: #8b93a1; }
+.routinesPanel__btn,
+.routinesPanel__del {
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.routinesPanel__btn:disabled,
+.routinesPanel__del:disabled { opacity: 0.5; cursor: default; }
+.routinesPanel__del { color: #e05c5c; }

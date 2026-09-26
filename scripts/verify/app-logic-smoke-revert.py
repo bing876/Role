@@ -526,6 +526,16 @@ MUTATIONS = [
         'replace': "  thinking: { color: '#8b93a1', word: '空闲' }, // 反证注入：六态塌成空闲\n",
         'expect': '状态 thinking 的词不对',
     },
+    # ---- 形态片·Routines 管理（④，2026-09-27）：拆掉列表加载 → 面板永远空 ----
+    {
+        'file': APP_TSX,
+        'id': 'TK4',
+        'visible': True,
+        'name': '定时任务列表加载被拆：点「定时任务」不再拉 GET /routines（列表永远空）',
+        'anchor': "      const res = await fetch(`${API_BASE()}/routines`, { headers: { Authorization: `Bearer ${s.token}` } });\n",
+        'replace': "      return; // 反证注入：拆掉列表加载\n",
+        'expect': 'GET /routines 发出',
+    },
 ]
 
 

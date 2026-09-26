@@ -507,6 +507,10 @@ export default function App() {
   agentStatesRef.current = agentStates;
   /** 保活开关正在请求中（防连点） */
   const [keepaliveBusy, setKeepaliveBusy] = useState(false);
+  /** 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话。服务端为准。 */
+  const [routines, setRoutines] = useState<Array<{ id: number; name: string; description: string; triggerType: string; enabled: boolean; nextRunAt: string | null }>>([]);
+  const [routinesOpen, setRoutinesOpen] = useState(false);
+  const [routinesBusyId, setRoutinesBusyId] = useState<number | null>(null);
   /** 第 11 步：知识库资料独立于 memories；只展示当前账号的文件元信息和已入库段数。 */
   /** 建完能改人设：编辑态 */
   const [personaEditOpen, setPersonaEditOpen] = useState(false);
@@ -516,6 +520,48 @@ export default function App() {
   /** 第 7 步：主进程 'agent' 事件的镜像（步摘要/文档结论），权威循环在主进程 */
 
 
+
+  /**
+   * 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话。
+   * 服务端为准（GET /routines / POST /routines/:id/enable / DELETE /routines/:id）。
+   */
+  const loadRoutines = useCallback(async () => {
+    const s = sessionRef.current;
+    if (!s) return;
+    try {
+      const res = await fetch(`${API_BASE()}/routines`, { headers: { Authorization: `Bearer ${s.token}` } });
+      if (res.ok) {
+        const data = (await res.json()) as { routines?: Array<{ id: number; name: string; description: string; triggerType: string; enabled: boolean; nextRunAt: string | null }> };
+        setRoutines(data.routines ?? []);
+      }
+    } catch { /* 网络错误不弹，下次再拉 */ }
+  }, []);
+  const toggleRoutine = useCallback(async (id: number, enable: boolean) => {
+    const s = sessionRef.current;
+    if (!s) return;
+    setRoutinesBusyId(id);
+    try {
+      const res = await fetch(`${API_BASE()}/routines/${id}/enable`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${s.token}` }, body: JSON.stringify({ enabled: enable }) });
+      if (res.ok) {
+        setRoutines((prev) => prev.map((r) => (r.id === id ? { ...r, enabled: enable } : r)));
+      }
+    } finally {
+      setRoutinesBusyId(null);
+    }
+  }, []);
+  const deleteRoutine = useCallback(async (id: number) => {
+    const s = sessionRef.current;
+    if (!s) return;
+    setRoutinesBusyId(id);
+    try {
+      const res = await fetch(`${API_BASE()}/routines/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${s.token}` } });
+      if (res.ok) {
+        setRoutines((prev) => prev.filter((r) => r.id !== id));
+      }
+    } finally {
+      setRoutinesBusyId(null);
+    }
+  }, []);
 
   /**
    * 第 22 步：改可调配置（并发数 / 多实例上限）。
@@ -2379,6 +2425,46 @@ export default function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话 */}
+            <div className="buttons-row">
+              <button
+                type="button"
+                className="btn routinesToggle"
+                onClick={() => { setRoutinesOpen((v) => !v); if (!routinesOpen) void loadRoutines(); }}
+              >
+                定时任务（{routines.length}）
+              </button>
+            </div>
+            {routinesOpen && (
+              <div className="routinesPanel" role="list" aria-label="定时任务">
+                {routines.length === 0 && <div className="small">还没有定时任务。</div>}
+                {routines.map((r) => (
+                  <div className="routinesPanel__row" key={r.id} role="listitem">
+                    <span className="routinesPanel__name">{r.name}</span>
+                    <span className={`routinesPanel__state${r.enabled ? '' : ' routinesPanel__state--off'}`}>
+                      {r.enabled ? '运行中' : '已暂停'}
+                    </span>
+                    <button
+                      type="button"
+                      className="routinesPanel__btn"
+                      disabled={routinesBusyId !== null}
+                      onClick={() => void toggleRoutine(r.id, !r.enabled)}
+                    >
+                      {r.enabled ? '暂停' : '恢复'}
+                    </button>
+                    <button
+                      type="button"
+                      className="routinesPanel__del"
+                      disabled={routinesBusyId !== null}
+                      onClick={() => void deleteRoutine(r.id)}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 

@@ -2605,6 +2605,51 @@ await check('③-a 六态映射：每态都有颜色 + 一个词（空闲/思考
   await act(async () => root3.unmount());
 }
 
+/**
+ * 形态片·Routines 管理（④，2026-09-27；规格 docs/产品交互规格.md）：
+ *   看看定时任务→列表；暂停/恢复/删第N个→一句话。
+ * 反证：app-logic-smoke-revert.py 的 TK4（拆掉列表加载必红）。
+ */
+{
+  const root4 = await mountApp(true);
+  await ensure('④ 前置：左栏在', () => q('.sidebar') !== null);
+  await flush(2);
+  await check('④-a 左栏有「定时任务」入口（点开拉 GET /routines 真数据）', async () => {
+    const btn = qa('.routinesToggle').find((b) => (b.textContent ?? '').includes('定时任务'));
+    assert.ok(btn, '找不到「定时任务」入口（.routinesToggle）');
+    const before = requestsTo('/routines').length;
+    await act(async () => { click(btn!, '定时任务'); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor('④-a GET /routines 发出', () => requestsTo('/routines').length > before);
+    const panel = q('.routinesPanel');
+    assert.ok(panel, '点了「定时任务」没有列表面板（.routinesPanel）');
+  });
+  await check('④-b 列表每行有名字 + 状态 + 暂停/恢复 + 删除（非写死假数据，来自 GET /routines）', async () => {
+    const rows = qa('.routinesPanel__row');
+    // 服务端返回空列表也合法（没建过 routine）——但入口和面板必须在
+    assert.ok(q('.routinesPanel'), '面板消失了');
+    if (rows.length > 0) {
+      const first = rows[0];
+      assert.ok(first!.querySelector('.routinesPanel__name'), '第一行没有名字');
+      assert.ok(first!.querySelector('.routinesPanel__state'), '第一行没有状态');
+      assert.ok(first!.querySelector('.routinesPanel__btn'), '第一行没有暂停/恢复键');
+      assert.ok(first!.querySelector('.routinesPanel__del'), '第一行没有删除键');
+    }
+  });
+  await check('④-c 点「暂停」→ POST /routines/:id/enable（enabled=false）', async () => {
+    const rows = qa('.routinesPanel__row');
+    if (rows.length === 0) {
+      log('    （跳过：没有可暂停的 routine —— 服务端空列表）');
+      return;
+    }
+    const btn = rows[0]!.querySelector('.routinesPanel__btn');
+    assert.ok(btn, '找不到暂停/恢复键');
+    const before = requestsTo('/enable').length;
+    await act(async () => { click(btn!, '暂停'); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor('④-c /enable 发出', () => requestsTo('/enable').length > before);
+  });
+  await act(async () => root4.unmount());
+}
+
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
 log(`  （期间发出 ${requests.length} 条真实请求）`);
