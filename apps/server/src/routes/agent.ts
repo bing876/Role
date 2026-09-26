@@ -27,6 +27,7 @@ import { notifyUser } from '../notify';
 import { buildMemoryBlock, triggerTaskExtract } from './memories';
 import { scrubTaskText, taskDisplayTitle } from '../orchestrator/redact';
 import { recordTaskAsPendingSkill } from '../orchestrator/skills';
+import { writeCollabToProjectChat } from '../orchestrator/collabChat';
 import { decideOnce } from '../toolLoop';
 import { currentProjectId } from '../projectScope';
 
@@ -322,6 +323,15 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
           goal: taskGoalFromRow(t, cipher),
           steps: (payloadWithoutGoal(t.payload) as { steps?: string[] }).steps ?? [],
         }).catch((err) => console.warn('[agent] G4 技能录制失败（忽略,不影响任务）：', (err as Error).message));
+        // 形态⑤ 主动汇报（2026-09-27）：任务结束 → 一句话报结果进对话流（不弹通知、不打扰，写进项目主会话）。
+        void writeCollabToProjectChat(pool, cipher, Number(t.project_id), {
+          kind: 'system',
+          fromId: 0,
+          fromName: '系统',
+          toId: 0,
+          toName: '你',
+          detail: `✅ 任务完成：${taskGoalFromRow(t, cipher).slice(0, 60)}`,
+        }).catch((err) => console.warn('[agent] 形态⑤ 主动汇报失败（忽略）：', (err as Error).message));
       }
       return { ok: true };
     } catch (err) {
