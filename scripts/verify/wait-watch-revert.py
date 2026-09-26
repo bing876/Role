@@ -25,6 +25,14 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 TARGET = os.path.join(REPO, "apps", "desktop", "electron", "wait-watch.ts")
 SMOKE = os.path.join(REPO, "scripts", "verify", "wait-watch-smoke.mts")
 
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `["npx", ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import shutil as _shutil
+
+NODE = _shutil.which("node") or "node"
+TSX_CLI = os.path.join(REPO, "node_modules", "tsx", "dist", "cli.mjs")
+
 
 def sha256(path):
     with open(path, "rb") as f:
@@ -33,7 +41,7 @@ def sha256(path):
 
 def run_smoke():
     r = subprocess.run(
-        ["npx", "tsx", SMOKE],
+        [NODE, TSX_CLI, SMOKE],
         cwd=REPO,
         capture_output=True,
         text=True,
