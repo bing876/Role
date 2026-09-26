@@ -104,6 +104,51 @@ const bridge: WorkbenchBridge = {
     ipcRenderer.invoke('workbench:browser:view-navigate', req),
   browserViewFocus: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-focus', tabKey),
   browserViewClose: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-close', tabKey),
+
+  // ---- ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语(GrokBot 电脑可教/可监听)----
+  /**
+   * wait-for:等**点名这张页**上某元素/文本出现(带超时,到点如实回 found=false)。
+   * 复杂页驾驶的「等到再动」地基。
+   */
+  browserWaitFor: (
+    webContentsId: number,
+    spec: { selector?: string; text?: string; timeoutMs: number; pollMs?: number },
+  ) => ipcRenderer.invoke('workbench:browser:wait-for', webContentsId, spec),
+  /**
+   * watch:监听**点名这张页**的 DOM 变化,新内容出现即推 `workbench:browser:watch-event`。
+   * 同一张页重复 start = re-arm(主进程先停旧的)。
+   */
+  browserWatchStart: (webContentsId: number) =>
+    ipcRenderer.invoke('workbench:browser:watch-start', webContentsId),
+  /** 停掉这张页的 DOM 监听(幂等)。 */
+  browserWatchStop: (webContentsId: number) =>
+    ipcRenderer.invoke('workbench:browser:watch-stop', webContentsId),
+  /**
+   * 订阅 DOM 新内容事件。回调参数 `{ wcId, event, setupError? }`:
+   * `event` 是 `{ label:'insert'|'text-change', tag, text, html }`;`setupError` 有值表示监听没挂上。
+   * 返回取消订阅函数。
+   */
+  onBrowserWatchEvent: (
+    cb: (info: {
+      wcId: number;
+      event: { label: 'insert' | 'text-change'; tag: string | null; text: string; html: string | null } | null;
+      setupError?: string;
+    }) => void,
+  ) => {
+    const channel = 'workbench:browser:watch-event';
+    const handler = (_e: IpcRendererEvent, payload: unknown) => {
+      try {
+        cb(payload as never);
+      } catch {
+        /* 坏 payload 忽略,不让它把渲染层带崩 */
+      }
+    };
+    ipcRenderer.on(channel, handler);
+    return () => {
+      ipcRenderer.off(channel, handler);
+    };
+  },
+
   agentAnswer: (text: string, targetWebContentsId?: number) =>
     ipcRenderer.invoke('workbench:agent:answer', text, targetWebContentsId),
 
