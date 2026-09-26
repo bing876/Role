@@ -34,8 +34,11 @@ export interface ChatSession {
  *   opentab：第 23 步 —— 内嵌页里 in-page 的 window.open / target=_blank，
  *            主进程推给渲染层去**新开一条 tab**（payload 是 OpenTabRequest 的 JSON）。
  *            以前是「让同一个 guest 导航」，用户看到「点了链接当前页被换走、顶部还没多 tab」。）
+ *   pageinfo：ADR-0002 —— 页宿主从 `<webview>` 换成主进程托管的 WebContentsView 之后，
+ *            标题/地址变化不再有 DOM 元素事件，由主进程推过来
+ *            （payload 是 { wcId, title?, url? } 的 JSON；wcId 就是 create 回执那份）。
  */
-export type BrowserEvent = 'open' | 'show' | 'hide' | 'focus' | 'state' | 'agent' | 'settings' | 'resources' | 'opentab';
+export type BrowserEvent = 'open' | 'show' | 'hide' | 'focus' | 'state' | 'agent' | 'settings' | 'resources' | 'opentab' | 'pageinfo';
 /**
  * 第 23 步：「内嵌页想开新标签」的请求体。
  *
@@ -347,6 +350,55 @@ export interface WorkbenchBridge {
         ok: boolean;
         error?: string;
     }>;
+    /**
+     * ADR-0002 · 页宿主迁移（`<webview>` → 主进程托管的 WebContentsView）：**创建**一张页的原生宿主。
+     *
+     * 渲染层不再往 DOM 里嵌 webview，只画一个同名同类的占位 div（`.browserPanel__view`）；
+     * 真页面活在主进程创建的原生视图里。`tabKey` 用 tabId 当键（渲染层与主进程之间的页身份）。
+     * `projectId` 是开页那一刻的项目（null = 认不出 → 主进程落兜底分区），主进程按它过**分区闸**。
+     * 返回 `{ wcId }` = 这张页 guest 的 webContentsId —— **驾驶族（owner/throttle/drive/task）
+     * 照旧拿它当键，一行都不用改**；`pageinfo` 事件也按它回报标题/地址。
+     */
+    browserViewCreate: (req: {
+        tabKey: number;
+        projectId: number | null;
+        url: string;
+    }) => Promise<{
+        wcId: number;
+    }>;
+    /**
+     * ADR-0002 · 页的**几何与可见性**（viewport 坐标 = 窗口内容区坐标）。
+     * `visible: false` = 藏起来（隐藏≠卸载：视图仍附着、页面照跑）；尺寸/位置只在有值时生效。
+     * 拖拽/滚动期间高频调用，主进程 rAF 合并、取最新。
+     */
+    browserViewRect: (req: {
+        tabKey: number;
+        rect: {
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+        };
+        visible: boolean;
+    }) => void;
+    /** ADR-0002 · 把这张页的原生视图挪到**最上层**（切当前页时调；原生视图按子序堆叠）。 */
+    browserViewOrder: (tabKey: number) => void;
+    /**
+     * ADR-0002 · **销毁**这张页的原生宿主。
+     * 对应三条有意卸载路径里的两条半：深休眠 / 关 tab / 关光所有页（allTabs 归零）。
+     * 幂等：对不存在/已销毁的 tabKey 调用是空操作。
+     */
+    browserViewClose: (tabKey: number) => void;
+    /** ADR-0002 · URL 栏回车 / 同站改道：让这张页导航（主进程侧协议闸照旧兜底）。 */
+    browserViewNavigate: (req: {
+        tabKey: number;
+        url: string;
+    }) => Promise<{
+        ok: boolean;
+        error?: string;
+    }>;
+    /** ADR-0002 · 把焦点交给这张页（原生视图没有 DOM focus，走 guest webContents.focus）。 */
+    browserViewFocus: (tabKey: number) => void;
     /**
      * 第 9 步：把用户对「补资料」提问的回答交给主进程（仅普通资料；敏感值别走这里）。
      * 第 17 步：带 targetWebContentsId 时只喂给**那一路**（那张页），别路不串。

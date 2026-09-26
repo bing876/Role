@@ -9,7 +9,7 @@ import type { BrowserPageInfo, BrowserTabView } from './types';
  * 第 20 步 · 浏览器模块：**按智能体分桶的工作区状态机**（tab 状态 + 开页/关页 + 驾驶接口）。
  *
  * 硬约束（本步钉死，别推翻）：
- *   - 仍是 Electron 的 <webview>，**不套 Edge / Chrome / CEF，不用 Playwright**；
+ *   - 页宿主是 Electron 的原生视图（ADR-0002 起是主进程托管的 WebContentsView，渲染层只放占位 div），**不套 Edge / Chrome / CEF，不用 Playwright**；
  *   - 每张页的分区是 `partitionFor(projectId)` —— **一个项目一套 cookie / 登录态**，
  *     同项目的多个智能体共用这一套（Phase 3 改的粒度），不同项目之间完全隔离；
  *     绝不再用全局的 `persist:workbench-browser`，也绝不再按 agentId 分（那是第 20 步的旧口径）；
@@ -131,10 +131,20 @@ export interface BrowserWorkspace {
   /** 此刻"嵌"在聊天流里的是哪一张页（null = 不在求助卡模式） */
   embedWcId: number | null;
 
-  /** <webview> 宿主：元素挂上/摘下时登记（驾驶要靠它拿 guest webContents id） */
+  /**
+   * 页宿主：占位 div 挂上/摘下时登记（ADR-0002 起元素只用于节点身份断言与对齐，
+   * guest id 改由 `hostMounted` 的 create 回执给）
+   */
   registerWebview: (tabId: number, el: HTMLElement | null) => void;
   /** 页面自己改了地址/标题（点链接、SPA 跳转）时回报，用来更新标签与 URL 栏 */
   notePageInfo: (tabId: number, info: BrowserPageInfo) => void;
+  /**
+   * ADR-0002：宿主 div 挂上（首挂 / 深休眠唤醒）→ 建原生页宿主并登记 wcId。
+   * 返回 Promise（create 回执落地后 resolve；宿主侧据此重发一次几何）。
+   */
+  hostMounted: (t: BrowserTabView) => Promise<void>;
+  /** ADR-0002：宿主 div 摘下（深休眠 / 关 tab / 关光所有页）→ 销毁原生页宿主 */
+  hostGone: (tabId: number) => void;
   /**
    * Phase 3：把「这张页的 guest webContents id 属于哪个智能体」告诉主进程。
    *
@@ -153,7 +163,7 @@ export interface BrowserWorkspace {
   /**
    * Phase 4：把当前**所有**浏览器实例（含最后使用时间）摘一份给资源守护者。
    *
-   * ⚠️ 只报「已经拿到 guest id」的页 —— 还没 dom-ready 的页在主进程那边
+   * ⚠️ 只报「已经拿到 guest id」的页 —— 还没拿到 create 回执的页在主进程那边
    *    也对应不到进程，报上去只会让排序里多一条对不上的记录。
    */
   instanceList: () => BrowserInstanceInfo[];
@@ -176,7 +186,7 @@ export interface BrowserWorkspace {
   /** 把焦点交给当前智能体那张页（它还没开过就先开一张默认主页） */
   focusActive: () => void;
 
-  /** 驾驶接口：这张 tab 的 guest webContents id（还没 dom-ready 时为 undefined） */
+  /** 驾驶接口：这张 tab 的 guest webContents id（create 回执还没到时为 undefined） */
   webContentsIdOf: (tabId: number) => number | undefined;
   /** 驾驶接口：等这张页就绪并拿到 guest id（webview 没 dom-ready 时 getWebContentsId 会抛错） */
   awaitWebContentsId: (tabId: number) => Promise<number | undefined>;
@@ -407,18 +417,21 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
 
   // ---- 驾驶接口：tab ↔ guest webContents id ----
 
+  /**
+   * ADR-0002：tabId → guest webContentsId 的映射，**来自 create 回执**
+   * （宿主换成主进程托管的 WebContentsView 后，不再有「元素上取 id」这条路；
+   * `browserViewCreate` 的返回就是这张页的 wcId，见 `hostMounted`）。
+   */
+  const wcIdsRef = useRef<Record<number, number>>({});
+
   const webContentsIdOf = (tabId: number): number | undefined => {
-    const el = webviewRefs.current[tabId] as unknown as { getWebContentsId?: () => number } | null;
-    try {
-      return el?.getWebContentsId?.();
-    } catch {
-      return undefined;
-    }
+    const id = wcIdsRef.current[tabId];
+    return typeof id === 'number' ? id : undefined;
   };
 
   /**
-   * 等某张 tab 里的 <webview> 就绪并拿 guest webContents id。
-   * webview 还没 dom-ready 时 getWebContentsId() 会抛错，所以重试几轮。
+   * 等某张 tab 的原生页宿主建好并拿到 guest webContents id。
+   * create 是异步 IPC，回执没到之前查不到，所以重试几轮。
    * 第 17 步起**必须点名是哪张页**——主进程不会再自己瞎挑一张。
    */
   const awaitWebContentsId = async (tabId: number): Promise<number | undefined> => {
@@ -440,7 +453,7 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
 
   /**
    * Phase 3：把这张页的 guest id ↔ 智能体告诉主进程（下载记录要标「哪个智能体触发的」）。
-   * 拿不到 guest id（还没 dom-ready）时什么都不做——等下一次（did-navigate / 切换）再报。
+   * 拿不到 guest id（create 回执还没到）时什么都不做——等下一次再报。
    */
   const noteOwner = (tabId: number): void => {
     const t = findTab(tabId);
@@ -612,27 +625,20 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
      */
     if (t.sleep) {
       wakeTab(tabId, true);
-      // 深休眠唤醒要重新加载，给页面一点时间再聚焦（浅休眠是瞬时的，也会走到这里但不亏）
+      // 深休眠唤醒要重新加载（宿主 div 重挂 → 主进程 create），给页面一点时间再聚焦
       window.setTimeout(() => {
-        const el = webviewRefs.current[tabId] as unknown as { focus?: () => void } | null;
-        el?.focus?.();
+        void window.workbench?.browserViewFocus?.(tabId);
       }, 260);
       return;
     }
     window.setTimeout(() => {
-      const el = webviewRefs.current[tabId] as unknown as { focus?: () => void } | null;
-      el?.focus?.();
+      void window.workbench?.browserViewFocus?.(tabId);
     }, 60);
   };
 
-  /** 导航某张页（URL 栏回车 / 同站改道）：走 <webview>.loadURL，不经过主进程 */
+  /** 导航某张页（URL 栏回车 / 同站改道）：ADR-0002 起走主进程的 view-navigate 通道（协议闸在 guest 侧兜底） */
   const navigate = (tabId: number, url: string): void => {
-    const el = webviewRefs.current[tabId] as unknown as { loadURL?: (u: string) => void } | null;
-    try {
-      el?.loadURL?.(url);
-    } catch {
-      /* 页面还没就绪，等它自己加载 */
-    }
+    void window.workbench?.browserViewNavigate?.({ tabKey: tabId, url });
     const t = findTab(tabId);
     if (!t) return;
     touchTab(tabId); // Phase 4：导航也是「用过」
@@ -652,6 +658,7 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
     const wcId = webContentsIdOf(tabId);
     if (typeof wcId === 'number') void window.workbench?.agentDrop?.(wcId);
     delete webviewRefs.current[tabId];
+    delete wcIdsRef.current[tabId]; // ADR-0002：宿主登记一并清（native 视图本体由 BrowserPanel 的 hostGone 摘）
     // Phase 4：实例没了，它的时间线也一起清掉（否则 tabId 复用时会认错）
     delete createdRef.current[tabId];
     delete lastActiveRef.current[tabId];
@@ -925,6 +932,64 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
   };
 
   /**
+   * ADR-0002：主进程按 wcId 推「这张页换了标题 / 地址」——宿主换原生视图后没有 DOM 元素事件了，
+   * 订阅放在这里（wcId → tabId 的映射也只有这里有）。走既有 `notePageInfo`，
+   * 口径与老 webview 元素事件逐字一致（含 touchTab）。
+   */
+  useEffect(() => {
+    const off = window.workbench?.on?.('pageinfo', (payload?: string) => {
+      let info: { wcId?: number; title?: string; url?: string };
+      try {
+        info = JSON.parse(String(payload ?? ''));
+      } catch {
+        return; // 坏 payload 忽略，不让它把渲染层带崩
+      }
+      if (typeof info?.wcId !== 'number') return;
+      const tabId = tabIdOfWebContents(info.wcId);
+      if (tabId !== null) notePageInfo(tabId, { title: info.title, url: info.url });
+    });
+    return () => {
+      off?.();
+    };
+    // 闭包全走 ref（pagesRef / wcIdsRef），一次订阅终身有效
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * ADR-0002：宿主 div **挂上**（首挂 / 深休眠唤醒）→ 建原生页宿主。
+   *
+   * create 的 url 用**当前 `t.url` 兜底**（与老 `<webview src>` 同口径：
+   * 深休眠唤醒要回到用户最后的地方，不是开页时的 bootUrl）。
+   *
+   * 返回 Promise 是**给 BrowserPanel 用的**：create 期间视图离屏，
+   * 回执落地后宿主侧要重发一次几何，页才落位（F7）。
+   */
+  const hostMounted = (t: BrowserTabView): Promise<void> => {
+    const src = t.url && t.url !== t.bootUrl && !isStartPage(t.url) ? t.url : t.bootUrl;
+    const created = window.workbench?.browserViewCreate?.({ tabKey: t.id, projectId: t.projectId, url: src });
+    return (created ?? Promise.resolve(undefined))
+      .then((r) => {
+        if (r && typeof r.wcId === 'number') {
+          wcIdsRef.current[t.id] = r.wcId;
+          noteOwner(t.id); // wcId 已知 → 早报 owner（老世界等 dom-ready，现在建好即知）
+        }
+      })
+      .catch((err) => {
+        console.warn('[browser] 原生页宿主创建失败：', err);
+      });
+  };
+
+  /**
+   * ADR-0002：宿主 div **摘下**（深休眠 / 关 tab / 关光所有页）→ 销毁原生页宿主。
+   * 这是**唯一的原生侧卸载口**，与「三条有意卸载路径」一一对应；
+   * 隐藏（切后台 / 切智能体 / 求助卡以外的页）走的是 setVisible(false)，**不经过这里**。
+   */
+  const hostGone = (tabId: number): void => {
+    delete wcIdsRef.current[tabId];
+    void window.workbench?.browserViewClose?.(tabId);
+  };
+
+  /**
    * 第 24 步：**把浅休眠落到 CPU 上**。
    *
    * 上面那个定时器只负责"判定 + 改状态"；真正**去动页面**的是这里 ——
@@ -941,7 +1006,7 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
   useEffect(() => {
     for (const t of allTabs) {
       const wcId = webContentsIdOf(t.id);
-      if (typeof wcId !== 'number') continue; // 还没 dom-ready，等下一次
+      if (typeof wcId !== 'number') continue; // 还没拿到 create 回执，等下一次
       /*
        * 浅休眠 = 节流。深休眠的页**已经不在 DOM 里**了（拿不到 wcId，上面就 continue 了），
        * 所以这里实际只会对 `'shallow'` 和清醒态做对齐。
@@ -1070,6 +1135,8 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
     embedWcId,
     registerWebview,
     notePageInfo,
+    hostMounted,
+    hostGone,
     noteOwner,
     touchTab,
     sleepOf,

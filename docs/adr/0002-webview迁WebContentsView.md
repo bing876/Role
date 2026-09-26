@@ -61,10 +61,12 @@ BEM 修饰符(`--bg/--embed/--off/--on/--hidden/--overlay/--dragging`)不算结�
 2. **分片,回滚窗口**:第一片只换宿主(本文范围),`webPreferences.webviewTag: true` **保留一个片长**——生产代码里 `<webview>` 标签与 `webview.d.ts` 随换轨消失,但 webview 能力仍可用,出问题把渲染层改回 `<webview>` 即可回到迁移前;下一片关 `webviewTag` + 清 `will-attach-webview` 等 webview 专属件。
 3. **IPC 契约**(新增,全部经 preload 白名单 + shared 类型):
    - `browserViewCreate({tabKey, projectId, url}) → {wcId}`(主进程跑分区闸 → 建 view → 挂 guest 全套接线 → 附 contentView → 返回 wcId);
-   - `browserViewRect({tabKey, rect, visible})`(渲染层 ResizeObserver + scroll/resize,rAF 合并,主进程取最新,`setBounds` + `setVisible`;`rect=null` = 先离屏不显示);
+   - `browserViewRect({tabKey, rect, visible})`(渲染层 ResizeObserver + 层 class MutationObserver,rAF 合并 + 签名去重,主进程取最新,`setBounds` + `setVisible`;零尺寸 rect 只改可见性不碰 bounds,守「不归零」红线);
    - `browserViewOrder({tabKey})`(切到前台 = `contentView.addChildView` 重排到最上);
-   - `browserViewClose({tabKey})`(关页/深休眠 = 摘 view + `webContents.destroy()`,内存真释放);
-   - `workbench:browser:pageinfo {wcId, title?, url?}`(主→渲染事件,接替 webview 元素上的 `page-title-updated`/`did-navigate`);
+   - `browserViewNavigate({tabKey, url})`(URL 栏回车/同站改道;实现期发现的老 `<webview>.loadURL` 替代通道,协议闸在 guest 侧照旧兜底);
+   - `browserViewFocus({tabKey})`(切 tab/聚焦/唤醒后聚焦;原生视图没有 DOM focus,走 `wc.focus()`;实现期发现,老代码是元素 `.focus()`);
+   - `browserViewClose({tabKey})`(关页/深休眠 = 摘 view + `wc.close()`(Electron 44 的 graceful 销毁,`destroy()` 已不存在),内存真释放);
+   - `workbench:browser:pageinfo {wcId, title?, url?}`(主→渲染事件,接替 webview 元素上的 `page-title-updated`/`did-navigate`/`did-navigate-in-page`);
    - **复用不动**:`browserThrottle(wcId, …)` / `browserOwner(wcId, agentId)` / drive / task / agent 族——它们本来就点名 wcId,wcId 的来源从「webview 元素自报」变成「create 时主进程发」,下游零改动。
 4. **驱动层**:`resolveTarget` 的接受条件从 `getType() === 'webview'` 扩为 `type === 'webview' || viewHostRegistry.has(wc.id)`(registry 在主进程,create 时登记、close 时注销);fail-fast 语义与报错口径不变,CDP 超时补丁不动。
 5. **分区闸搬家**:规则(`decideWebviewPartition`:形状 + 账号项目归属,越界改写隔离分区 + 推 `workbench:webview:blocked`)**原样**搬到 `browserViewCreate` 入口;`will-attach-webview` 处理器保留一个片长(与 webviewTag 同退)。主进程从此**只有一个**建页入口——渲染层被攻破也造不出 view。
@@ -112,6 +114,20 @@ BEM 修饰符(`--bg/--embed/--off/--on/--hidden/--overlay/--dragging`)不算结�
 - **第一片(本 ADR 的执行范围,最小)**:只换「浏览器页的宿主」——view-host 主进程模块 + IPC 契约 + BrowserPanel 占位 div + workspace 的 wcId 来源改造 + driver registry 扩展 + 冒烟网对象切换与 golden 重画 + 反证重指。第四列 UI(class/DOM 结构/CSS/三态/拖拽/覆盖/隐藏语义)逐字节不变;`webviewTag` 保留;后端零改动。
 - **第二片(后续,等指令)**:关 `webviewTag` + 清 `will-attach-webview`/`webview.d.ts` + 安全面收口。
 - **之后**:真机观测项逐条销账(F1/F2/F3/F4/F5/F6/F7/F10/F11/F12 的真机列);embed 浮层遮挡若碍事再立子项。
+
+## 实施记录(第一片,2026-09-26)
+
+- 实现中补了两条契约外的通道:`browserViewNavigate` / `browserViewFocus`(老代码 `el.loadURL(url)` / `el.focus()` 的替代,决定③ 已同步)。
+- **最后一张页的卸载路径**(F3 补强):关**最后一张**页时 `allTabs` 归零 → App 把整个浏览器层卸掉 → BrowserPanel 的宿主生命周期 effect **不会再跑**(没有下一次渲染去发现「少了一张」)→ 最后一张的 close 会漏。修法:卸载标志(独立 effect 的 cleanup 先于宿主 effect 跑)+ 真卸载时把登记在册的宿主全销毁。冒烟网 ⑥ 断言「每条 create 过的页都有对应 close」。
+- **后台开页语义**:`open` 事件走 `openFromMain` → `openUrl` 只把 `view` 切 fullscreen,**不**开列(colOpen 不动)→ 层是 `--hidden` → 视图 `visible:false` 但**不销毁**。这是既有语义(敏感字段等待场景:页在后台挂着),不是回归;冒烟网 ④ 按此断言(visible=false + 无 close),「露脸」断言放在 ⑧-4「🌐 启用」之后。
+- **visible 映射以层 class 为准**:BrowserPanel 的 rect 效果读 App 算好的 `.browserLayer--hidden/--embed` class(MutationObserver 跟踪),不另维护一套「何时可见」逻辑——两份逻辑对不齐才是事故之源。
+- **create 回执与首帧**(F7):create 期间视图离屏;回执落地后 BrowserPanel 强制重发一次几何(签名去重之外的 force 通道),页才落位。
+- **验收资产同步**:
+  - golden 重画:首节点 `webview.browserPanel__view` → `div.browserPanel__view`,其余 7 层不变;
+  - `app-logic-smoke`(verify:logic)的桥桩补 `browserViewCreate` 真值(回 wcId)——`useChat` 的发送路径 `await awaitWebContentsId()`,桩不回 wcId 时发送被 25×120ms 重试拖满 3 秒,片 7b 全红(基线对照确认:桩给真值后 56/0);
+  - `app-logic-smoke` 的「切项目绝不碰浏览器」节点身份断言:`q('webview')` → `q('.browserPanel__view')`;
+  - `sleep-wiring-tests.mts` 三条静态探针的锚点跟生产码重指(占位卡先于宿主 div return / 唤醒后延迟 `browserViewFocus` / 唤醒 url 口径搬进 workspace 的 `hostMounted`);`sleep-revert-tests.mts` 的 deepSleeping 变异 `count: 1→3`(判定现在有三处必须一致的落点);9/9 照抓。
+  - `webview.d.ts` 随生产 `<webview>` 标签消失(决定②),`global.d.ts` 里对应注释同步删。
 
 ## 来源
 

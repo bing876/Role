@@ -83,6 +83,8 @@ if (!(dom.window as unknown as { matchMedia?: unknown }).matchMedia) {
 const handlers = new Map<string, (payload?: unknown) => void>();
 /** 主进程侧的调用轨迹（求助卡/确认卡点按钮后应该走既有通道） */
 const bridgeCalls: string[] = [];
+/** ADR-0002：create 桩用的 wcId 发号器（真主进程里就是 guest 的 webContentsId） */
+let wcIdSeq = 0;
 /** 送一个**桥事件**（非 agent 通道，例如主进程要求开页）：返回是否有人接住 */
 const emitBridge = (channel: string, payload?: unknown): number => {
   const h = handlers.get(channel);
@@ -139,6 +141,16 @@ const bridge = new Proxy(
     },
     agentDrop: async (wcId: number) => {
       bridgeCalls.push(`agentDrop(${wcId})`);
+    },
+    /**
+     * ADR-0002：**必须给真值**。`useChat` 的发送路径会 `await awaitWebContentsId(tab)`，
+     * 而 wcId 现在**来自 create 回执**（不再是元素上注入的假 id）。
+     * 走 Proxy 兜底的话回执是 undefined → 发送被 25×120ms 的重试拖满 3 秒，
+     * 流式那一段全部等不到 /chat/stream（片 7b 就是这么红掉的）。
+     */
+    browserViewCreate: (_req: { tabKey: number; projectId: number | null; url: string }) => {
+      wcIdSeq += 1;
+      return Promise.resolve({ wcId: wcIdSeq });
     },
     /** 会话：登出/静默登录都要把凭证同步给主进程（不记就看不见这条清场动作） */
     syncSession: async (_apiBase: string, token: string) => {
@@ -773,7 +785,7 @@ await check('主进程说「这一轮的上下文没了」→ 弹出确认卡，
 
 /** ★ 切项目前后必须还是**同一个节点**（不是"又渲染出一个一样的"）——`browser/` 那套位置计算全指着它 */
 const heldLayer = q('.browserLayer');
-const heldWebview = q('webview');
+const heldWebview = q('.browserPanel__view');
 
 await check('useBrowserGlue：切智能体时视图跟着切（有卡进 embed / 没卡也恒调 exitEmbed）', async () => {
   const calls: string[] = [];
@@ -868,14 +880,14 @@ await check('点 8 号项目 → POST /projects/8/activate（body {}），随后
   assert.ok(memBtns.some((t) => t.includes('项目记忆（0）')), `切项目后项目记忆应当清空：${memBtns.filter((t) => t.includes('项目记忆')).join('|')}`);
 });
 
-await check('★ 切项目绝不碰浏览器：那一层与那一个 <webview> 还在，且是同一个节点', async () => {
+await check('★ 切项目绝不碰浏览器：那一层与那一个页宿主还在，且是同一个节点', async () => {
   const layer = q('.browserLayer');
-  const wv = q('webview');
+  const wv = q('.browserPanel__view');
   assert.ok(layer, '切项目把浏览器层弄没了（第 20 步的规矩：所有页一直挂着）');
-  assert.ok(wv, '切项目把 <webview> 卸载了（这条是硬规则）');
+  assert.ok(wv, '切项目把页宿主卸载了（这条是硬规则）');
   // 节点身份：还是**切换前那个元素对象**（不是"又渲染出一个一样的"）
   sameNode(layer, heldLayer, '浏览器层不是原来那个节点（被重建了）');
-  sameNode(wv, heldWebview, '<webview> 不是原来那个节点（被重建了）');
+  sameNode(wv, heldWebview, '页宿主不是原来那个节点（被重建了）');
 });
 
 await check('新建项目 → POST /projects（body 带名字）→ 进入新项目（★ F1 已修：确认文案要留得住）', async () => {

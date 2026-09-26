@@ -90,6 +90,20 @@ const bridge: WorkbenchBridge = {
    */
   browserThrottle: (webContentsId: number, throttle: boolean) =>
     ipcRenderer.invoke('workbench:browser:throttle', webContentsId, throttle),
+  /**
+   * ADR-0002：页宿主族（`<webview>` → 主进程托管的 WebContentsView）。
+   * 标题/地址变化走既有的 `on('pageinfo')`（payload 是 { wcId, title?, url? } 的 JSON）。
+   */
+  browserViewCreate: (req: { tabKey: number; projectId: number | null; url: string }) =>
+    ipcRenderer.invoke('workbench:browser:view-create', req),
+  browserViewRect: (req: { tabKey: number; rect: { x: number; y: number; width: number; height: number }; visible: boolean }) => {
+    ipcRenderer.invoke('workbench:browser:view-rect', req);
+  },
+  browserViewOrder: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-order', tabKey),
+  browserViewNavigate: (req: { tabKey: number; url: string }) =>
+    ipcRenderer.invoke('workbench:browser:view-navigate', req),
+  browserViewFocus: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-focus', tabKey),
+  browserViewClose: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-close', tabKey),
   agentAnswer: (text: string, targetWebContentsId?: number) =>
     ipcRenderer.invoke('workbench:agent:answer', text, targetWebContentsId),
 

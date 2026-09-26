@@ -22,6 +22,18 @@ import { createHelpHub } from './helpState';
 import { getSettings, onSettingsChange, setSettings } from './settings';
 import { initResourceGuard, syncDrivingFlags } from './resource-guard';
 import { ensurePostgres, ensureServer, getServerState, stopOwnedServer } from './server-supervisor';
+// ADR-0002：页宿主（WebContentsView）生命周期 + 分区前缀常量（唯一建页口，分区闸在这里执行）
+import {
+  PROJECT_PARTITION_PREFIX,
+  viewHostClose,
+  viewHostCreate,
+  viewHostFocus,
+  viewHostInit,
+  viewHostNavigate,
+  viewHostOrder,
+  viewHostRect,
+  viewHostTeardown,
+} from './view-host';
 import type {
   AgentEventPayload,
   AgentLoopNextResult,
@@ -70,8 +82,7 @@ const isHttpUrl = (url: string): boolean => /^https?:\/\//i.test(url);
  */
 const PROJECT_PARTITION_RE = /workbench-browser-project-(\d+)/;
 
-/** 分区名前缀（与渲染层 `url.ts` 的 `PROJECT_PARTITION_PREFIX` 必须逐字一致） */
-const PROJECT_PARTITION_PREFIX = 'persist:workbench-browser-project-';
+// 分区名前缀：ADR-0002 起收进 view-host.ts（它是要拼分区字符串的唯一建页口），这里 import 复用。
 
 /** 已经挂过 will-download 的分区（同一个分区可能被多次 attach，别重复挂） */
 const downloadHooked = new Set<string>();
@@ -185,10 +196,13 @@ function hookProjectDownloads(contents: WebContents): void {
  *     抖音那类站点的「打开 App / bytedance://」按钮就是走这条路，不拦就会把当前页冲掉、
  *     甚至弹出 Windows 的「获取打开此链接的应用」系统框。
  */
-app.on('web-contents-created', (_event, contents) => {
-  if (contents.getType() !== 'webview') return;
-
-  // ★ 显式禁用内嵌 webview 后台节流，保证其在后台隐藏状态下依然保持正常的 JS 执行和渲染更新
+/**
+ * guest（内嵌页）接线 —— webview 时期与 WebContentsView 时期**同一套**（ADR-0002 决定 8/失败表 F12）：
+ * 后台节流关 / 按项目下载 / owner 登记清理 / 弹窗收编 / 非 http(s) 协议闸 / 桌面 chrome 补丁 /
+ * **pageinfo 推送**（宿主换原生视图后，标题/地址变化不再有 DOM 元素事件，由这里推给渲染层）。
+ */
+function wireBrowserGuest(contents: WebContents): void {
+  // ★ 显式禁用内嵌页后台节流，保证其在后台隐藏状态下依然保持正常的 JS 执行和渲染更新
   try {
     contents.setBackgroundThrottling(false);
   } catch {}
@@ -279,6 +293,29 @@ app.on('web-contents-created', (_event, contents) => {
         /* 页面脚本被禁之类的情况：不影响驾驶，忽略 */
       });
   });
+
+  /**
+   * ADR-0002：页宿主换原生视图后，「这张页换了标题 / 换了地址」没有 DOM 元素事件可听，
+   * 由主进程按 wcId 推给渲染层（渲染层拿 wcId 换回 tabId 走 notePageInfo，口径与老事件一致，
+   * 包括 touchTab 的「页面自己动了 = 它刚被用过」）。
+   */
+  const pushPageInfo = (patch: { title?: string; url?: string }): void => {
+    if (contents.isDestroyed()) return;
+    setImmediate(() => {
+      if (contents.isDestroyed()) return;
+      sendToMainWindow('workbench:browser:pageinfo', JSON.stringify({ wcId: contents.id, ...patch }));
+    });
+  };
+  contents.on('page-title-updated', (_e, title) => pushPageInfo({ title }));
+  contents.on('did-navigate', (_e, url) => pushPageInfo({ url }));
+  contents.on('did-navigate-in-page', (_e, url) => pushPageInfo({ url }));
+}
+
+app.on('web-contents-created', (_event, contents) => {
+  // ADR-0002 回滚窗口内 webviewTag 仍开着：真出现 webview guest（旧路径 / 手动实验）照旧接上。
+  // 新的 WebContentsView guest 是 `webContents` 类型，不走这里 —— 由 view-host 的 create 显式接线。
+  if (contents.getType() !== 'webview') return;
+  wireBrowserGuest(contents);
 });
 
 function createMainWindow(): void {
@@ -316,6 +353,7 @@ function createMainWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    viewHostTeardown(); // ADR-0002：视图随窗口死，清掉宿主登记
   });
 
   // 任何 window.open / 外链都交给系统浏览器，不在应用内开新窗口
@@ -1003,6 +1041,18 @@ const ownedProjectIds = new Set<number>();
 let projectsSyncedAt: number | null = null;
 
 /**
+ * ADR-0002：页原生宿主（WebContentsView）的依赖注入。
+ * 判定函数/通知/接线都是**每次调用时**现读（ownedProjectIds 会随项目同步变化），
+ * 所以模块级注入一次即可。
+ */
+viewHostInit({
+  window: () => mainWindow,
+  decidePartition: (raw) => decideWebviewPartition(raw, ownedProjectIds, projectsSyncedAt !== null),
+  notifyBlocked: (info) => sendToMainWindow('workbench:webview:blocked', JSON.stringify(info)),
+  wireGuest: wireBrowserGuest,
+});
+
+/**
  * 反解分区名（与渲染层 `browser/url.ts` 的 `projectIdFromPartition` 同一套规则）。
  *
  * 主进程 import 不到渲染层代码，所以这里是**同规则的第二份** ——
@@ -1619,6 +1669,63 @@ ipcMain.handle('workbench:browser:throttle', (_event, wcIdRaw: unknown, throttle
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }
+});
+
+// ---------------------------------------------------------------------------
+// ADR-0002：页宿主族（渲染层只发指令；生命周期在 view-host.ts）。
+// 渲染层传的是 tabKey（tabId 当键）+ projectId，**不传分区名** —— 分区字符串由
+// 主进程在 create 里拼并过闸（唯一建页口，见 view-host 的注释）。
+// ---------------------------------------------------------------------------
+
+/** 页能否作**首帧地址**：http(s) 或工作台自己的 data: 起始页（其余一律拒绝，fail-closed） */
+const isCreatablePageUrl = (url: string): boolean => isHttpUrl(url) || url.startsWith('data:text/html');
+
+ipcMain.handle('workbench:browser:view-create', (_event, req: unknown) => {
+  const r = req as { tabKey?: unknown; projectId?: unknown; url?: unknown } | null;
+  const tabKey = Number(r?.tabKey);
+  if (!Number.isInteger(tabKey) || tabKey < 0) throw new Error('view-create：tabKey 非法');
+  const url = typeof r?.url === 'string' ? r.url : '';
+  if (!isCreatablePageUrl(url)) throw new Error('view-create：只允许 http/https 或工作台起始页');
+  const projectId =
+    typeof r?.projectId === 'number' && Number.isInteger(r.projectId) && r.projectId > 0 ? r.projectId : null;
+  return viewHostCreate({ tabKey, projectId, url });
+});
+
+ipcMain.handle('workbench:browser:view-rect', (_event, req: unknown) => {
+  const r = req as { tabKey?: unknown; rect?: { x?: unknown; y?: unknown; width?: unknown; height?: unknown }; visible?: unknown } | null;
+  const tabKey = Number(r?.tabKey);
+  if (!Number.isInteger(tabKey)) return;
+  const raw = r?.rect;
+  const rect =
+    raw && Number.isFinite(raw.x) && Number.isFinite(raw.y) && Number.isFinite(raw.width) && Number.isFinite(raw.height)
+      ? { x: raw.x as number, y: raw.y as number, width: raw.width as number, height: raw.height as number }
+      : { x: 0, y: 0, width: 0, height: 0 };
+  viewHostRect({ tabKey, rect, visible: r?.visible !== false });
+});
+
+ipcMain.handle('workbench:browser:view-order', (_event, tabKeyRaw: unknown) => {
+  const tabKey = Number(tabKeyRaw);
+  if (Number.isInteger(tabKey)) viewHostOrder(tabKey);
+});
+
+ipcMain.handle('workbench:browser:view-navigate', (_event, req: unknown) => {
+  const r = req as { tabKey?: unknown; url?: unknown } | null;
+  const tabKey = Number(r?.tabKey);
+  if (!Number.isInteger(tabKey)) return { ok: false, error: 'bad tabKey' };
+  const url = typeof r?.url === 'string' ? r.url : '';
+  // 首帧闸同 create；导航闸（非 http(s) 整页跳转）由 wireBrowserGuest 的 will-navigate 兜底
+  if (!isCreatablePageUrl(url)) return { ok: false, error: '只允许 http/https 或工作台起始页' };
+  return viewHostNavigate({ tabKey, url });
+});
+
+ipcMain.handle('workbench:browser:view-focus', (_event, tabKeyRaw: unknown) => {
+  const tabKey = Number(tabKeyRaw);
+  if (Number.isInteger(tabKey)) viewHostFocus(tabKey);
+});
+
+ipcMain.handle('workbench:browser:view-close', (_event, tabKeyRaw: unknown) => {
+  const tabKey = Number(tabKeyRaw);
+  if (Number.isInteger(tabKey)) viewHostClose(tabKey);
 });
 
 // 第 8 步：结果文档下载。拿到 Markdown 后：先本地脱敏兜底，再弹系统"保存为"对话框（只有 1 个窗口，不新增窗）。

@@ -51,10 +51,14 @@ const DEFECTS: Defect[] = [
     suite: 'wiring',
   },
   {
-    desc: '深休眠不卸载 webview：图标变了但内存一点没省（最容易骗过肉眼）',
+    desc: '深休眠不卸载页宿主：图标变了但内存一点没省（最容易骗过肉眼）',
     file: 'apps/desktop/src/browser/BrowserPanel.tsx',
     from: "const deepSleeping = t.sleep === 'deep' && !ws.drivingIds.includes(t.id);",
     to: 'const deepSleeping = false;',
+    // ADR-0002：这个判定有三处**必须一致**的落点 —— 宿主生命周期 effect（决定建/销毁）、
+    // rect effect（决定发不发视图状态）、JSX 分支（决定渲染占位卡还是宿主 div）。
+    // 一起改成 false 才是「深休眠整体失效」那条死法。
+    count: 3,
     suite: 'wiring',
   },
   {

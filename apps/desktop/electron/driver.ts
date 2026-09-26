@@ -1,4 +1,5 @@
 import { webContents } from 'electron';
+import { viewHostRegistry } from './view-host';
 import { classifyField, FIELD_REASON_CN, isPaymentConfirmAction, type FieldDescriptor } from './fieldClass';
 import type {
   BrowserAction,
@@ -736,7 +737,10 @@ function resolveTarget(id?: number): Target {
     );
   }
   const wc = webContents.fromId(id);
-  if (wc && !wc.isDestroyed() && wc.getType() === 'webview') return wc;
+  // ADR-0002：内嵌页宿主从 <webview>（type 'webview'）迁到主进程托管的 WebContentsView
+  // （type 'webContents'，但 wcId 在 viewHostRegistry 里）。两条路都认，回滚窗口内互不影响；
+  // 报错口径不变（点名了但页没了 → 当场停，绝不猜）。
+  if (wc && !wc.isDestroyed() && (wc.getType() === 'webview' || viewHostRegistry.has(wc.id))) return wc;
   throw new Error(`指定的内嵌页已经不在了（webContents ${id} 已关闭或不是内嵌页），这一路停止。`);
 }
 

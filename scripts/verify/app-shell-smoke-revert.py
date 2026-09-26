@@ -56,7 +56,7 @@ MUTATIONS = [
         'file': APP,
         'anchor': '      {browser.allTabs.length > 0 && (',
         'replace': "      {browser.allTabs.length > 0 && browser.view === 'fullscreen' && (",
-        'expect': '不换 webview 元素',
+        'expect': '不换宿主元素',
     },
     {
         'id': 'R3',
@@ -64,7 +64,7 @@ MUTATIONS = [
         'file': APP,
         'anchor': BROWSER_PANEL_JSX,
         'replace': BROWSER_PANEL_JSX.replace('            <BrowserPanel\n', '            <BrowserPanel\n              key={browser.view}\n'),
-        'expect': '不换 webview 元素',
+        'expect': '不换宿主元素',
     },
     {
         'id': 'R4',
