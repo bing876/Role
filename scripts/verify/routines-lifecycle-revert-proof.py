@@ -79,7 +79,11 @@ def main() -> int:
             )
         finally:
             target.write_bytes(original_bytes)
-            assert md5(target) == hashlib.md5(original.encode()).hexdigest(), f"{mut['id']} 还原失败"
+            # ★ 2026-09-26 修：这里的判据必须是「**还原后的字节 == 原始字节**」。
+            #   原来比的是 `md5(original.encode())`，而 original 是 `decode().replace('\r\n','\n')`
+            #   —— 在 CRLF 文件（本仓 *.ts 都是 CRLF）上这个 md5 永远对不上，
+            #   于是文件**其实已按字节还原**、脚本却自己报「L1 还原失败」并 rc=1（假红）。
+            assert md5(target) == hashlib.md5(original_bytes).hexdigest(), f"{mut['id']} 还原失败"
 
         lines = (proc.stdout + proc.stderr).splitlines()
         hit = []

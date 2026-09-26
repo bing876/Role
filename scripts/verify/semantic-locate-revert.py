@@ -21,12 +21,19 @@
 """
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # scripts/verify → 仓库根
 LOCATE = os.path.join(REPO, "apps", "desktop", "electron", "semantic-locate.ts")
 SMOKE = os.path.join(REPO, "scripts", "verify", "semantic-locate-smoke.mts")
+
+# ★ 2026-09-26 修（Windows）：CreateProcess 只按 `.exe` 补后缀、**不解析 `.cmd`**，
+#   而 PATH 上只有 `npx.cmd` ⇒ `subprocess.run(["npx", …])` 必 `[WinError 2] 系统找不到指定的文件`。
+#   统一改「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH（与 browser-column-revert.py 同口径）。
+NODE = shutil.which("node") or "node"
+TSX_CLI = os.path.join(REPO, "node_modules", "tsx", "dist", "cli.mjs")
 
 MARK1 = "// ---- ① 稳定属性"
 MARK2 = "// ---- ② 文本 + tag + 结构"
@@ -49,7 +56,7 @@ def write(path: str, s: str) -> None:
 
 
 def run_smoke():
-    r = subprocess.run(["npx", "tsx", SMOKE], cwd=REPO, capture_output=True, text=True, timeout=180)
+    r = subprocess.run([NODE, TSX_CLI, SMOKE], cwd=REPO, capture_output=True, text=True, timeout=180)
     return r.returncode, r.stdout
 
 
