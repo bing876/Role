@@ -116,15 +116,38 @@ export function BrowserPanel({
    */
   const hostKeysRef = useRef<Set<number> | null>(null);
   /**
-   * 真卸载标志（单独一个 effect，cleanup 先于宿主效果的 cleanup 跑）：
-   * 关**最后一张**页时 allTabs 归零 → App 把整个浏览器层卸掉 → 宿主效果**不会再跑**
-   * （没有下一次渲染去发现「少了一张」），最后一张的 hostGone 只能在这里兜住。
+   * 卸载代次（每次挂载 +1）—— 只在「真卸载」时才销毁宿主。
+   *
+   * ★★ 2026-09-26 修（真机症状：「指定的内嵌页已经不在了（webContents NNNN 已关闭）」——
+   *   AI 正在驾驶的页会莫名其妙被销毁，只能重开一遍）：
+   *
+   * 旧写法是一个布尔标志 `panelUnmountedRef`：cleanup 只把它设 `true`、**从不设回 `false`**。
+   * 而 `useRef(false)` 的初值只在**新实例**上生效 —— `apps/desktop/src/main.tsx` 里
+   * `<StrictMode>` 是开着的，开发模式下 React 会在**同一个实例**上跑一遍
+   * 「setup → cleanup → setup」⇒ 标志从挂载起就**永远是 true** ⇒ 宿主效果的
+   * **每一次依赖变化**（开一张页 / 关一张页 / drivingIds 变）都走
+   * `if (panelUnmountedRef.current)` 分支，把**当前所有**原生视图销毁重建
+   * ⇒ 页被重建、正在跑的那路驾驶目标当场作废。
+   *
+   * 光是"在 effect body 里复位"也不够：StrictMode 的卸载发生在重挂**之前**，
+   * 复位后紧接着的那次卸载仍会把刚建好的视图销毁一次（挂载瞬间 create→destroy→create 抖动）。
+   *
+   * 所以改成 **代次 + 微任务**：cleanup 把销毁推迟一个微任务，并检查"有没有更晚的挂载"——
+   *   · StrictMode 的**假卸载**会被紧随其后的重挂取代 → 跳过（不销毁、不抖动）；
+   *   · **真卸载**（关光所有页 → App 把整层卸掉）没有后续挂载 → 执行销毁（路径① 的原生侧那一半）。
    */
-  const panelUnmountedRef = useRef(false);
+  const mountGenerationRef = useRef(0);
   useEffect(() => {
+    const generation = (mountGenerationRef.current += 1);
     return () => {
-      panelUnmountedRef.current = true;
+      queueMicrotask(() => {
+        if (mountGenerationRef.current !== generation) return; // 被重挂取代 = 假卸载
+        for (const id of hostKeysRef.current ?? []) ws.hostGone(id);
+        hostKeysRef.current = new Set<number>();
+      });
     };
+    // ws.hostGone 读的是 hook 里的 ref（pagesRef / wcIdsRef），闭包不会过期
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     const now = new Set<number>();
@@ -145,13 +168,10 @@ export function BrowserPanel({
       }
     }
     hostKeysRef.current = now;
-    return () => {
-      // 真卸载（层没了 = 关光了所有页）→ 把剩下的宿主全销毁（路径① 的原生侧那一半）
-      if (panelUnmountedRef.current) {
-        for (const id of hostKeysRef.current ?? []) ws.hostGone(id);
-        hostKeysRef.current = new Set<number>();
-      }
-    };
+    /*
+     * ★ 这里**故意没有 cleanup**：依赖变化（开页/关页/drivingIds 变）绝不能销毁视图 ——
+     *   「真卸载才销毁」由上一条「代次 + 微任务」的 effect 独家负责。
+     */
   }, [ws.allTabs, ws.drivingIds]);
 
   /**
