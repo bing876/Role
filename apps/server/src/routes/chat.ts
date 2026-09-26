@@ -333,7 +333,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         try {
           const curProj = await currentProjectId(pool, claims.sub);
           if (curProj !== null) {
-            const decision = await routeTask(pool, claims.sub, curProj, message, { explicitAgentId: null, currentAgentId: null });
+            // G3：带上 env → 字面没把握时能走语义路由（fail-closed,失败回落字面）
+            const decision = await routeTask(pool, claims.sub, curProj, message, { explicitAgentId: null, currentAgentId: null, env });
             if (decision) {
               routedAgentId = decision.toAgentId;
               routeDecision = decision;

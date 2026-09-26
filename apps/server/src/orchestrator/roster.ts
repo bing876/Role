@@ -18,7 +18,7 @@ interface RosterRow {
   id: string;
   name: string;
   kind: string;
-  persona: { name?: string; duty?: string } | null;
+  persona: { name?: string; duty?: string; description?: string; antiJobs?: string } | null;
 }
 
 /**
@@ -47,10 +47,15 @@ export async function loadProjectRoster(
     if (excludeAgentId !== null && id === excludeAgentId) continue;
     const personaName = typeof row.persona?.name === 'string' ? row.persona.name.trim() : '';
     const duty = typeof row.persona?.duty === 'string' ? row.persona.duty.trim().slice(0, 80) : '';
+    // G3：语义路由燃料 —— 整份人设(描述) + 不干什么。切片控制提示词长度。
+    const description = typeof row.persona?.description === 'string' ? row.persona.description.trim().slice(0, 200) : '';
+    const antiJobs = typeof row.persona?.antiJobs === 'string' ? row.persona.antiJobs.trim().slice(0, 120) : '';
     out.push({
       id,
       name: personaName || String(row.name ?? `#${id}`),
       duty,
+      ...(description ? { description } : {}),
+      ...(antiJobs ? { antiJobs } : {}),
       busy: agentBusyCount(id) > 0,
       waiting: isAgentWaiting(id),
     });

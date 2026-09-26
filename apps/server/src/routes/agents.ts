@@ -684,7 +684,8 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
       const { routeTask } = await import('../orchestrator/chiefOfStaff');
       const pid = projectId ?? (await currentProjectId(pool, claims.sub));
       if (pid === null) return errJson(reply, 404, '项目不存在');
-      const decision = await routeTask(pool, claims.sub, pid, task, {});
+      // G3：带上 env → 预览也走语义路由（与 chat 同口径,阈值可配,失败回落字面）
+      const decision = await routeTask(pool, claims.sub, pid, task, { env });
       if (!decision) return { routed: false, reason: '没有可路由的智能体' };
       return { routed: true, decision };
     } catch (err) {

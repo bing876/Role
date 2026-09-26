@@ -24,16 +24,30 @@ import type { Pool } from 'pg';
 import { loadProjectRoster } from './roster';
 import type { RosterEntry } from './prompts';
 import type { JsonCipher } from '../crypto';
+import type { ServerEnv } from '../env';
+import { llmFetch } from '../llm';
+import { extractJsonLoose } from '../memoryShared';
 import { writeCollabToAgentChat } from './collabChat';
 
 export interface RouteDecision {
   toAgentId: number;
   toAgentName: string;
   reason: string;
-  method: 'duty_match' | 'keyword_weighted' | 'fuzzy_match' | 'hen_fallback' | 'assistant_fallback' | 'explicit' | 'keep_current';
+  method: 'duty_match' | 'keyword_weighted' | 'fuzzy_match' | 'semantic' | 'hen_fallback' | 'assistant_fallback' | 'explicit' | 'keep_current';
   score?: number;
   warning?: string;
 }
+
+/**
+ * G3（2026-09-26）语义路由的「高置信阈值」。
+ * 字面打分（关键词加权 / 模糊）的 top 分 ≥ 此值 → 直接采信字面结果，**不调 LLM**（不花钱）；
+ * 低于此值（字面没把握）→ 才问聊天 LLM 做语义判断。
+ * 0.35：经验值 —— 强重叠（任务含职责核心词）通常 >0.5，零/弱重叠 <0.2。
+ */
+export const SEMANTIC_ROUTE_CONFIDENCE = 0.35;
+
+/** 语义路由单次调用的超时（fail-closed：超时/连不上/解析失败一律回落字面，不崩不卡） */
+const SEMANTIC_ROUTE_TIMEOUT_MS = 12_000;
 
 // ---------------- 空描述检测（前端警告用） ----------------
 
@@ -237,12 +251,92 @@ export function routeByFuzzy(task: string, roster: RosterEntry[]): RouteDecision
   };
 }
 
+/**
+ * G3（2026-09-26）语义路由：把「用户这句话 + 每个智能体的名字+描述+不干什么」交给聊天 LLM，
+ * 让它选最合适的（或「都不合」）。
+ *
+ * 为什么加这层：字面打分（关键词加权 / 模糊）只认「认字」—— 「我爱喝拿铁」 vs 「负责咖啡饮品」
+ * 零字面重叠 → 0 分，漏掉。语义层让模型「懂意思」：拿铁≈咖啡饮品 → 选到那个智能体。
+ *
+ * fail-closed（铁律）：
+ *   - 候选 < 2（没得选）/ 没配模型 / LLM 连不上 / 超时 / 解析失败 / 选了个不存在或正忙的
+ *     → 一律返回 null，由调用方回落字面 / 兜底，**绝不崩、绝不卡**。
+ *   - 只考虑**空闲**（非 busy/waiting）的智能体，与字面打分同一口径；@点名、delegate 各闸、
+ *     管家优先都不在这层 —— 这层只在「字面没把握」时补一个「懂意思」的判断。
+ */
+export async function routeBySemantic(
+  task: string,
+  roster: RosterEntry[],
+  env: ServerEnv,
+): Promise<RouteDecision | null> {
+  const candidates = roster.filter((r) => !r.busy && !r.waiting);
+  if (candidates.length < 2) return null;
+  if (!env.deepseekApiKey) return null; // 没配模型 → 直接回落
+
+  const lines = candidates.map((r) => {
+    const desc = r.description || r.duty || '（无描述）';
+    const anti = r.antiJobs ? ` | 不干什么：${r.antiJobs}` : '';
+    return `- id=${r.id} | 名字：${r.name} | 描述：${desc}${anti}`;
+  });
+  const prompt = [
+    '你是项目调度员。下面这句话要交给一位最合适的智能体处理。',
+    '按「谁最懂这件事」来判断，不要被字面词是否出现误导（同义 / 相关领域也算）。',
+    '',
+    `用户这句话：${task.slice(0, 200)}`,
+    '',
+    '候选智能体：',
+    ...lines,
+    '',
+    '只回一个 JSON：{"choice": <选中的 id 或 "none">, "reason": "一句话理由"}。',
+    '都不合适就 "none"。不要输出 JSON 以外的任何字。',
+  ].join('\n');
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SEMANTIC_ROUTE_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await llmFetch(env, [{ role: 'user', content: prompt }], {
+        tag: 'semantic-routing',
+        json: true,
+        temperature: 0,
+        signal: controller.signal,
+        timeoutMs: SEMANTIC_ROUTE_TIMEOUT_MS,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+    const content = data.choices?.[0]?.message?.content ?? '';
+    const parsed = extractJsonLoose(content) as { choice?: unknown; reason?: unknown } | null;
+    if (!parsed) return null;
+    const reason = typeof parsed.reason === 'string' ? parsed.reason.trim().slice(0, 120) : '';
+    const choice = parsed.choice;
+    if (choice === 'none' || choice === null || choice === undefined) return null;
+    const chosenId = Number(choice);
+    if (!Number.isSafeInteger(chosenId) || chosenId <= 0) return null;
+    const chosen = candidates.find((r) => r.id === chosenId);
+    if (!chosen) return null; // 选了个不在候选里的 → 视为无效
+    return {
+      toAgentId: chosen.id,
+      toAgentName: chosen.name,
+      reason: `语义匹配：${reason || '模型判断最合适'}`,
+      method: 'semantic',
+    };
+  } catch (err) {
+    // 连不上 / 超时 / 解析炸 —— 一律静默回落（调用方接字面/兜底）
+    console.warn('[route] 语义路由失败（回落字面）：', (err as Error).message);
+    return null;
+  }
+}
+
 export async function routeTask(
   pool: Pool,
   userId: number,
   projectId: number,
   task: string,
-  opts?: { currentAgentId?: number | null; explicitAgentId?: number | null },
+  opts?: { currentAgentId?: number | null; explicitAgentId?: number | null; env?: ServerEnv },
 ): Promise<RouteDecision | null> {
   const roster = await loadProjectRoster(pool, userId, projectId, null);
   if (roster.length === 0) return null;
@@ -273,11 +367,25 @@ export async function routeTask(
     }
   }
 
-  // 关键词加权优先，其次模糊字面相似度
+  // 关键词加权优先，其次模糊字面相似度 —— 但先别急着返回：
+  // G3（2026-09-26）：字面 top 分 ≥ 阈值（高置信）→ 直接采信字面（不调 LLM,不花钱）；
+  // 字面没把握（< 阈值）→ 让语义层「懂意思」补一刀；语义失败/「都不合」→ 回落字面/兜底（fail-closed）。
   const weighted = routeByKeywordWeighted(task, roster);
-  if (weighted) return weighted;
-  const fuzzy = routeByFuzzy(task, roster);
-  if (fuzzy) return fuzzy;
+  const fuzzy = weighted ? null : routeByFuzzy(task, roster);
+  const bestLiteral = weighted ?? fuzzy;
+  const literalConfidence = bestLiteral?.score ?? 0;
+
+  if (bestLiteral && literalConfidence >= SEMANTIC_ROUTE_CONFIDENCE) {
+    return bestLiteral; // 高置信字面 → 直接用
+  }
+
+  if (opts?.env) {
+    const semantic = await routeBySemantic(task, roster, opts.env);
+    if (semantic) return semantic;
+  }
+
+  // 语义没给结论（或没开 env）→ 字面兜底（哪怕低置信,也优先于「交给空闲」）
+  if (bestLiteral) return bestLiteral;
 
   // 空描述警告：收集空职责的 agent，前端可提示
   const emptyDuties = roster.filter((r) => !r.busy && !r.waiting && detectEmptyDuty(r.duty).empty);
@@ -311,6 +419,7 @@ const ROUTE_METHOD_LABEL: Record<string, string> = {
   duty_match: '按职责匹配',
   keyword_weighted: '按关键词匹配',
   fuzzy_match: '模糊匹配',
+  semantic: '语义理解匹配',
   hen_fallback: '兜底交给管家',
   assistant_fallback: '兜底交给助手',
   explicit: '用户指定',
