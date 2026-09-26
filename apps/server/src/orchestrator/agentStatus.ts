@@ -19,7 +19,8 @@
 import { isAgentWaiting, agentBusyCount } from './registry';
 import { latestLoopOfAgent, loopsOfAgent } from '../toolLoop';
 
-export type AvatarStatus = 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done';
+/** 形态③（2026-09-27）：补 failed（出错）/ sleeping（休眠）→ 头像六态齐（空闲/思考/执行/需你处理/出错/休眠） */
+export type AvatarStatus = 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done' | 'failed' | 'sleeping';
 
 export interface AgentLiveStatus {
   status: AvatarStatus;
@@ -107,7 +108,11 @@ export function resolveAgentStatus(agentId: number): AgentLiveStatus {
   }
   if (status === 'failed' || status === 'stopped') {
     if (age < DONE_WINDOW_MS) {
-      return { status: 'blocked', detail: status === 'failed' ? '失败' : '已停止', loopId: latest.id, step: latest.step, updatedAt: now };
+      // 形态③：「失败」是独立的出错态（头像红色「出错」），不再是「需你处理」
+      if (status === 'failed') {
+        return { status: 'failed', detail: '出错了，这步没走通', loopId: latest.id, step: latest.step, updatedAt: now };
+      }
+      return { status: 'blocked', detail: '已停止', loopId: latest.id, step: latest.step, updatedAt: now };
     }
     return { status: 'idle', detail: '空闲', updatedAt: now };
   }

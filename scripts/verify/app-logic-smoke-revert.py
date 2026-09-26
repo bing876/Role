@@ -516,6 +516,16 @@ MUTATIONS = [
         'replace': "              className=\"inputbar-btn send inputbar-btn--stop\"\n              onClick={() => undefined} // 反证注入：拆掉暂停闸（点了不暂停）\n",
         'expect': '点「接管」没有真的暂停这一路',
     },
+    # ---- 形态片·头像六态（③，2026-09-27）：把六态映射打平（thinking 也变「空闲」）→ 六态塌成一态 ----
+    {
+        'file': APP_TSX,
+        'id': 'TK3',
+        'visible': True,
+        'name': '头像六态映射打平：thinking 也显示「空闲」（六态塌成一态,颜色和词都丢）',
+        'anchor': "  thinking: { color: '#5b9bd5', word: '思考' },\n",
+        'replace': "  thinking: { color: '#8b93a1', word: '空闲' }, // 反证注入：六态塌成空闲\n",
+        'expect': '状态 thinking 的词不对',
+    },
 ]
 
 

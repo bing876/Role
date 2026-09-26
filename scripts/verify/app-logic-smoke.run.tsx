@@ -426,6 +426,7 @@ const { act } = await import('react-dom/test-utils');
 const { createRoot } = await import('react-dom/client');
 const React = (await import('react')).default;
 const App = (await import('../../apps/desktop/src/App')).default;
+const { avatarStateOf } = await import('../../apps/desktop/src/App');
 const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge');
 const { useMemory } = await import('../../apps/desktop/src/features/memory');
 const { useBrowserGlue } = await import('../../apps/desktop/src/app/browserGlue');
@@ -2561,6 +2562,47 @@ log('--- ⑳ 降噪片：占位行不显示 / 结束键条件显示 / 首进引�
     assert.ok(q('.welcomeCard') === null, '已经见过引导了，欢迎卡还在');
     await act(async () => root20c.unmount());
   });
+}
+
+/**
+ * 形态片·头像六态（③，2026-09-27；规格 docs/产品交互规格.md）：
+ *   空闲/思考/执行/需你处理/出错/休眠 —— 全有颜色 + 一个词；点头像弹「它在干嘛」。
+ * 反证：app-logic-smoke-revert.py 的 TK3（拆六态映射必红）。
+ */
+await check('③-a 六态映射：每态都有颜色 + 一个词（空闲/思考/执行/需你处理/出错/休眠）', async () => {
+  const cases: Array<[status: string, sleeping: boolean, word: string, color: string]> = [
+    ['idle', false, '空闲', '#8b93a1'],
+    ['thinking', false, '思考', '#5b9bd5'],
+    ['working', false, '执行', '#46b57c'],
+    ['blocked', false, '需你处理', '#e0a63a'],
+    ['failed', false, '出错', '#e05c5c'],
+    ['idle', true, '休眠', '#9b7fd4'],
+  ];
+  for (const [status, sleeping, word, color] of cases) {
+    const st = avatarStateOf({ id: 1, status: status as never } as never, { sleeping });
+    assert.equal(st.word, word, `状态 ${status}${sleeping ? '(休眠)' : ''} 的词不对：${st.word}`);
+    assert.equal(st.color, color, `状态 ${status} 的颜色不对：${st.color}`);
+  }
+});
+{
+  const root3 = await mountApp(true);
+  await ensure('③ 前置：左栏头像在', () => qa('.contact-avatar').length > 0);
+  await flush(2);
+  await check('③-b 左栏头像显示当前状态：颜色环 + 一个词（idle + 没在监听 → 休眠）', async () => {
+    const av = qa('.contact-avatar')[0];
+    assert.ok(av, '找不到左栏头像');
+    const stateEl = av!.querySelector('.contact-avatar__state');
+    assert.ok(stateEl, '头像上没有那一个词（.contact-avatar__state）');
+    assert.match(stateEl!.textContent ?? '', /休眠|空闲/, `词不对：${stateEl?.textContent}`);
+    assert.ok((av!.getAttribute('style') ?? '').includes('--state-c'), '头像没有状态颜色环（--state-c）');
+  });
+  await check('③-c 头像带「它在干嘛」一行（title 气泡，点头像/悬停弹出）', async () => {
+    const av = qa('.contact-avatar')[0];
+    assert.ok(av, '找不到左栏头像');
+    const title = av!.getAttribute('title') ?? '';
+    assert.match(title, /它在干嘛/, `头像 title 不是「它在干嘛」：${title}`);
+  });
+  await act(async () => root3.unmount());
 }
 
 log('=== 结论 ===');

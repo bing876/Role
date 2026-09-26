@@ -287,6 +287,38 @@ function agentStatusLine(a: AgentView): string {
   return a.personaStatus === 'pending' ? '等你定个样子' : '已就位';
 }
 
+/**
+ * 形态③ 头像六态（2026-09-27）：空闲 / 思考 / 执行 / 需你处理 / 出错 / 休眠 —— 全有颜色 + 一词。
+ * 服务端 status（含 waiting/done 归并）→ 六态；`sleeping`（休眠）由桌面从保活态推导（没在监听 = 睡着）。
+ */
+const AVATAR_STATE_MAP: Record<string, { color: string; word: string }> = {
+  idle: { color: '#8b93a1', word: '空闲' },
+  done: { color: '#8b93a1', word: '空闲' },
+  thinking: { color: '#5b9bd5', word: '思考' },
+  working: { color: '#46b57c', word: '执行' },
+  waiting: { color: '#46b57c', word: '执行' },
+  blocked: { color: '#e0a63a', word: '需你处理' },
+  failed: { color: '#e05c5c', word: '出错' },
+  sleeping: { color: '#9b7fd4', word: '休眠' },
+};
+export function avatarStateOf(a: AgentView, opts?: { sleeping?: boolean }): { color: string; word: string } {
+  const key = opts?.sleeping ? 'sleeping' : (a.status ?? 'idle');
+  return AVATAR_STATE_MAP[key] ?? AVATAR_STATE_MAP.idle;
+}
+/** 点头像弹的那句「它在干嘛」（人话）：优先服务端 statusDetail，否则按状态给一句 */
+function avatarDoing(a: AgentView, opts?: { sleeping?: boolean }): string {
+  if (opts?.sleeping) return '它在干嘛：歇着呢，没在监听';
+  if (a.statusDetail) return a.statusDetail;
+  switch (a.status) {
+    case 'thinking': return '它在干嘛：在想下一步怎么做';
+    case 'working': return '它在干嘛：正在动手干活';
+    case 'blocked': return '它在干嘛：卡住了，等你看一眼';
+    case 'failed': return '它在干嘛：上一步出错了，没走通';
+    case 'done': return '它在干嘛：刚干完一单';
+    default: return '它在干嘛：闲着，随时能派活';
+  }
+}
+
 export default function App() {
   /** 头像右上角红点：第 8 步起由服务端 tasks.unread 驱动（登录后拉 current，done 事件点亮，看完熄灭） */
   /**
@@ -2114,7 +2146,12 @@ export default function App() {
             {/* M2':行结构换设计基准 .contact-item(头像块/名字/真实状态行),数据仍是真名单;
                 新建/删除收进顶栏「＋」弹层(真操作),不再摆两个按钮 */}
             <div className="contact-list" role="list" aria-label="我的智能体">
-              {filteredAgents.map((a) => (
+              {filteredAgents.map((a) => {
+                // 形态③ 头像六态：休眠 = 没在监听（idle 且保活关）；其余走服务端 status
+                const sleeping = (a.status ?? 'idle') === 'idle' && !agentStates[a.id]?.keepalive;
+                const st = avatarStateOf(a, { sleeping });
+                const doing = avatarDoing(a, { sleeping });
+                return (
                 <button
                   type="button"
                   role="listitem"
@@ -2123,12 +2160,15 @@ export default function App() {
                   className={`contact-item${a.id === curAgentId ? ' active' : ''}${justAddedAgentId === a.id ? ' just-added' : ''}`}
                   onClick={() => selectAgent(a)}
                 >
+                  {/* 形态③：头像即状态 —— 颜色环 + 一个词；悬停/点头像弹「它在干嘛」一行（title 气泡） */}
                   <span
                     className="contact-avatar"
-                    style={{ '--c1': agentColor(a) } as React.CSSProperties}
-                    aria-hidden="true"
+                    title={doing}
+                    aria-label={`${a.name}：${st.word}`}
+                    style={{ '--c1': agentColor(a), '--state-c': st.color } as React.CSSProperties}
                   >
                     {agentGlyph(a)}
+                    <span className="contact-avatar__state" aria-hidden="true">{st.word}</span>
                     {a.kind === 'assistant' && hasUnread && (
                       <span className="red-dot" title={curTask?.unreadHint || '任务结果待查看'} />
                     )}
@@ -2142,7 +2182,8 @@ export default function App() {
                     </span>
                   </span>
                 </button>
-              ))}
+                );
+              })}
               {filteredAgents.length === 0 && (
                 <div className="small contact-list__empty">没有匹配「{agentQuery}」的智能体</div>
               )}

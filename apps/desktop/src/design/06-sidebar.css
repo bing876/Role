@@ -131,7 +131,17 @@
   font-weight: var(--fw-medium); font-size: 14px; line-height: 1; font-family: inherit;
   display: grid; place-items: center;
   /* Round 138：头像仅保留 brightness 过渡（hover 提亮）；白外环已移除 */
-  transition: filter .18s ease;
+  transition: filter .18s ease, box-shadow .18s ease;
+  /* 形态③（2026-09-27）：颜色环 = 六态颜色（--state-c）；没状态时用透明，不抢戏 */
+  box-shadow: 0 0 0 2px var(--state-c, transparent);
+}
+/* 形态③：头像下方那一个词（空闲/思考/执行/需你处理/出错/休眠），颜色跟状态走 */
+.contact-avatar__state {
+  position: absolute; left: 50%; bottom: -13px; transform: translateX(-50%);
+  font-size: 10px; font-weight: 600; line-height: 1; white-space: nowrap;
+  color: var(--state-c, rgba(255,255,255,0.6));
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  pointer-events: none;
 }
 
 /* 中间文字区域：两行 21 + 3 + 16 = 40 → 与头像 40 严格等高，垂直重心对齐。
