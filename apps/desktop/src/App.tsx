@@ -1287,6 +1287,30 @@ export default function App() {
   const col = useBrowserColumn();
 
   /**
+   * ★★ 2026-09-26 修「浏览器空白」· ADR-0005:列的可见性以 `browser.view` 为**单一真相**。
+   *
+   * 症状(用户报的):聊天里说「打开抖音」→ 标签建了、页也真加载了,右侧却看不见。
+   * 根因:第四列的可见性 = `col.colOpen && browser.view === 'fullscreen'`(见下方层 class),
+   * 而 `browser.openUrl` 只写了 `setView('fullscreen')`(它自己的语义就是「用户明确要看浏览器」),
+   * **没有任何人把这件事告诉外壳的列** —— 于是层落进 `--hidden`(transform 移出视野),
+   * 页成了「已创建、已加载、但不在视野里」。
+   *
+   * 为什么在这里兜而不是在 `openUrl` 里补一句 `col.openColumn()`:
+   *   · `browser/` 是 feature 层,不许反向依赖外壳的列状态(分层规则,见 app/browserGlue.ts 头注释);
+   *   · 逐个调用点补 = 以后每加一个开页入口就再踩一次(真机上 `openFromMain` 那条就同样漏了)。
+   * 所以:**任何让 view 变成 fullscreen 的路径,列自动打开** —— 一条 effect 兜住全部入口。
+   *
+   * 反向不受影响:「💬 对话」走 `exitFullscreen()`(view→background)+ `hideColumn()`,
+   * 两者同进同退;`openFromPage`(AI 自己开页 / target=_blank)不碰 view,
+   * 「AI 开页不抢用户视线」的第 28 步拍板原样保留。
+   */
+  useEffect(() => {
+    if (browser.view === 'fullscreen') col.openColumn();
+    // col.openColumn 是稳定引用(useCallback + setState),不参与依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browser.view]);
+
+  /**
    * 批次 M-2':第二列宽度的拖动/记忆(app/useSidebarColumn),与第四列互不引用。
    * 侧栏三个纯 UI state:搜索词(真名单过滤)、＋弹层开合、刚创建脉冲(真事件驱动)。
    */
@@ -2650,6 +2674,8 @@ export default function App() {
           className={
             // 可见性 = colOpen(外壳侧) 且 view==='fullscreen'(browser/ 内部态):
             // 面板自己的「退出全屏」按钮走 view→background,同样把列收走 —— 两条路同归隐藏,不绕状态。
+            // ★ 两个状态同进同退由上面那条 effect 兜住(ADR-0005:view→fullscreen ⇒ 列必开),
+            //   否则「view 说要给人看、列没开」= 层被移出视野 = 页已加载却空白。
             browser.view === 'embed'
               ? 'browserLayer browserLayer--embed'
               : col.colOpen && browser.view === 'fullscreen'
