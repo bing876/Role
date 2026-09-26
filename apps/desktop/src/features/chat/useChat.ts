@@ -172,6 +172,11 @@ export interface UseChatOptions {
    * 可选：老调用方不传就不触发（行为不变）。
    */
   onNewAgent?: (a: AgentView) => void;
+  /**
+   * UX 收尾（2026-09-26 用户拍板 A③）：补充指令**静默注入**成功后叫一声 ——
+   * 组合层用它让状态行瞬态显示「已收到补充」（约 2.5 秒自动淡出），**不弹横幅**。
+   */
+  onSupplementAccepted?: () => void;
 }
 
 export interface ChatApi {
@@ -249,6 +254,9 @@ export interface ChatApi {
 }
 
 export function useChat(options: UseChatOptions): ChatApi {
+  /** ★ UX 收尾 A③：补充注入成功的回调用 ref 取最新（同 onNoteRef 的规矩） */
+  const onSupplementRef = useRef(options.onSupplementAccepted);
+  onSupplementRef.current = options.onSupplementAccepted;
   const {
     sessionRef,
     curAgentId,
@@ -282,6 +290,13 @@ export function useChat(options: UseChatOptions): ChatApi {
     setAwaitResumeAgent,
     setAwaitResumeWc,
   } = resume;
+  /**
+   * ★ UX 收尾 A①：`awaitResume` 的最新值镜像。
+   * 它在 sendChat 里的用途是那道早退闸（`streaming && !runningLoopId`）——
+   * 挂起等「继续」时 loopId 已被清掉，必须放行，否则用户打的「继续」会被静默吞掉。
+   */
+  const awaitResumeRef = useRef(awaitResume);
+  awaitResumeRef.current = awaitResume;
   const {
     agentAwaitInfo,
     agentAwaitAgent,
@@ -333,6 +348,8 @@ export function useChat(options: UseChatOptions): ChatApi {
   /** 最新值镜像：异步回包里读「这一轮是哪条循环」（闭包里的 state 是旧的） */
   const runningLoopIdRef = useRef<string | null>(null);
   const runningLoopWcIdRef = useRef<number | null>(null);
+  /** ★ UX 收尾 A①：暂停时把 loopId 存这儿，「继续」时原样接回（同一条循环） */
+  const pausedLoopIdRef = useRef<string | null>(null);
   runningLoopIdRef.current = runningLoopId;
   runningLoopWcIdRef.current = runningLoopWcId;
 
@@ -438,7 +455,11 @@ export function useChat(options: UseChatOptions): ChatApi {
     const value = (override ?? input).trim();
     if (!value) return;
     // 普通聊天流式中（非运行中任务）阻止重复发送
-    if (streaming && !runningLoopIdRef.current) return;
+    /**
+     * ★ UX 收尾 A①：挂起等「继续」时 `runningLoopId` 已被清掉（界面要回非执行态），
+     *   所以这里必须**放行** —— 否则用户打的「继续」会被这道闸静默吞掉。
+     */
+    if (streaming && !runningLoopIdRef.current && !awaitResumeRef.current) return;
     /**
      * 第 15 步：**这轮消息属于哪个智能体，在发起时就钉死**。
      * 后面所有写入（用户句、流式半截、助手全文）都用这个 id 落桶——
@@ -461,7 +482,19 @@ export function useChat(options: UseChatOptions): ChatApi {
           messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
         }));
         setInput('');
-        setChatNote('好，已为您暂停当前任务。现场状态已完整保留，输入「继续」可原地接上。');
+        /**
+         * ★ UX 收尾 A①（用户拍板）：暂停 = **非执行态**。
+         *   · 清掉 loopId ⇒ 状态行不再是「正在…」+ 发送键回「发送」（不再是「停止」）；
+         *   · 让组合层记下「等继续」 ⇒ 状态行显示「已暂停 · 说「继续」接上」，
+         *     下一句「继续」走既有的 `resumeTask`（先读真实页 → 服务端解挂 → 原地接上）；
+         *   · **不再弹那行 chatNote 横幅** —— 状态行已经把话说清楚了。
+         */
+        pausedLoopIdRef.current = loopId;
+        setRunningLoopId(null);
+        setRunningLoopWcId(null);
+        setAwaitResume(true);
+        setAwaitResumeAgent(myAgent);
+        setAwaitResumeWc(typeof wcId === 'number' ? wcId : null);
         if (typeof wcId === 'number') {
           void window.workbench?.pauseTask(wcId);
         }
@@ -494,6 +527,8 @@ export function useChat(options: UseChatOptions): ChatApi {
          * 用户那句话**已经作为正常用户气泡上屏**了，再弹一条黄条既重复又吵。
          * 「静默注入」才是目标态：上屏就是全部反馈，过程信息进轨迹抽屉。
          */
+        // ★ UX 收尾 A③：静默注入成功后给状态行一个**瞬态**提示（组合层 2.5 秒后自己收）
+        onSupplementRef.current?.();
         void fetch(`${API_BASE()}/agent/loop/message`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${session.token}` },
@@ -625,18 +660,6 @@ export function useChat(options: UseChatOptions): ChatApi {
     lastUserWasOpenRef.current[myAgent] = confirmedByThisMessage;
 
     /**
-     * 第 17 步（用户拍板）：**纯闲聊不打断两路驾驶**。
-     *
-     * 旧行为是「发一句话就把驾驶员暂停」，但本步要求任务能在你聊别的事时继续跑、
-     * 不用你盯着点「继续」——所以这里不再全局 pauseTask。
-     * 第 18 步起，唯一让驾驶停下来的入口是明确的「停」口令（见上面的 detectStopIntent）；
-     * 同一张页再来一条新指令 → 主进程 agentStart 让那一路的旧循环作废（最新指令优先），
-     * 别的页上正在跑的那一路完全不动。
-     */
-    // 用户这句话先落桶（按发起时的智能体）
-    patchChat(myAgent, (c) => ({ ...c, messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }) }));
-
-    /**
      * ★★ 步数上限停住后的「继续」：**接回原来那条循环**，绝不发给聊天。
      *
      * 为什么必须在这里短路（这就是本轮要修的 bug 的根因）：
@@ -661,6 +684,15 @@ export function useChat(options: UseChatOptions): ChatApi {
         setChatNote('刚才那一轮已经收尾了 —— 直接说你要做什么就行。');
       } else {
         void window.workbench?.resumeTask(wcId);
+        /**
+         * ★ UX 收尾 A①：把界面从「已暂停」还原成「执行中」。
+         *   「停」时把 loopId 存进 `pausedLoopIdRef` 并清掉 runningLoopId（界面要回非执行态），
+         *   这里接回来 —— 服务端 resume 用的还是**同一个 loopId**，那条 SSE 一直开着。
+         */
+        if (pausedLoopIdRef.current) {
+          setRunningLoopId(pausedLoopIdRef.current);
+          pausedLoopIdRef.current = null;
+        }
         pushChatLineFor(myAgent, '好，我接着刚才那一步往下做 —— 先重新看一眼你现在这个页面。');
         // 让主进程把状态刷上来（横幅从「等你继续」回到「AI 驾驶中」）
         window.setTimeout(() => void browser.refreshDriving(), 400);
@@ -669,6 +701,19 @@ export function useChat(options: UseChatOptions): ChatApi {
       setHasUnread(false);
       return;
     }
+
+    /**
+     * 第 17 步（用户拍板）：**纯闲聊不打断两路驾驶**。
+     *
+     * 旧行为是「发一句话就把驾驶员暂停」，但本步要求任务能在你聊别的事时继续跑、
+     * 不用你盯着点「继续」——所以这里不再全局 pauseTask。
+     * 第 18 步起，唯一让驾驶停下来的入口是明确的「停」口令（见上面的 detectStopIntent）；
+     * 同一张页再来一条新指令 → 主进程 agentStart 让那一路的旧循环作废（最新指令优先），
+     * 别的页上正在跑的那一路完全不动。
+     */
+    // 用户这句话先落桶（按发起时的智能体）
+    patchChat(myAgent, (c) => ({ ...c, messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }) }));
+
     /**
      * 等「继续」期间用户说的是**别的话**（比如「先点第一个结果」）：
      * 等待态解除，这句话照正常路径处理（该发车发车、该聊天聊天）。

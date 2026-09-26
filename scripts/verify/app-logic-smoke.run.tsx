@@ -139,6 +139,10 @@ const bridge = new Proxy(
     resumeTask: async (wcId: number) => {
       bridgeCalls.push(`resumeTask(${wcId})`);
     },
+    /** A①：「继续」= 走主进程 `resumeTask`（先读真实页 → 服务端解挂 → 原地接上） */
+    resumeTask: async (wcId: number) => {
+      bridgeCalls.push(`resumeTask(${wcId})`);
+    },
     agentDrop: async (wcId: number) => {
       bridgeCalls.push(`agentDrop(${wcId})`);
     },
@@ -2094,9 +2098,13 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     await flush(4);
     assert.ok(q('.runStatus') !== null, '执行中没有轻量状态行（.runStatus）');
     assert.ok(q('.runStatus__spin') !== null, '状态行里没有旋转图标');
-    const chat = q('.chat')?.textContent ?? '';
-    assert.ok(!chat.includes('AI 任务执行中'), '旧的「AI 任务执行中」横幅还在（目标态要删掉它）');
-    assert.ok(!chat.includes('发送补充'), '旧的特殊条「发送补充」还在');
+    /**
+     * ★ 判据用**整个文档**而不是 `.chat`：UX 收尾片把状态行搬到了输入框正上方（`.chat` 之外），
+     *   只查 `.chat` 的话「有人把旧横幅加回聊天区/加回输入框上方」都可能漏掉。
+     */
+    const docText = doc.body.textContent ?? '';
+    assert.ok(!docText.includes('AI 任务执行中'), '旧的「AI 任务执行中」横幅还在（目标态要删掉它）');
+    assert.ok(!docText.includes('发送补充'), '旧的特殊条「发送补充」还在');
     // 输入框必须还是正常输入框（不是被换掉的特殊控件）
     const field = q('.inputbar-field') as HTMLInputElement | null;
     assert.ok(field, '输入框不见了');
@@ -2243,6 +2251,82 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     );
     const mine = qa('.msg.user').map((x) => x.textContent ?? '');
     assert.ok(mine.includes('停'), `「停」没有作为正常用户气泡上屏：${JSON.stringify(mine)}`);
+  });
+
+  await check('⑲-8（A②）状态行钉在输入框正上方：同一个容器、排在输入框之前', async () => {
+    await typeIntoInput('把刚才那个页面再看一遍');
+    const streamsB = streamBodies.length;
+    clickSend();
+    await waitFor('⑲-8 新一轮发出', () => streamBodies.length > streamsB);
+    ssePush('meta', { conversationId: 4251, agentId: 97 });
+    ssePush('loop', { loopId: 'loop-19c', wcId: 7777 });
+    await flush(4);
+    const bar = q('.runStatus');
+    const ib = q('.inputbar');
+    assert.ok(bar && ib, '找不到状态行或输入框');
+    assert.ok(
+      bar!.parentElement === ib!.parentElement,
+      '状态行与输入框不在同一个容器里（没"钉"在输入框上方）',
+    );
+    const kids = Array.from(bar!.parentElement!.children);
+    assert.ok(kids.indexOf(bar!) < kids.indexOf(ib!), '状态行没有排在输入框**之前**（"正上方"）');
+    assert.ok(q('.runStatus__spin') !== null, '执行中状态行应有旋转图标');
+  });
+
+  await check('⑲-9（A①）发「停」→ 非执行态（已暂停 + 输入框回正常发送）；说「继续」→ 接回执行中', async () => {
+    bridgeCalls.length = 0;
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('停止'));
+    assert.ok(stopBtn, '前置：执行中发送键应是「停止」');
+    await act(async () => {
+      click(stopBtn!, '停止');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(4);
+    assert.ok(q('.runStatus--paused') !== null, '「停」之后状态行没有切成暂停态');
+    assert.ok(
+      (q('.runStatus')?.textContent ?? '').includes('已暂停'),
+      `暂停态文案不对：${q('.runStatus')?.textContent}`,
+    );
+    assert.ok(
+      !qa('.inputbar button').some((b) => (b.textContent ?? '').includes('停止')),
+      '暂停后发送键还是「停止」（目标态要回「发送」）',
+    );
+    assert.ok(
+      qa('.inputbar button').some((b) => (b.textContent ?? '').includes('发送')),
+      '暂停后找不到「发送」键',
+    );
+    const field = q('.inputbar-field') as HTMLInputElement | null;
+    assert.ok(field && !field.disabled, '暂停后输入框被禁用了（用户没法打那句「继续」）');
+    assert.equal(q('.caret'), null, '暂停后还画着打字光标（那是"还在长"的意思）');
+    // 「继续」→ 走既有的 resumeTask 链路，界面回执行中
+    const rounds = streamBodies.length;
+    await typeIntoInput('继续');
+    clickSend();
+    await flush(5);
+    assert.ok(
+      bridgeCalls.some((c) => c.startsWith('resumeTask(7777')),
+      `「继续」没有走 resumeTask：${JSON.stringify(bridgeCalls)}`,
+    );
+    assert.equal(streamBodies.length, rounds, '「继续」又开了一轮 /chat/stream（应该接回原来那条循环）');
+    assert.ok(q('.runStatus--paused') === null, '「继续」之后还停在暂停态');
+    assert.ok(q('.runStatus__spin') !== null, '「继续」之后没回到执行中（旋转图标不在）');
+  });
+
+  await check('⑲-10（A③）补充注入 → 状态行瞬态「已收到补充」，且不弹横幅、不开新轮', async () => {
+    const rounds = streamBodies.length;
+    const supp = requestsTo('/agent/loop/message').length;
+    await typeIntoInput('顺便看一眼价格');
+    clickSend();
+    await waitFor('⑲-10 补充指令发出', () => requestsTo('/agent/loop/message').length > supp);
+    await flush(3);
+    assert.equal(streamBodies.length, rounds, '补充指令不该新开一轮聊天（静默注入）');
+    const ok = q('.runStatus__ok');
+    assert.ok(ok, '状态行没有瞬态「已收到补充」');
+    assert.ok((ok!.textContent ?? '').includes('已收到补充'), `瞬态文案不对：${ok!.textContent}`);
+    assert.ok(
+      !(q('.chatNote')?.textContent ?? '').includes('补充'),
+      '又弹了那条补充横幅（目标态 = 静默 + 状态行瞬态）',
+    );
   });
 
   await act(async () => root19.unmount());

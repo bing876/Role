@@ -431,3 +431,54 @@
   color: #2563eb;
   text-decoration: underline;
 }
+
+/* ---- UX 收尾（2026-09-26）· 状态行钉在输入框正上方（紧凑一条）+ 暂停态 + 瞬态提示 ---- */
+/* 覆盖上面那条：现在它是 <main> 里、输入框正上方的兄弟节点，不该再占对话流的间距 */
+.runStatus {
+  padding: 4px 12px 2px;
+  gap: 3px;
+}
+
+/* 暂停态：图标换成 ⏸、文字弱一档（不是"正在跑"，是"等你一句话"） */
+.runStatus--paused .runStatus__text {
+  color: #6b6b74;
+}
+
+.runStatus__pauseIco {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 1;
+  color: #8a8a92;
+}
+
+/* A③：补充注入成功的**瞬态**提示（2.5 秒后由 JS 收掉；只淡入，不弹横幅） */
+.runStatus__ok {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: #0a7;
+  animation: runOkFade 2.5s ease forwards;
+}
+
+@keyframes runOkFade {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* 轨迹抽屉：状态行下面一条；摘要右对齐、点开才展开 */
+.runTrace {
+  margin-left: 19px;
+}
+
+.runTrace__list {
+  max-height: 180px;
+}

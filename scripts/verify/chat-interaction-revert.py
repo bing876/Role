@@ -52,13 +52,13 @@ DEFECTS = [
     {
         'name': 'I3 把旧的「AI 任务执行中」横幅加回来',
         'file': APP,
-        'old': ("          {runningLoopId && streaming && (\n"
-                "            <div className=\"runStatus\" role=\"status\" aria-live=\"polite\">\n"),
-        'new': ("          {runningLoopId && streaming && (\n"
-                "            <div className=\"taskState\">🚀 <b>AI 任务执行中</b> · 正在自主操作浏览器</div>\n"
-                "          )}\n"
-                "          {runningLoopId && streaming && (\n"
-                "            <div className=\"runStatus\" role=\"status\" aria-live=\"polite\">\n"),
+        # ★ UX 收尾片之后状态行搬出了 `.chat`，所以这条注入**往 `.chat` 里**加（模拟旧位置），
+        #   ⑲-1 的判据也改成了整个文档（见那里的注释）—— 两处对齐，注入到哪儿都咬得住。
+        'old': '        <div className="chat">\n',
+        'new': ('        <div className="chat">\n'
+                '          {runningLoopId && streaming && (\n'
+                '            <div className="taskState">🚀 <b>AI 任务执行中</b> · 正在自主操作浏览器</div>\n'
+                '          )}\n'),
         'expect': ['⑲-1'],
         'cmd': LOGIC,
     },
@@ -110,6 +110,41 @@ DEFECTS = [
         'new': "      setChatNote('好，停手了——这一路不再动作。要它接着干，直接说下一步就行。');\n",
         # ★ 判据落在 ⑲-7（**非运行态**）:⑲-6 走的是「有循环」那条分支,它自带 return,测不出这处注入
         'expect': ['⑲-7'],
+        'cmd': LOGIC,
+    },
+    # ---- 下面四条是「UX 收尾片」的 A①②③（用户 2026-09-26 拍板）----
+    {
+        'name': 'I10(A①) 暂停不清 loopId（界面仍画成"执行中"，输入框回不去正常发送）',
+        'file': CHAT,
+        'old': ("        pausedLoopIdRef.current = loopId;\n"
+                "        setRunningLoopId(null);\n"
+                "        setRunningLoopWcId(null);\n"),
+        'new': "        pausedLoopIdRef.current = loopId;\n",
+        'expect': ['⑲-9'],
+        'cmd': LOGIC,
+    },
+    {
+        'name': 'I11(A①) 暂停态不单列发送键（挂起时落进"打字中…"并被禁用）',
+        'file': APP,
+        'old': "          ) : pausedHere ? (\n",
+        'new': "          ) : false ? (\n",
+        'expect': ['⑲-9'],
+        'cmd': LOGIC,
+    },
+    {
+        'name': 'I12(A②) 状态行不渲染（不再"钉在输入框正上方"）',
+        'file': APP,
+        'old': "        {runBarMode && (\n",
+        'new': "        {false && runBarMode && (\n",
+        'expect': ['⑲-8'],
+        'cmd': LOGIC,
+    },
+    {
+        'name': 'I13(A③) 补充成功不叫状态行（瞬态提示消失，只剩静默）',
+        'file': CHAT,
+        'old': "        onSupplementRef.current?.();\n",
+        'new': "        /* 反证注入：不叫状态行 */\n",
+        'expect': ['⑲-10'],
         'cmd': LOGIC,
     },
 ]

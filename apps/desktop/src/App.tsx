@@ -600,6 +600,21 @@ export default function App() {
   };
 
   /**
+   * UX 收尾（2026-09-26 用户拍板 A①/A③）· 执行中状态行的两件事：
+   *   A① 用户发「停」→ 界面切成**非执行态**：状态行「已暂停 · 说「继续」接上」+ 输入框回正常发送。
+   *       怎么接上：「等继续」复用**既有**的 `awaitResume` 三件套（原来只有步数上限在用），
+   *       下一句「继续」走已验收的 `resumeTask`（先读真实页 → 服务端解挂 → 原地接上），不新造第二条路。
+   *   A③ 补充注入成功 → 状态行**瞬态**「已收到补充」约 2.5 秒后自动消失，**不弹横幅**。
+   */
+  const [supplementFlash, setSupplementFlash] = useState(false);
+  const supplementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSupplementAccepted = (): void => {
+    setSupplementFlash(true);
+    if (supplementTimerRef.current) clearTimeout(supplementTimerRef.current);
+    supplementTimerRef.current = setTimeout(() => setSupplementFlash(false), 2500);
+  };
+
+  /**
    * 批次 M · 逻辑抽离第 7a 片：**聊天这一侧的 state 与历史**搬进 `features/chat`。
    *
    * ★ 依旧**只换来源、不改名字** → 本文件 100 多处 `messages` / `setMessages` / `chatNote` /
@@ -682,6 +697,7 @@ export default function App() {
     shouldFallbackLaunch,
     /** 规格 C1：对话式建好新智能体（meta 帧 newAgent）→ 左栏现真名字 + 切到它 + 摆三问 chips */
     onNewAgent,
+    onSupplementAccepted,
     /** 纯本地判定（开页 / 停 / 继续…）：单一实现住在 `browser/`，注入进来用 */
     intent: {
       detectStopIntent,
@@ -1384,6 +1400,15 @@ export default function App() {
    */
   const visAgent = agents.find((a) => a.id === curAgentId) ?? null;
   const visLastStep = agentSteps.length > 0 ? agentSteps[agentSteps.length - 1] : null;
+  /**
+   * UX 收尾 A①②：状态行的**唯一形态来源**（一处派生，避免"两个 state 同进同退"那类 bug）：
+   *   · `running` = 循环在跑 → 旋转 + 当前动作 + 轨迹抽屉；
+   *   · `paused`  = 用户「停」过、正等「继续」 → ⏸ + 已暂停 + 轨迹抽屉；
+   *   · null      = 都不显示（正常聊天/空闲时状态行整条不渲染）。
+   */
+  const pausedHere = awaitResume && awaitResumeAgent === curAgentId;
+  const runBarMode: 'running' | 'paused' | null =
+    runningLoopId && streaming ? 'running' : pausedHere ? 'paused' : null;
   const visPage = browser.active ? browser.active.title || browser.active.url || null : null;
 
   /**
@@ -2310,33 +2335,6 @@ export default function App() {
 
         <div className="chat">
           {/*
-            交互对齐片(2026-09-26) · **执行中的轻量状态**(用户定稿的目标态):
-              · 主对话流里**不出现步骤墙** —— 只有一条状态:旋转图标 + 一句当前动作;
-              · 完整轨迹放**可点开、默认收起**的抽屉(`<details>`,零 JS、天然默认收起);
-              · 原来那条「🚀 AI 任务执行中…（可在下方输入补充指令…或输入「停」）」整条删掉 ——
-                它既占地方又教用户做事,而输入框本来就一直是正常输入框。
-          */}
-          {runningLoopId && streaming && (
-            <div className="runStatus" role="status" aria-live="polite">
-              <div className="runStatus__row">
-                <span className="runStatus__spin" aria-hidden="true" />
-                <span className="runStatus__text">
-                  {visLastStep ? `正在：${visLastStep}` : '正在操作浏览器…'}
-                </span>
-              </div>
-              {runTrace.length > 0 && (
-                <details className="runTrace">
-                  <summary className="runTrace__sum">执行轨迹 · {runTrace.length} 步（点开看）</summary>
-                  <ol className="runTrace__list">
-                    {runTrace.map((t, i) => (
-                      <li key={i}>{t}</li>
-                    ))}
-                  </ol>
-                </details>
-              )}
-            </div>
-          )}
-          {/*
             第 16 步：会话状态行（服务端 conversations 表为准）。
             进程重启后靠它把「当前任务」恢复出来，而不是假装任务从未开始；
             保活态也在这里标出来，让人一眼看出「挂着监听但没在烧模型」。
@@ -2636,9 +2634,12 @@ export default function App() {
             <div className="msg assistant">
               {/* 交互对齐片：流式也走 markdown（半截的 `**` 不会抛错，见 MarkdownText 的注释） */}
               {streamText ? <MarkdownText text={streamText} /> : <span className="small">正在想…</span>}
-              <span className="caret" aria-hidden="true">
-                ▍
-              </span>
+              {/* A①：暂停态不画打字光标 —— 光标 = "还在长"，而挂起时它并没有在长 */}
+              {!pausedHere && (
+                <span className="caret" aria-hidden="true">
+                  ▍
+                </span>
+              )}
             </div>
           )}
           {chatNote && (
@@ -2668,6 +2669,45 @@ export default function App() {
              input / onSend（useChat → /chat/stream SSE）/ tidyCurrentAgent。
              data-state 由真状态推导（empty / typing / thinking=streaming）。
              基准的假功能（CL 额度环 / 模型弹层 / 附件弹层 / 语音）不搬。 */}
+        {/*
+          UX 收尾（2026-09-26 用户拍板 A②/A①/A③）· **状态行钉在输入框正上方**（紧凑一条）：
+            · 执行中:旋转图标 + 一句当前动作;完整轨迹进「可点开、默认收起」的 `<details>`;
+            · 已暂停(A①):换 ⏸ + 「已暂停 · 说「继续」接上」,输入框回正常发送;
+            · 补充注入成功(A③):同一行瞬态多一句「已收到补充」,2.5 秒自动消失(**不弹横幅**)。
+          为什么挪出 `.chat`:用户要的是「钉在输入框上方」——它在对话流里会被消息推着走。
+        */}
+        {runBarMode && (
+          <div className={`runStatus${runBarMode === 'paused' ? ' runStatus--paused' : ''}`} role="status" aria-live="polite">
+            <div className="runStatus__row">
+              {runBarMode === 'running' ? (
+                <span className="runStatus__spin" aria-hidden="true" />
+              ) : (
+                <span className="runStatus__pauseIco" aria-hidden="true">
+                  ⏸
+                </span>
+              )}
+              <span className="runStatus__text">
+                {runBarMode === 'running'
+                  ? visLastStep
+                    ? `正在：${visLastStep}`
+                    : '正在操作浏览器…'
+                  : '已暂停 · 说「继续」接上'}
+              </span>
+              {supplementFlash && <span className="runStatus__ok">已收到补充</span>}
+            </div>
+            {/* 轨迹抽屉放在状态行**下面**（同一块里），点开才占地方；默认收起 */}
+            {runTrace.length > 0 && (
+              <details className="runTrace">
+                <summary className="runTrace__sum">轨迹 · {runTrace.length} 步（点开看）</summary>
+                <ol className="runTrace__list">
+                  {runTrace.map((t, i) => (
+                    <li key={i}>{t}</li>
+                  ))}
+                </ol>
+              </details>
+            )}
+          </div>
+        )}
         <div
           className="inputbar"
           data-state={streaming ? 'thinking' : input ? 'typing' : 'empty'}
@@ -2694,7 +2734,8 @@ export default function App() {
               if (v && chipsDraft) void finishChips(null);
             }}
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
-            disabled={streaming && !runningLoopId}
+            /* A①：暂停态（等「继续」）必须能打字，否则用户没法输入那句「继续」 */
+            disabled={streaming && !runningLoopId && !pausedHere}
           />
           {/*
             交互对齐片(2026-09-26)：执行中**发送键变「停止」**（带旋转图标）。
@@ -2710,6 +2751,15 @@ export default function App() {
             >
               <span className="inputbar__spin" aria-hidden="true" />
               停止
+            </button>
+          ) : pausedHere ? (
+            /**
+             * ★ A①：暂停态（等「继续」）→ **输入框回正常发送键**。
+             *   为什么必须单列:挂起时 `streaming` 仍是 true（那条 SSE 还开着），
+             *   照原样会落进「打字中…」并**禁用** —— 用户根本打不出那句「继续」。
+             */
+            <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={!input.trim()}>
+              发送
             </button>
           ) : (
             <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={streaming}>
