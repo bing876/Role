@@ -28,7 +28,7 @@
 - 主进程 `apps/desktop/electron/**` **必须** `npm run build:electron`（2026-09-26 起 `view-host.ts` 是第四列的页宿主）
 - ★ 启动命令口径（2026-09-26 补）：`dev` = **Vite + Electron 真窗口**（**不是网页版**）；
   新增 `dev:desktop`（同 `dev`，ADR-0001 一直这么引用但此前不存在）、`dev:web`（只起 vite）、`dev:server`
-- ★ Electron 已爬到 **44.5.8**，且 **`<webview>` 已退场**（ADR-0002：改主进程托管的 `WebContentsView`）
+- ★ Electron 已爬到 **44.4.5**，且 **`<webview>` 已退场**（ADR-0002：改主进程托管的 `WebContentsView`）
 - ★★ **Electron 二进制必须走镜像**（github.com release 下载 **HTTP 000 不通**）：
   `ELECTRON_MIRROR="https://npmmirror.com/mirrors/electron/" node node_modules/electron/install.js`
   ★ **`npm install` 成功 ≠ 二进制就位**（postinstall 会静默失败）⇒ 装完必须查 `node_modules/electron/dist/version`
