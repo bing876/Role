@@ -333,7 +333,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
         try {
           const curProj = await currentProjectId(pool, claims.sub);
           if (curProj !== null) {
-            const decision = await routeTask(pool, claims.sub, curProj, message, { explicitAgentId: null, currentAgentId: null });
+            // G3：带上 env → 字面没把握时能走语义路由（fail-closed,失败回落字面）
+            const decision = await routeTask(pool, claims.sub, curProj, message, { explicitAgentId: null, currentAgentId: null, env });
             if (decision) {
               routedAgentId = decision.toAgentId;
               routeDecision = decision;
@@ -490,21 +491,30 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       //  三问引导表留阶段 2,但"不挡你、立刻建"现在就要。)
       // detectBuildIntent 命中 → buildAgentImmediately 立刻建 → 回一句"已建好…";
       // 无关键词/问句 → null,回落 LLM(问句不建的防线在 agentBuilder,有验收钉住)。
+      //
+      // G1（2026-09-25 用户拍板,规格 C1 收紧）:**只有小助能创建智能体**。
+      //   ④ 小助说「建一个XXX」→ 立刻建(保留 C1 的 newAgent meta + 桌面 chips 流);
+      //   ② 非小助说「建一个XXX」→ **不建**,当前会话回「这个由管家来建,我转给它」(发言人=
+      //      说这话的那个智能体,确定性无 LLM),并把建人请求**转发进小助主会话流**(assistant 消息);
+      //      meta **不带 newAgent**(左栏不新增)。
+      //   母鸡项目边缘(项目里没有小助)→ 无人可建:不崩,回得体话术,同样不建。
       try {
         const abMod = await import('../orchestrator/agentBuilder');
         const buildIntent = abMod.detectBuildIntent(message);
         if (buildIntent) {
           const projForBuild = await currentProjectId(pool, claims.sub);
-          if (projForBuild !== null) {
-            const creatorRow = await pool.query<{ id: string }>(
-              `SELECT id FROM agents WHERE project_id=$1 AND can_create_agents=true ORDER BY CASE WHEN kind='hen' THEN 0 WHEN kind='assistant' THEN 1 ELSE 2 END, id ASC LIMIT 1`,
+          if (projForBuild !== null && turnSpeakerId !== null) {
+            // 本项目的小助（管家, kind='assistant'）—— 唯一有「建智能体」资格的角色
+            const xzRow = await pool.query<{ id: string }>(
+              "SELECT id FROM agents WHERE project_id=$1 AND kind='assistant' ORDER BY id ASC LIMIT 1",
               [projForBuild],
             );
-            const creatorId = creatorRow.rows[0] ? Number(creatorRow.rows[0].id) : null;
-            const fallbackRow = creatorId === null ? await pool.query<{ id: string }>(`SELECT id FROM agents WHERE project_id=$1 ORDER BY id ASC LIMIT 1`, [projForBuild]) : null;
-            const finalCreatorId = creatorId ?? (fallbackRow?.rows[0] ? Number(fallbackRow.rows[0].id) : null);
-            if (finalCreatorId !== null) {
-              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, finalCreatorId, buildIntent);
+            const xiaozhuId = xzRow.rows[0] ? Number(xzRow.rows[0].id) : null;
+            const speakerIsXiaozhu = xiaozhuId !== null && turnSpeakerId === xiaozhuId;
+
+            if (xiaozhuId !== null && speakerIsXiaozhu) {
+              // ④ 小助说「建一个XXX」→ 立刻建好（creator = 小助）
+              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, xiaozhuId, buildIntent);
               /**
                * 产品交互规格 C1（2026-09-25）：新智能体必须**立刻出现在左栏（真名字）**。
                * 桌面端的 `agents` 名单只在切项目/登录时拉，对话式建完它不知道多了一位 ——
@@ -555,7 +565,63 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
               res.end();
               return;
             }
+
+            // ② 非小助说「建一个XXX」→ 不建,回转发话术;母鸡项目(无小助)→ 得体话术,同样不建。
+            const umTmp = await pool.query<{ id: string }>(
+              "INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1, 'user', $2) RETURNING id",
+              [convId, cipher.encryptText(message)],
+            );
+            let replyMsg: string;
+            if (xiaozhuId !== null) {
+              replyMsg = '这个由管家来建，我转给它。';
+              // 转发记录:把建人请求写进**小助主会话流**(assistant 消息, speaker=小助)。
+              // 小助会话找不到就现建一条(ensureAgentConversation 幂等);写失败只告警,不挡当前会话的回话。
+              try {
+                const xzConv = await ensureAgentConversation(pool, claims.sub, xiaozhuId);
+                if (xzConv !== null) {
+                  const fwdMsg = `（转发）请创建「${buildIntent.name}」：${buildIntent.duty}。`;
+                  await pool.query(
+                    "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3)",
+                    [xzConv, cipher.encryptText(fwdMsg), xiaozhuId],
+                  );
+                }
+              } catch (e) {
+                console.warn('[chat] 建人转发写进小助会话失败（忽略）：', (e as Error).message);
+              }
+            } else {
+              replyMsg = '这个项目还没配小助（管家），建智能体得由管家来办。先把小助就位，再来建同事吧。';
+            }
+            const amTmp = await pool.query<{ id: string }>(
+              "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
+              [convId, cipher.encryptText(replyMsg), turnSpeakerId],
+            );
+            reply.hijack();
+            const res = reply.raw;
+            res.writeHead(200, {
+              'content-type': 'text/event-stream; charset=utf-8',
+              'cache-control': 'no-cache, no-transform',
+              connection: 'keep-alive',
+              'x-accel-buffering': 'no',
+              'access-control-allow-origin': req.headers.origin ?? '*',
+            });
+            sse(res, 'meta', {
+              conversationId: convId,
+              userMessageId: Number(umTmp.rows[0].id),
+              agentId: turnSpeakerId,
+              mention: mentionMeta,
+            });
+            sse(res, null, { delta: replyMsg });
+            sse(res, 'done', {
+              conversationId: convId,
+              messageId: Number(amTmp.rows[0].id),
+              contentLength: replyMsg.length,
+              searches: 0,
+              sources: [],
+            });
+            res.end();
+            return;
           }
+          // turnSpeakerId === null → 没有确定性发言人,不建、不转发(回落 LLM,同 QA-01 口径)
         }
       } catch (e) {
         console.warn('[chat] 对话式建智能体失败，回落到普通聊天：', (e as Error).message);

@@ -177,8 +177,10 @@ export async function buildAgentImmediately(
   const callerCheck = await pool.query('SELECT id, kind, can_create_agents FROM agents WHERE id=$1 AND project_id=$2', [asAgentId, projectId]);
   if (callerCheck.rowCount === 0) throw new Error('调用者不存在');
   const caller = callerCheck.rows[0] as { kind: string; can_create_agents: boolean };
-  if (caller.kind !== 'hen' && caller.kind !== 'assistant' && !caller.can_create_agents) {
-    throw new Error('该角色不能建智能体');
+  // G1（2026-09-25,规格 C1 收紧）：只有**小助（管家, kind='assistant'）**能建智能体。
+  // 母鸡/普通智能体一律拒绝（fail-closed,防线收口到建人这一层,不靠调用方自觉）。
+  if (caller.kind !== 'assistant' || !caller.can_create_agents) {
+    throw new Error('该角色不能建智能体 —— 只有小助（管家）能建');
   }
 
   const persona = {
@@ -248,13 +250,18 @@ export function proposeColleaguesForProject(projectName: string, existingCount: 
   return suggestions.slice(0, 3);
 }
 
+/**
+ * G1-⑤（2026-09-25）：首进空项目,**管家（小助）**主动提议搭团队。
+ * `proposerAgentId` = 谁来说这句提议（默认项目里是小助;母鸡项目里仍是母鸡 —— 母鸡项目
+ * 没有小助,是边缘,提议照发但建人会被 G1 拦在「只有小助能建」）。
+ */
 export async function seedColleagueProposal(
   pool: Pool,
   cipher: JsonCipher,
   userId: number,
   projectId: number,
   projectName: string,
-  henAgentId: number,
+  proposerAgentId: number,
 ): Promise<void> {
   try {
     const roster = await loadProjectRoster(pool, userId, projectId, null);
@@ -263,7 +270,7 @@ export async function seedColleagueProposal(
     const suggestions = proposeColleaguesForProject(projectName, roster.length);
     if (suggestions.length === 0) return;
 
-    const convId = await ensureAgentConversation(pool, userId, henAgentId);
+    const convId = await ensureAgentConversation(pool, userId, proposerAgentId);
     if (!convId) return;
 
     const text = `我是项目管家，刚为项目「${projectName}」就位。

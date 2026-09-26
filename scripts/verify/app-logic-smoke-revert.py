@@ -36,6 +36,7 @@ APP_TSX = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
 CHAT = FEATURES / 'chat' / 'useChat.ts'
 AUTHSCREEN = FEATURES / 'auth' / 'AuthScreen.tsx'
 CHIPS = FEATURES / 'chat' / 'PersonaChips.tsx'  # C1：AgentGuide.tsx 已删,三问 = PersonaChips chips
+BROWSER = REPO / 'apps' / 'desktop' / 'src' / 'browser' / 'useBrowserWorkspace.ts'
 
 MUTATIONS = [
     {
@@ -460,6 +461,16 @@ MUTATIONS = [
         'anchor': '          {pendingMem.length > 0 && (\n',
         'replace': '          {false && pendingMem.length > 0 && (  // 反证注入：C4 打回 —— 对话流没有确认卡\n',
         'expect': '对话流里长出确认卡',
+    },
+    # ---- F：活页全局上限（到顶拒新开、绝不偷偷关旧页）----
+    {
+        'file': BROWSER,
+        'id': 'F1',
+        'visible': True,
+        'name': '把活页上限推到天上（4 张之后第 5 张照开 —— 越用越卡）',
+        'anchor': '    if (live >= cap) {\n      note(\n        `已经开了 ${live} 张页，到上限 ${cap} 张了（这个数可以在设置里调大）。要开新的，先关掉一张。`,\n      );\n      return null;\n    }\n',
+        'replace': '    if (live >= 1000000) {  // 反证注入：活页上限推到天上\n      note(\n        `已经开了 ${live} 张页，到上限 ${cap} 张了（这个数可以在设置里调大）。要开新的，先关掉一张。`,\n      );\n      return null;\n    }\n',
+        'expect': '⑱-1',
     },
 ]
 

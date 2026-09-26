@@ -26,6 +26,7 @@ import { llmFetch } from '../llm';
 import { notifyUser } from '../notify';
 import { buildMemoryBlock, triggerTaskExtract } from './memories';
 import { scrubTaskText, taskDisplayTitle } from '../orchestrator/redact';
+import { recordTaskAsPendingSkill } from '../orchestrator/skills';
 import { decideOnce } from '../toolLoop';
 import { currentProjectId } from '../projectScope';
 
@@ -81,10 +82,10 @@ function extractJson(text: string): unknown {
   }
 }
 
-/** 任务归属校验：tasks JOIN projects，只认自己的（收尾 6：带上密文目标列 goal_enc） */
+/** 任务归属校验：tasks JOIN projects，只认自己的（收尾 6：带上密文目标列 goal_enc；G4：带上 project_id 给技能录制定位主会话） */
 async function ownTask(pool: Pool, taskId: number, userId: number) {
-  const r = await pool.query<{ id: string; status: string; title: string | null; payload: unknown; unread: boolean; result_enc: string | null; goal_enc: string | null }>(
-    'SELECT t.id, t.status, t.title, t.payload, t.unread, t.result_enc, t.goal_enc FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1 AND p.user_id = $2',
+  const r = await pool.query<{ id: string; status: string; title: string | null; payload: unknown; unread: boolean; result_enc: string | null; goal_enc: string | null; project_id: string }>(
+    'SELECT t.id, t.status, t.title, t.payload, t.unread, t.result_enc, t.goal_enc, t.project_id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1 AND p.user_id = $2',
     [taskId, userId],
   );
   return r.rowCount === 1 ? r.rows[0] : null;
@@ -311,6 +312,17 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
           goal: taskGoalFromRow(t, cipher),
         });
       }
+      if (status === 'done') {
+        // G4：成功且用过工具的任务 → 录成 pending 技能 + 对话流确认卡。
+        // fire-and-forget：录制是锦上添花,任何失败/耗时都不能拖住 done 的返回（recorder 内部自己 fail-safe）。
+        void recordTaskAsPendingSkill(pool, cipher, {
+          userId: claims.sub,
+          projectId: Number(t.project_id),
+          taskId,
+          goal: taskGoalFromRow(t, cipher),
+          steps: (payloadWithoutGoal(t.payload) as { steps?: string[] }).steps ?? [],
+        }).catch((err) => console.warn('[agent] G4 技能录制失败（忽略,不影响任务）：', (err as Error).message));
+      }
       return { ok: true };
     } catch (err) {
       return dbErr(reply, err);
@@ -394,6 +406,18 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
         // 通知挂了不碍事：说明书钉死——任务仍算 done，红点和文档都在
         console.warn('[agent] 通知失败（忽略，不影响任务）：', (err as Error).message);
       }
+      // G4：成功且用过工具的任务 → 录成 pending 技能 + 对话流确认卡。
+      // 走 finish 的路能多带上驾驶员 done 结论（决策要点）与文档标题（产出要求）；
+      // 若同任务后来又被 status done 打一遍,recorder 的去重闸保证只出一张卡。
+      void recordTaskAsPendingSkill(pool, cipher, {
+        userId: claims.sub,
+        projectId: Number(t.project_id),
+        taskId,
+        goal,
+        steps,
+        doneSummary: doneBits.summary,
+        docTitle: doneBits.document_title,
+      }).catch((err) => console.warn('[agent] G4 技能录制失败（忽略,不影响任务）：', (err as Error).message));
       triggerTaskExtract({ pool, env, cipher }, claims.sub, taskId, {
         ...(payload as Record<string, unknown>),
         // 收尾 6：同上 —— 记忆提取要拿到解密后的目标，不能因为 payload 里没有 goal 就丢了这一行

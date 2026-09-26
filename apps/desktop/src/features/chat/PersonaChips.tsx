@@ -24,9 +24,11 @@ export interface PersonaChipsDraft {
   who: string;
   tone: string;
   duty: string;
+  /** G2：不干什么（anti-jobs）—— 标准栏，可选填 */
+  antiJobs: string;
 }
 
-export type PersonaField = 'name' | 'who' | 'tone' | 'duty';
+export type PersonaField = 'name' | 'who' | 'tone' | 'duty' | 'antiJobs';
 
 /** 快速选项：显示文案与提交值分开（「就按原话的」提交的是当前值,不是按钮文案） */
 interface ChipOption {
@@ -36,6 +38,8 @@ interface ChipOption {
 
 const WHO_OPTIONS = ['一个深耕这行的专业老手', '一个贴心细致的搭档'];
 const TONE_OPTIONS = ['短句、直接', '温和、细致'];
+/** G2：「不干什么」快速选项（anti-jobs 标准栏，可选） */
+const ANTIBOARDS_OPTIONS = ['不碰敏感操作（花钱/删除/对外发）', '不抢别的专员更擅长的活'];
 
 export function PersonaChips({
   draft,
@@ -127,6 +131,7 @@ export function PersonaChips({
       {question('它是谁', 'who', WHO_OPTIONS.map((o) => ({ label: o, value: o })))}
       {question('怎么说话', 'tone', TONE_OPTIONS.map((o) => ({ label: o, value: o })))}
       {question('干什么', 'duty', draft.duty ? [{ label: `就按「${draft.duty.slice(0, 10)}${draft.duty.length > 10 ? '…' : ''}」`, value: draft.duty }] : [])}
+      {question('不干什么', 'antiJobs', ANTIBOARDS_OPTIONS.map((o) => ({ label: o, value: o })))}
       <button type="button" className="personaChips__skip" onClick={onSkip} title="不折腾了,按默认来">
         跳过
       </button>

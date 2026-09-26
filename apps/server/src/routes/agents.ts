@@ -85,12 +85,18 @@ function parsePersona(raw: unknown): AgentPersona | null {
   if (!o || typeof o !== 'object') return null;
   const name = oneLine(o.name, NAME_MAX);
   if (!name) return null;
-  return {
+  const p: AgentPersona = {
     name,
     who: oneLine(o.who, PERSONA_FIELD_MAX),
     tone: oneLine(o.tone, PERSONA_FIELD_MAX),
     duty: oneLine(o.duty, PERSONA_FIELD_MAX),
   };
+  // G2：不干什么（anti-jobs）+ 整份人设（description）也要读回（左栏/人设接口/读回验收）
+  const antiJobs = oneLine(o.antiJobs, 240);
+  if (antiJobs) p.antiJobs = antiJobs;
+  const description = oneLine(o.description, 600);
+  if (description) p.description = description;
+  return p;
 }
 
 interface AgentRow {
@@ -383,7 +389,7 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期');
     try {
-      const body = (req.body ?? {}) as { asAgentId?: unknown; name?: unknown; duty?: unknown; who?: unknown; tone?: unknown; persona?: unknown };
+      const body = (req.body ?? {}) as { asAgentId?: unknown; name?: unknown; duty?: unknown; who?: unknown; tone?: unknown; antiJobs?: unknown; description?: unknown; persona?: unknown };
       const found = await resolveAgentCreator(pool, claims.sub, body.asAgentId);
       if (!found.ok) {
         return found.reason === 'missing'
@@ -391,27 +397,33 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
           : errJson(reply, 404, '调用者智能体不存在或不是你的');
       }
       const caller = found.caller;
-      if (!caller.canCreateAgents) {
+      // G1（2026-09-25,规格 C1 收紧）：只有**小助（管家, kind='assistant'）**能建智能体。
+      // 「＋添加」只在小助上下文生效 —— 母鸡/普通智能体当调用者一律 403（防线在服务端,不靠前端门控）。
+      if (caller.kind !== 'assistant' || !caller.canCreateAgents) {
         return errJson(
           reply,
           403,
-          `「${caller.name}」没有创建智能体的权限 —— 只有项目里的母鸡和自带的「小助」可以建智能体。`,
+          `「${caller.name}」不能建智能体 —— 只有自带的小助（管家）可以建智能体。`,
         );
       }
       const projectId = caller.projectId;
 
       // 对话式建：若直接传了 name/duty，立刻建好 ready，不走 pending
-      let directPersona: { name: string; who: string; tone: string; duty: string } | null = null;
+      let directPersona: AgentPersona | null = null;
       const rawName = typeof body.name === 'string' ? body.name.trim().slice(0, NAME_MAX) : '';
       const rawDuty = typeof body.duty === 'string' ? body.duty.trim().slice(0, PERSONA_FIELD_MAX) : '';
       const rawWho = typeof body.who === 'string' ? body.who.trim().slice(0, PERSONA_FIELD_MAX) : '';
       const rawTone = typeof body.tone === 'string' ? body.tone.trim().slice(0, PERSONA_FIELD_MAX) : '';
+      const rawAntiJobs = typeof body.antiJobs === 'string' ? body.antiJobs.replace(/\s+/g, ' ').trim().slice(0, 240) : '';
+      const rawDescription = typeof body.description === 'string' ? body.description.replace(/\s+/g, ' ').trim().slice(0, 600) : '';
       const rawPersona = body.persona as Record<string, unknown> | undefined;
       if (rawName && rawDuty) {
         directPersona = { name: rawName, duty: rawDuty, who: rawWho || `一个专注${rawName}的同事`, tone: rawTone || '简洁、直接' };
+        if (rawAntiJobs) directPersona.antiJobs = rawAntiJobs;
+        if (rawDescription) directPersona.description = rawDescription;
       } else if (rawPersona && typeof rawPersona === 'object') {
         const vp = validatePersonaInput(rawPersona);
-        if (vp.ok) directPersona = vp.persona as any;
+        if (vp.ok) directPersona = vp.persona;
       }
 
       if (directPersona) {
@@ -672,7 +684,8 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
       const { routeTask } = await import('../orchestrator/chiefOfStaff');
       const pid = projectId ?? (await currentProjectId(pool, claims.sub));
       if (pid === null) return errJson(reply, 404, '项目不存在');
-      const decision = await routeTask(pool, claims.sub, pid, task, {});
+      // G3：带上 env → 预览也走语义路由（与 chat 同口径,阈值可配,失败回落字面）
+      const decision = await routeTask(pool, claims.sub, pid, task, { env });
       if (!decision) return { routed: false, reason: '没有可路由的智能体' };
       return { routed: true, decision };
     } catch (err) {

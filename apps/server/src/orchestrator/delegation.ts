@@ -50,7 +50,7 @@ import {
 import { findAgentByNameAnyProject, loadProjectRoster, projectOfAgent, resolveDelegateTarget } from './roster';
 import { orchestrationBlock, subAgentSystemPrompt } from './prompts';
 import { orchestratorDeps } from './tools';
-import { writeCollabBoth, writeCollabToAgentChat } from './collabChat';
+import { writeCollabBoth, writeCollabToAgentChat, writeProgressToAgentChat } from './collabChat';
 import { triggerByEvent } from './routines';
 import { writeHandoffFile, getHandoffUri, appendBoardWithLock, updateHandoffStatus } from './handoff';
 
@@ -135,7 +135,10 @@ async function reject(
     const { pool, cipher } = orchestratorDeps();
     const fromId = ctx.agentId;
     if (fromId && target && target.id) {
-      const fromName = `#${fromId}`;
+      // ★ fromName 必须是真名字：以前写 `#${fromId}`，对话流卡片里用户看到的是
+      //   「#12 → 小王：…」——裸 id 当名字 = 占位符残留（2026-09-25 清扫）
+      const nameRow = await pool.query<{ name: string }>('SELECT name FROM agents WHERE id = $1 LIMIT 1', [fromId]);
+      const fromName = nameRow.rows[0]?.name ?? `智能体 ${fromId}`;
       await writeCollabToAgentChat(pool, cipher, fromId, {
         kind: 'system',
         fromId,
@@ -614,7 +617,8 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
       payload: { delegationId, steps: sub.step },
       delegationId,
     }).catch(() => undefined);
-    void writeCollabToAgentChat(pool, cipher, fromId, {
+    // ★ 进展卡收敛：同一委派只留一张卡，新进展覆盖旧卡（不再每步甩一张）
+    void writeProgressToAgentChat(pool, cipher, fromId, {
       kind: 'progress',
       fromId: target.id,
       fromName: target.name,
@@ -659,7 +663,11 @@ async function runDelegatedTask(input: RunnerInput): Promise<void> {
     if (used.length <= seenTools) return;
     const fresh = used.slice(seenTools);
     seenTools = used.length;
-    const label = fresh
+    // ★ 'stop' 是收尾动作不是进展：只调了 stop 就不写进展卡（交回卡会跟着来），
+    //   避免对话流里出现「第 N 步：stop」这种把内部工具名甩给用户的卡
+    const meaningful = fresh.filter((t) => t !== 'stop');
+    if (meaningful.length === 0) return;
+    const label = meaningful
       .map((t) => (t === 'web_search' ? '查了公开资料' : t === 'spawn_workers' ? '派了临时工' : t === 'delegate' ? '又转交给别人' : String(t)))
       .join('、');
     await progress(`第 ${sub.step} 步：${label}`);

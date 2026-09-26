@@ -95,6 +95,10 @@ export interface RosterEntry {
   name: string;
   /** persona.duty，没有就空 */
   duty: string;
+  /** G3：persona.description（整份人设，语义路由燃料），没有就空 */
+  description?: string;
+  /** G3：persona.antiJobs（不干什么，语义路由燃料），没有就空 */
+  antiJobs?: string;
   /** 此刻是不是正忙（在处理被委派的活）或正在等结果 */
   busy: boolean;
   waiting: boolean;

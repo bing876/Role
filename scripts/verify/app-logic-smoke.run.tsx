@@ -1722,9 +1722,9 @@ await check('⑬-2 C1 chips：新建智能体走输入框上方 chips（答完 =
   await waitFor('chips 行出现', () => q('.personaChips') !== null, 60);
   assert.ok(q('.personaChips'), '新智能体没在输入框上方摆三问 chips（C1）');
   assert.ok(!q('.guide'), '旧 .guide 引导表又出现了（C1 已废）');
-  // 三组快速选项各点一个（可点）—— 全答完 → onComplete → 真 POST
+  // 四组快速选项（G2：它是谁/怎么说话/干什么 + 可选「不干什么」）—— 必填三问答完 → onComplete → 真 POST
   const qs = () => qa('.personaChips .personaChips__q');
-  assert.equal(qs().length, 3, `非占位名应 3 组（它是谁/怎么说话/干什么,实际 ${qs().length}）`);
+  assert.equal(qs().length, 4, `非占位名应 4 组（它是谁/怎么说话/干什么/不干什么,实际 ${qs().length}）`);
   const pick = async (qtxt: string, opt: string, label: string) => {
     const item = qs().find((el) => (el.textContent ?? '').includes(qtxt));
     assert.ok(item, `找不到「${label}」那组`);
@@ -1733,6 +1733,8 @@ await check('⑬-2 C1 chips：新建智能体走输入框上方 chips（答完 =
     click(btn!, label);
     await flush(2); // 两次点击之间的时间差：让「已答」态渲染回去（下一组才能看到 touched）
   };
+  // G2：「不干什么」是可点/可自己写的标准栏（先答它,搭车进 POST）
+  await pick('不干什么', '不碰敏感操作', 'antiJobs 快速选项');
   await pick('它是谁', '一个深耕这行的专业老手', 'who 快速选项');
   await pick('怎么说话', '短句、直接', 'tone 快速选项');
   await pick('干什么', '就按', 'duty 快速选项（保留原话提取值）');
@@ -1744,6 +1746,7 @@ await check('⑬-2 C1 chips：新建智能体走输入框上方 chips（答完 =
   )) as Record<string, unknown>;
   assert.equal(body.who, '一个深耕这行的专业老手', 'persona 没把 chips 点选值带给服务端');
   assert.equal(body.tone, '短句、直接', 'tone 没带对');
+  assert.equal(body.antiJobs, '不碰敏感操作（花钱/删除/对外发）', 'G2：chips 选的「不干什么」没逐字带给服务端');
   // 答完 → chips 收起 + 真回执进 chatNote
   await waitFor('chips 消失', () => q('.personaChips') === null, 60);
   assert.ok((q('.chatNote')?.textContent ?? '').includes('已就位'), '真 savePersona 的回执没显示');
@@ -1836,9 +1839,11 @@ await check('⑬-3 personaEdit：编辑浮层 draft = 当前智能体真 persona
   const overlay = q('.personaEditOverlay');
   assert.ok(overlay, '人设编辑浮层没打开');
   const inputs = qa('.personaEditOverlay input.guide__input');
-  assert.equal(inputs.length, 4, `编辑浮层应 4 个输入框（实际 ${inputs.length}）`);
+  assert.equal(inputs.length, 6, `编辑浮层应 6 个输入框（名称/它是谁/怎么说话/干什么/不干什么/整份人设,实际 ${inputs.length}）`);
   // draft 必须等于 ⑬-2 用 chips 答的真 persona（不是占位符、不是空）
   assert.equal((inputs[1] as HTMLInputElement).value, '一个深耕这行的专业老手', '浮层 draft 不是该智能体的真 persona');
+  // G2：「不干什么」栏回填 ⑬-2 chips 点选的真值（真数据,不是空/占位符）
+  assert.equal((inputs[4] as HTMLInputElement).value, '不碰敏感操作（花钱/删除/对外发）', 'G2：浮层「不干什么」没回填 chips 答的真值');
   // 取消 = 只关浮层，一个请求都不许发
   const cancelBtn = [...overlay!.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('取消')) as Element;
   await act(async () => {
@@ -1976,6 +1981,41 @@ await check('⑰-2 C3 样式红线：16-collab-card.css 在场且挂入口；一
 });
 
 log('');
+// ---------------------------------------------------------------------------
+// ⑱ 资源·浏览器页数闸（2026-09-25 主动发现 F 类）：全局上限（默认 4 张,设置可调）
+// ---------------------------------------------------------------------------
+log('');
+log(`--- ⑱ 资源·浏览器页数闸（2026-09-25 主动发现 F 类）：全局上限（默认 4 张,设置可调） ---`);
+
+await check('⑱-1 F:连开页到全局上限 → 拒绝新开+话说明白,已有页绝不被偷偷关/换', async () => {
+  const root = await mountApp(true);
+  await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  const countTabs = () => qa('.browserTab').length;
+  // 不同站各开一张（同站会复用,开不出新页）,直到到顶
+  const urls = ['fa.example.com', 'fb.example.com', 'fc.example.com', 'fd.example.com', 'fe.example.com', 'ff.example.com'];
+  for (const u of urls) {
+    if (countTabs() >= 4) break;
+    await act(async () => {
+      assert.equal(emitBridge('open', `https://${u}/`), 1, 'bridge.on("open") 没注册处理函数');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(2);
+  }
+  const atCap = countTabs();
+  assert.ok(atCap >= 4, `上限应该是 4 张,实际只开出了 ${atCap} 张（复用逻辑或开页坏了?）`);
+  // 到顶后再开一张 → 必须被拒:数量不变、已有页原样、话说清楚
+  const before = qa('.browserTab').map((t) => t.textContent);
+  await act(async () => {
+    emitBridge('open', 'https://fz.example.com/');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(3);
+  assert.equal(countTabs(), atCap, '到上限还开出了新页（页数闸失效 = 越开越卡的口子）');
+  assert.deepEqual(qa('.browserTab').map((t) => t.textContent), before, '到顶时已有页被改动（偷偷关页/换页,红线）');
+  assert.ok((q('.chatNote')?.textContent ?? '').includes('到上限'), '到上限没有一句话说明（用户只会觉得"点了没反应"）');
+  await act(async () => root.unmount());
+});
+
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
 log(`  （期间发出 ${requests.length} 条真实请求）`);
