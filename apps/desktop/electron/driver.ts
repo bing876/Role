@@ -1,6 +1,19 @@
 import { webContents } from 'electron';
 import { viewHostRegistry } from './view-host';
 import { classifyField, FIELD_REASON_CN, isPaymentConfirmAction, type FieldDescriptor } from './fieldClass';
+// ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语的纯 core(不 import electron,可单测);
+// 这里只做「wcId → 真实 debugger」的薄包装。
+import {
+  coreWaitFor,
+  coreWatch,
+  type CdpSend,
+  type CdpEvents,
+  type WaitForSpec,
+  type WaitForResult,
+  type WatchEvent,
+  type WatchHandle,
+  type WatchSpec,
+} from './wait-watch';
 import type {
   BrowserAction,
   BrowserActionType,
@@ -818,6 +831,42 @@ async function evaluate<T>(wc: Target, expression: string): Promise<T> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语(公开包装)
+//
+// 纯逻辑在 `./wait-watch`(coreWaitFor / coreWatch,零 electron 依赖,验收直接驱动那份 core)。
+// 这里只负责把「点名哪张页 + 真实 debugger」接上 —— 与 `drive()` 同一套目标解析与 fail-fast。
+// ---------------------------------------------------------------------------
+
+/**
+ * wait-for:等**点名这张页**上某元素/文本出现(带超时,到点如实回 found=false)。
+ * 是复杂页驾驶的「等到再动」地基(GrokBot 电脑「可教」)。
+ *
+ * 目标解析同 `drive`:`resolveTarget` 在「没点名 / 页没了」都当场抛(F12 fail-fast)。
+ */
+export async function browserWaitFor(wcId: number, spec: WaitForSpec): Promise<WaitForResult> {
+  const wc = resolveTarget(wcId);
+  const dbg = ensureAttached(wc);
+  return coreWaitFor(dbg.sendCommand as unknown as CdpSend, spec);
+}
+
+/**
+ * watch:监听**点名这张页**的 DOM 变化,新内容出现即回调(push,真实时)。
+ * 是客服台类实时页的「新内容即回调」地基(GrokBot 电脑「可监听」)。
+ *
+ * 返回 `handle.stop()` 摘除。同一张页同一时刻只该有一个监听 —— 重复 start 由 core 的
+ * removeBinding + 页内 disconnect 保证 re-arm(不双发);主进程侧的「关页即停」在 main.ts。
+ */
+export function browserWatch(
+  wcId: number,
+  onEvent: (e: WatchEvent) => void,
+  spec?: WatchSpec,
+): WatchHandle {
+  const wc = resolveTarget(wcId);
+  const dbg = ensureAttached(wc);
+  return coreWatch(dbg.sendCommand as unknown as CdpSend, dbg as unknown as CdpEvents, onEvent, spec);
 }
 
 // ---------------------------------------------------------------------------

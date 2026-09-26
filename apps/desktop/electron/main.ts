@@ -14,7 +14,11 @@ import {
   takeoverRun,
   setExternalPhase,
   isDrivingPaused,
+  // ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语(真实 debugger 包装)
+  browserWaitFor,
+  browserWatch,
 } from './driver';
+import type { WaitForSpec, WatchHandle, WatchEvent } from './wait-watch';
 import { runToolLoop } from './agent';
 import { startSensitiveAutoResume } from './driver';
 // 第 27 步：人工介入（求助卡片）的状态机 —— 不 import electron，可单测
@@ -33,6 +37,7 @@ import {
   viewHostOrder,
   viewHostRect,
   viewHostTeardown,
+  viewHostWcIdOf,
 } from './view-host';
 import type {
   AgentEventPayload,
@@ -352,6 +357,7 @@ function createMainWindow(): void {
   mainWindow.on('closed', () => {
     mainWindow = null;
     viewHostTeardown(); // ADR-0002：视图随窗口死，清掉宿主登记
+    stopAllWatches(); // ADR-0003：watch 随窗口死，摘干净（off 与 removeBinding 成对）
   });
 
   // 任何 window.open / 外链都交给系统浏览器，不在应用内开新窗口
@@ -1645,6 +1651,77 @@ ipcMain.handle('workbench:browser:throttle', (_event, wcIdRaw: unknown, throttle
 /** 页能否作**首帧地址**：http(s) 或工作台自己的 data: 起始页（其余一律拒绝，fail-closed） */
 const isCreatablePageUrl = (url: string): boolean => isHttpUrl(url) || url.startsWith('data:text/html');
 
+// ---------------------------------------------------------------------------
+// ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语(IPC)
+//
+// watch 是**长生命周期**:主进程持有 handle(wcId → WatchHandle)。
+//   - 「关页即停」在下方 view-close 里;「窗口关闭全清」在 mainWindow 'closed' 里。
+//   - 新内容事件经 `workbench:browser:watch-event` 推渲染层({ wcId, event })。
+// wait-for 是一次性请求(等元素/文本出现,带超时),无状态。
+// 目标解析同 drive(fail-fast);所有入参都当 unknown 校验,不 IPC 层不轻信渲染层。
+// ---------------------------------------------------------------------------
+const activeWatches = new Map<number, WatchHandle>();
+
+function stopWatchForWc(wcId: number): void {
+  const h = activeWatches.get(wcId);
+  if (!h) return;
+  try {
+    h.stop();
+  } catch {
+    /* stop 本身幂等;异常也不该在这里炸 */
+  }
+  activeWatches.delete(wcId);
+}
+
+function stopAllWatches(): void {
+  for (const id of [...activeWatches.keys()]) stopWatchForWc(id);
+}
+
+ipcMain.handle('workbench:browser:wait-for', async (_event, wcIdRaw: unknown, specRaw: unknown) => {
+  const wcId = Number(wcIdRaw);
+  const spec = specRaw as WaitForSpec | null;
+  if (!Number.isInteger(wcId) || !spec || typeof spec !== 'object' || typeof spec.timeoutMs !== 'number') {
+    return { ok: false, found: false, waitedMs: 0, error: 'wait-for：wcId / timeoutMs 非法' };
+  }
+  try {
+    return await browserWaitFor(wcId, spec);
+  } catch (e) {
+    return { ok: false, found: false, waitedMs: 0, error: (e as Error).message };
+  }
+});
+
+ipcMain.handle('workbench:browser:watch-start', (_event, wcIdRaw: unknown) => {
+  const wcId = Number(wcIdRaw);
+  if (!Number.isInteger(wcId)) return { ok: false, error: 'watch：wcId 非法' };
+  // re-arm:先停这张页上旧的(同一时刻一张页只允许一个 watch)
+  stopWatchForWc(wcId);
+  let handle: WatchHandle;
+  try {
+    handle = browserWatch(
+      wcId,
+      (ev: WatchEvent) => {
+        sendToMainWindow('workbench:browser:watch-event', { wcId, event: ev });
+      },
+      {
+        onSetupError: (e: Error) => {
+          // 建 binding / 挂 observer 失败:如实推给渲染层(带 setupError),主进程绝不崩
+          sendToMainWindow('workbench:browser:watch-event', { wcId, event: null, setupError: e.message });
+        },
+      },
+    );
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+  activeWatches.set(wcId, handle);
+  return { ok: true };
+});
+
+ipcMain.handle('workbench:browser:watch-stop', (_event, wcIdRaw: unknown) => {
+  const wcId = Number(wcIdRaw);
+  if (Number.isInteger(wcId)) stopWatchForWc(wcId);
+  return { ok: true };
+});
+
 ipcMain.handle('workbench:browser:view-create', (_event, req: unknown) => {
   const r = req as { tabKey?: unknown; projectId?: unknown; url?: unknown } | null;
   const tabKey = Number(r?.tabKey);
@@ -1690,7 +1767,11 @@ ipcMain.handle('workbench:browser:view-focus', (_event, tabKeyRaw: unknown) => {
 
 ipcMain.handle('workbench:browser:view-close', (_event, tabKeyRaw: unknown) => {
   const tabKey = Number(tabKeyRaw);
-  if (Number.isInteger(tabKey)) viewHostClose(tabKey);
+  if (!Number.isInteger(tabKey)) return;
+  // ADR-0003：关页即停该页的 watch —— 必须在 close **之前**取 wcId（close 后宿主登记已清）
+  const wcId = viewHostWcIdOf(tabKey);
+  viewHostClose(tabKey);
+  if (wcId) stopWatchForWc(wcId);
 });
 
 // 第 8 步：结果文档下载。拿到 Markdown 后：先本地脱敏兜底，再弹系统"保存为"对话框（只有 1 个窗口，不新增窗）。

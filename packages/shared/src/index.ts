@@ -239,6 +239,55 @@ export interface DriveResult {
   screenshot?: string;
 }
 
+// ---------------------------------------------------------------------------
+// ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语(GrokBot 电脑可教/可监听)
+//
+// 两个都是**主进程/CDP 侧**能力:驾驶复杂页「等到再动」(wait-for) + 客服台类实时页
+// 「新内容即回调」(watch)。第四列 UI 不因此多任何可见变化(纯原语地基)。
+// ---------------------------------------------------------------------------
+
+/** wait-for 入参:等某元素(选择器)或某文本(正文子串)出现,带超时。 */
+export interface WaitForSpec {
+  /** CSS 选择器(与 text 至少给一个)。 */
+  selector?: string;
+  /** 正文子串(textContent 命中即算出现)。 */
+  text?: string;
+  /** 超时毫秒;到点没等到如实回 found=false。 */
+  timeoutMs: number;
+  /** 轮询间隔毫秒(默认 100)。 */
+  pollMs?: number;
+}
+
+/** wait-for 回执:found 是「等到没有」,ok 是「调用本身是否合法」。 */
+export interface WaitForResult {
+  ok: boolean;
+  found: boolean;
+  /** 命中方式(选择器优先)。 */
+  how?: 'selector' | 'text';
+  /** 实际耗时(诊断用)。 */
+  waitedMs: number;
+  /** 形状不合法时的原因。 */
+  error?: string;
+}
+
+/** 一次 DOM 新内容事件(截断过)。 */
+export interface WatchEvent {
+  /** insert = 插入了新元素;text-change = 已有节点文本变了。 */
+  label: 'insert' | 'text-change';
+  tag: string | null;
+  /** 新内容文本(≤500 字)。 */
+  text: string;
+  /** 新内容 outerHTML(≤1000 字);文本变化时为 null。 */
+  html: string | null;
+}
+
+/** `onBrowserWatchEvent` 回调参数:`event` 为 null + `setupError` 有值 = 监听没挂上。 */
+export interface BrowserWatchEventInfo {
+  wcId: number;
+  event: WatchEvent | null;
+  setupError?: string;
+}
+
 /**
  * preload 通过 contextBridge 暴露到 window.workbench 的能力白名单。
  * 渲染进程只能看到这里声明的方法，拿不到 ipcRenderer / require / process。
@@ -396,6 +445,23 @@ export interface WorkbenchBridge {
   browserViewNavigate: (req: { tabKey: number; url: string }) => Promise<{ ok: boolean; error?: string }>;
   /** ADR-0002 · 把焦点交给这张页（原生视图没有 DOM focus，走 guest webContents.focus）。 */
   browserViewFocus: (tabKey: number) => void;
+
+  // ---- ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语 ----
+  /**
+   * wait-for:等**点名这张页**上某元素/文本出现(带超时,到点如实回 found=false)。
+   * 复杂页驾驶的「等到再动」地基(GrokBot 电脑「可教」)。
+   */
+  browserWaitFor: (webContentsId: number, spec: WaitForSpec) => Promise<WaitForResult>;
+  /**
+   * watch:监听**点名这张页**的 DOM 变化,新内容出现即推 `onBrowserWatchEvent` 回调。
+   * 客服台类实时页的「新内容即回调」地基(GrokBot 电脑「可监听」)。
+   * 同一张页重复 start = re-arm(主进程先停旧的,绝不双发)。
+   */
+  browserWatchStart: (webContentsId: number) => Promise<{ ok: boolean; error?: string }>;
+  /** 停掉这张页的 DOM 监听(幂等)。 */
+  browserWatchStop: (webContentsId: number) => Promise<{ ok: boolean }>;
+  /** 订阅 DOM 新内容事件;返回取消订阅函数。 */
+  onBrowserWatchEvent: (cb: (info: BrowserWatchEventInfo) => void) => () => void;
 
   /**
    * 第 9 步：把用户对「补资料」提问的回答交给主进程（仅普通资料；敏感值别走这里）。

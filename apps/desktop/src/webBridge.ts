@@ -10,6 +10,8 @@ import type {
   DriveResult,
   PageSnapshot,
   TaskState,
+  WaitForSpec,
+  BrowserWatchEventInfo,
   WorkbenchBridge,
   WorkbenchSettings,
 } from '@ai-workbench/shared';
@@ -294,6 +296,20 @@ if (typeof window !== 'undefined' && !(window as any).workbench) {
     browserOwner: async (_webContentsId: number, _agentId: number) => {},
 
     browserThrottle: async (_webContentsId: number, _throttle: boolean) => ({ ok: true }),
+
+    // ADR-0003 · wait-for / watch 原语:Web 直测环境没有 CDP/主进程,明确「不可用」(不假装成功)
+    browserWaitFor: async (_webContentsId: number, _spec: WaitForSpec) => ({
+      ok: false,
+      found: false,
+      waitedMs: 0,
+      error: 'wait-for 在 Web 直测环境不可用(无 CDP)',
+    }),
+    browserWatchStart: async (_webContentsId: number) => ({
+      ok: false,
+      error: 'watch 在 Web 直测环境不可用(无 CDP)',
+    }),
+    browserWatchStop: async (_webContentsId: number) => ({ ok: true }),
+    onBrowserWatchEvent: (_cb: (info: BrowserWatchEventInfo) => void) => () => {},
 
     agentAnswer: async (text: string, _targetWebContentsId?: number) => {
       emit('agent', JSON.stringify({ kind: 'note', level: 'info', text: `用户补充说明：${text}` }));
