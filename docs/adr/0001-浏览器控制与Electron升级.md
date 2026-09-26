@@ -34,8 +34,8 @@
 | **33(现状)** | 2024-11 | 130 / 20.16 / 12.3 | 基线 |
 | **34(第一片目标)** | 2025-01-14 | 132.0.6834.83 / 20.18.1 / 13.2 | **breaking 仅 1 条**:Windows 全屏时隐藏菜单栏(#43402)。Node 仍是 20.x |
 | 35 | 2025-03-04 | 134.0.6998.44 / 22.14.0 / 13.4 | breaking:`console-message` 参数移进 event 对象、webRequest filter 空数组弃用、`getPreloads/setPreloads` 弃用(改 `registerPreloadScript`)、`isAeroGlassEnabled` 弃用 |
-| 36 | 2025 | 136(按规律外推,以官方 notes 为准)/ 22.x | 维护期为主(36.2.1 修 webview focus 崩溃等) |
-| 37 | 2025 | 138(同上)/ 22.x | Web Serial/WebUSB blocklist;移除弃用的 `ProtocolResponse.session=null` |
+| 36 | 2025-04-28 | 136.0.7103.48 / 22.14.0 / 13.6 | `NativeImage.getBitmap()` 弃用、Session extensions API 挪到 `Session.extensions`、`isAeroGlassEnabled` **移除**、PrinterInfo 字段删、`clearDataStorage({quota:'syncable'})` 移除、GTK 4 成 GNOME 默认(平台行为) |
+| 37 | 2025-06-24 | 138.0.7204.35 / 22.16.0 / 13.8 | Web Serial/WebUSB blocklist 支持(加性)、utilityProcess 两处崩溃修复、移除 `ProtocolResponse.session=null` |
 | 38 | 2025-09-02 | 140(同上)/ 22.x | 崩溃修复批次;官方通知 35.x EOL |
 | 39 | 2025 底 | 142(同上)/ 22.x | **ASAR Integrity 转正**(默认不影响我们:没启用就不会校验) |
 | 40 | 2026-01-13 | 144.0.7559.60 / 24.11.1 / 14.4 | **Node 20→22→24 跨两代发生在 40** |
@@ -44,7 +44,7 @@
 | 43 | 2026-07-02 | 150.0.7871.46 / 24.17.0 / 15.0 | — |
 | **44(最新稳定)** | 2026-08-25(44.4.5 @ 09-22) | 152.0.7977.130 / 24.21.0 / 15.2 | 当前 stable |
 
-(34/35/37/38/40–44 的数字与要点均逐条取自官方 release notes/blog,2026-09-26 抓取;36–39 的 Chromium/Node 为按「每 major +2 Chromium」规律的外推,已在表中注明,该片动手前按纪律 #4 以官方 notes 复核。)
+(34/35/36/37/38/40–44 的数字与要点均逐条取自官方 release notes/blog,2026-09-26 抓取;仅剩 38/39 的 Chromium/Node 为按「每 major +2 Chromium」规律的外推,该片动手前按纪律 #4 以官方 notes 复核。)
 
 ### 我们受 breaking 影响的 API 面(grep 实测)
 
@@ -83,10 +83,61 @@
 | 9 | 34+ 上游加速弃 webview(删 webviewTag/行为收紧) | 34 notes 确认未移除;机制上每片升前抓 notes 复核 | 未来事件不列覆盖:靠「每片升前抓官方 notes」的制度化动作兜底;若真发生→WebContentsView 迁移 ADR 提前立项 |
 | 10 | 升级装不上/沙箱环境差异(二进制下载等) | `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 既有惯例;`verify:shell` 是 jsdom,不依赖 electron 二进制 | 无 |
 
+## 分片记录(纪律 #5:增量追加,不覆盖)
+
+### 第一片:33.2.1 → 34.5.8(2026-09-26,fa639f8)
+
+- 34 官方 breaking 清单仅 1 条(Windows 全屏隐藏菜单栏 #43402);grep 证实无原生菜单/无全屏代码 → 零暴露面。
+- 装后版本 = 34.5.8;lock 只动 electron 一项。verify:shell 50/0;verify:electron 5/0;反证 2/2 红;全量 verify RC=0(359 真实请求,logic 56/0)。
+
+### 第二片:34.5.8 → 37.10.3,合并 35–37 三个 major(2026-09-26)
+
+**合并依据(用户加速口径 2026-09-26)**:连续 35/36/37 三个 major 的官方 breaking 清单逐条核实均零暴露面 → 按口径 2–3 个 major 合一片;每个 major 仍单独过清单(下表)。一旦某 major 有暴露面,立刻拆回单 major。
+
+**35.0.0**(Chromium 134.0.6998.44 / Node 22.14.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面(grep 全 apps/desktop,ts+tsx) |
+|---|---|
+| webRequest filter `excludeUrls` + urls 空数组弃用(#45678) | 零:`webRequest` 零命中 |
+| `getPreloads`/`setPreloads` 弃用(#45329) | 零:两 API 零命中 |
+| `console-message` 参数移进 event 对象(#43617) | 零:`console-message` 零命中 |
+| `isAeroGlassEnabled` 弃用(#45554) | 零:零命中 |
+| ServiceWorkers `fromVersionID`(#45341) | 加性,无主进程 service worker 管理 |
+
+→ **35 零暴露面。**
+
+**36.0.0**(Chromium 136.0.7103.48 / Node 22.14.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| `NativeImage.getBitmap()` 弃用(#46736) | 零:零命中 |
+| app.commandLine 畸形开关崩溃修复(#46446) | 我们用 3 处 `appendSwitch`(main.ts:49–51,均为合法布尔开关、无值)——此项是**崩溃修复**非行为变更,方向上更安全 |
+| Session extensions API 挪到 `Session.extensions`(#45597) | 零:无 `loadExtension`/extensions 使用 |
+| `isAeroGlassEnabled` **移除**(#45563) | 零:零命中 |
+| PrinterInfo 删 status/isDefault(#45500) | 零:无 `webContents.print`/PrinterInfo 使用 |
+| `clearDataStorage({quota:'syncable'})` 移除(#45923) | 零:零命中 |
+| GTK 4 成 GNOME 默认(Chromium 平台行为) | 我们不直接用 GTK API;观测项——Linux/GNOME 用户的窗口行为差异归「真机复跑」(失败模式表 #1 口径) |
+
+→ **36 零暴露面。**
+
+**37.0.0**(Chromium 138.0.7204.35 / Node 22.16.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| Web Serial & WebUSB blocklist 支持(#46600) | 加性:不配 blocklist 条目=行为零变化;我们代码零命中 navigator.serial/usb |
+| utilityProcess 未处理 rejection 崩溃修复(#45921)/ exit 后跑脚本修复(#47492) | 零:无 `utilityProcess` 使用(两条本也是修复) |
+| 移除 `ProtocolResponse.session=null`(#46264) | 零:无 `protocol.handle`/`protocol.intercept` 使用 |
+
+→ **37 零暴露面。**
+
+**结果**:装后版本 = **37.10.3**(34.5.8 → 37.10.3,lock 只动 electron 一项);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=37.10.3/声明 ^37/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 34.5.8→红在装后核对;M2 声明回退 ^34.5.8→红在声明核对);全量 verify **RC=0**(359 真实请求,logic 56/0)。前端/`browser/` 零改动,红线网(golden+R1–R4)原样在场。
+**盖不到的照旧**(失败模式表 #1/#4/#5):真机 webview 渲染(本片 Chromium 132→138,跨度比第一片大,真机复跑优先级提高)/ Windows 行为 / 真打包。
+**下一片**:37→38→(39)——38/39 的 Chromium/Node 数字待动手前以官方 notes 复核(表中已注明外推)。
+
 ## 来源(纪律 #4,2026-09-26 抓取)
 
 - browser-use:https://github.com/browser-use/browser-use(README/AGENTS.md;LICENSE 原文=MIT;116k★,最后提交 2026-09-15)、https://docs.browser-use.com/open-source/browser-use-cli(CDP 连接:`BU_CDP_URL`/`cdp_url`)
 - Stagehand:https://github.com/browserbase/stagehand(LICENSE 原文=MIT;25.4k★,最后提交 2026-09-25)、https://docs.stagehand.dev/v4/configuration/browser(`localBrowser.connect({cdpUrl})` 需已暴露 DevTools endpoint)、PR #3018 / #2542(CDP 连接工程实践)
 - Nanobrowser:https://github.com/nanobrowser/nanobrowser(Chrome 扩展、Apache-2.0、13.8k★、仓库最后更新 2026-08-18、50 open issues)
-- Electron:https://releases.electronjs.org/(44.4.5/43.7.5/42.11.8 及 Chromium/Node 对应表)、v34.0.0 与 v35.0.0 release notes(breaking 清单)、v37.0.0/v38.0.0 release notes(webview 修复记录、35 EOL 通知)、https://www.electronjs.org/blog(40/41/42/43/44 发布与 ASAR Integrity@39)、https://www.electronjs.org/docs/latest/api/webview-tag(webview 不推荐警告)、browser-view 文档(BrowserView deprecated)
+- Electron:https://releases.electronjs.org/(44.4.5/43.7.5/42.11.8 及 Chromium/Node 对应表)、v34.0.0/v35.0.0/v36.0.0/v37.0.0 release notes(breaking 清单,第二片于 2026-09-26 逐条复核)、v38.0.0 release notes(webview 修复记录、35 EOL 通知)、https://www.electronjs.org/blog(40/41/42/43/44 发布与 ASAR Integrity@39)、https://www.electronjs.org/docs/latest/api/webview-tag(webview 不推荐警告)、browser-view 文档(BrowserView deprecated)
 - 库内:`docs/智能体协同-总计划.md`(Electron 升级排阶段 3)、`apps/desktop/electron/driver.ts`(自建 CDP 驱动)、`apps/desktop/electron/main.ts:306`(`webviewTag: true`)、`apps/desktop/package.json`(electron `^33.2.1`、无原生依赖)
