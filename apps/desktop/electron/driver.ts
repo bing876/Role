@@ -1,4 +1,5 @@
 import { webContents } from 'electron';
+import { viewHostRegistry } from './view-host';
 import { classifyField, FIELD_REASON_CN, isPaymentConfirmAction, type FieldDescriptor } from './fieldClass';
 import type {
   BrowserAction,
@@ -13,8 +14,9 @@ import type {
 /**
  * 第 3 步「遥控器先通」——本地驾驶执行器。
  *
- * 目标：让程序能驾驶**主窗口右栏那块内嵌 webview**（不是独立窗口、不是云端浏览器）。
- * 手段：主进程拿到该 webview 的 guest `webContents`，挂上 `webContents.debugger`（CDP 1.3），
+ * 目标：让程序能驾驶**主窗口右栏那块内嵌页**（不是独立窗口、不是云端浏览器）。
+ * 手段：主进程拿到该页 guest 的 `webContents`（ADR-0002 起是 view-host 托管的
+ *      WebContentsView），挂上 `webContents.debugger`（CDP 1.3），
  *      用 `Runtime.evaluate` + `Input.dispatchMouseEvent` 这类协议命令去操作页面。
  *
  * 明确不做的事：
@@ -736,7 +738,11 @@ function resolveTarget(id?: number): Target {
     );
   }
   const wc = webContents.fromId(id);
-  if (wc && !wc.isDestroyed() && wc.getType() === 'webview') return wc;
+  // ADR-0002 第二片：内嵌页宿主只有一条路 —— 主进程托管的 WebContentsView，
+  // wcId 在 viewHostRegistry 里（create 时登记、close/destroyed 时注销）。
+  // webview 时期认 `type === 'webview'` 的分支随 webviewTag 一起退场（那种 guest 已不可能存在）；
+  // 报错口径不变（点名了但页没了 → 当场停，绝不猜）。
+  if (wc && !wc.isDestroyed() && viewHostRegistry.has(wc.id)) return wc;
   throw new Error(`指定的内嵌页已经不在了（webContents ${id} 已关闭或不是内嵌页），这一路停止。`);
 }
 

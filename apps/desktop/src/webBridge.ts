@@ -319,7 +319,7 @@ if (typeof window !== 'undefined' && !(window as any).workbench) {
 
     syncProjects: async (_projectIds: number[]) => {},
 
-    onWebviewBlocked: (_cb: (info: { partition: string; reason: string }) => void) => {
+    onBrowserBlocked: (_cb: (info: { partition: string; reason: string }) => void) => {
       return () => {};
     },
 

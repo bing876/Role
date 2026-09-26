@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { SOFT_TAB_HINT, isHttpUrl, partitionFor, toHttpUrl } from './url';
+import { SOFT_TAB_HINT, toHttpUrl } from './url';
 import type { BrowserWorkspace } from './useBrowserWorkspace';
 import { hostLabel } from './url';
-import { isStartPage } from './sites';
 import { humanizeIdle } from './sleepPolicy';
 import { SleepBadge } from './SleepBadge';
 import './styles.css';
@@ -16,14 +15,22 @@ import './styles.css';
  *
  * 第 20 步的关键点：
  *   - 顶栏只显示**当前智能体**的 tab（别人的 tab 你看不见、也带不过来）；
- *   - 舞台里**所有智能体、所有 tab** 的 <webview> 都一直挂着（绝对定位铺满、靠 z-index 分层）：
+ *   - 舞台里**所有智能体、所有 tab** 的页宿主都一直挂着（绝对定位铺满、靠 z-index 分层）：
  *     被切到后面的那张必须仍然活着、仍然有真实尺寸，否则驾驶在它上面点不中任何元素；
- *   - 每张页的 `partition` 按**它所属的项目**算（Phase 3：同项目的智能体共用一套登录态）；
+ *   - 每张页的**登录态**按**它所属的项目**分区（Phase 3：同项目的智能体共用一套）——
+ *     ADR-0002 起分区名由主进程在 create 时拼并过闸，渲染层只报 projectId；
  *   - **活页上限（全局，默认 4 张，设置可调大）**：到上限拒新开并说明；页数多时 URL 栏右侧提示「开太多会卡」，绝不替用户关页。
+ *
+ * ADR-0002（页宿主 `<webview>` → 主进程托管的 WebContentsView）：
+ *   - 舞台里挂的是**占位 div**（`.browserPanel__view`，与老 webview 同名同类）——
+ *     第四列的三态 / z 分层 / 修饰符一个字节没动，动的只有「这里面是什么」；
+ *   - 真页面活在主进程的原生视图里：本组件只负责三件事 ——
+ *     ① 宿主 div 挂载/卸载 → 建/销毁原生宿主（`ws.hostMounted` / `ws.hostGone`）；
+ *     ② 量舞台几何 → 每页的 (rect, visible) 走 `browserViewRect`（rAF 合并、签名去重）；
+ *     ③ 切当前页 → `browserViewOrder`（原生视图按子序堆叠，置顶）。
+ *   - 隐藏（切后台 / 切智能体 / 求助卡之外的页）= `visible: false`，**不销毁**（隐藏≠卸载）；
+ *     只有深休眠 / 关 tab / 关光所有页才走销毁（三条有意卸载路径，语义与 webview 时期一致）。
  */
-
-/** 元素上挂的私有字段：卸载时用来摘掉监听 */
-type WebviewEl = HTMLElement & { __wbOff?: () => void };
 
 /**
  * 第 27 步（人工介入卡片）：「求助卡模式」里那张页要落在哪儿。
@@ -85,55 +92,185 @@ export function BrowserPanel({
   }, [active?.url, active?.id, editing]);
 
   /**
-   * 给 webview 挂监听（React 不会告诉我们这些）：
-   *   1. 点站内链接、SPA 路由跳转、标题变化 → 反映到标签和 URL 栏上；
-   *   2. **协议闸（桌面侧）**：非 http(s) 的整页跳转当场取消，留在当前页。
-   *      主进程里还有一道权威闸；渲染层这一道是双保险，也让「点不动」在本地就止住。
-   * 元素卸载时把监听摘掉（用元素上的私有字段记住卸载函数）。
+   * ADR-0002：宿主 div 现在是**占位**（真页面在主进程的原生视图里）：
+   * 只登记元素（节点身份断言 + 几何测量的锚点）。
+   * 标题/地址不再听元素事件（改由主进程 `pageinfo` 推，见 useBrowserWorkspace）；
+   * 非 http(s) 的整页跳转闸在主进程 guest 侧（wireBrowserGuest），口径不变。
    */
   const bindRef = (id: number, el: HTMLElement | null): void => {
-    if (el && typeof (el as any).getWebContentsId !== 'function') {
-      (el as any).getWebContentsId = () => id;
-    }
     ws.registerWebview(id, el);
-    if (!el) return;
-    const anyEl = el as WebviewEl;
-    anyEl.__wbOff?.();
-    const onTitle = (e: Event): void => {
-      const title = String((e as Event & { title?: string }).title ?? '');
-      if (title) ws.notePageInfo(id, { title });
+  };
+
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  /** create 回执落地后重发几何用的「发一次」入口（rect 效果里挂上，见下） */
+  const sendRectsRef = useRef<(() => void) | null>(null);
+
+  /**
+   * ADR-0002 ①：页宿主（原生视图）生命周期 —— 跟**宿主 div** 的挂载/卸载走。
+   *
+   *   挂上（首挂 / 深休眠唤醒）→ `ws.hostMounted`（create + 登记 wcId + 报 owner）；
+   *   摘下（深休眠 / 关 tab / 关光所有页）→ `ws.hostGone`（destroy）。
+   *
+   * 深休眠分支渲染的是占位卡（没有宿主 div），所以自然走「摘下」路径 ——
+   * 休眠语义与 webview 时期逐字一致（深休眠才卸载；浅休眠/隐藏都不动宿主）。
+   */
+  const hostKeysRef = useRef<Set<number> | null>(null);
+  /**
+   * 真卸载标志（单独一个 effect，cleanup 先于宿主效果的 cleanup 跑）：
+   * 关**最后一张**页时 allTabs 归零 → App 把整个浏览器层卸掉 → 宿主效果**不会再跑**
+   * （没有下一次渲染去发现「少了一张」），最后一张的 hostGone 只能在这里兜住。
+   */
+  const panelUnmountedRef = useRef(false);
+  useEffect(() => {
+    return () => {
+      panelUnmountedRef.current = true;
     };
-    const onNav = (e: Event): void => {
-      const url = String((e as Event & { url?: string }).url ?? '');
-      if (url) ws.notePageInfo(id, { url });
-      // Phase 3：页就绪/跳转时顺手把「这张页属于哪个智能体」报给主进程（下载记录要用）
-      ws.noteOwner(id);
-    };
-    /** Phase 3：guest 就绪 → 把「这张页是哪个智能体开的」报给主进程（下载记录要标 owner） */
-    const onDomReady = (): void => {
-      ws.noteOwner(id);
-    };
-    const onWillNavigate = (e: Event): void => {
-      const url = String((e as Event & { url?: string }).url ?? '');
-      if (url && !isHttpUrl(url)) {
-        (e as Event & { preventDefault?: () => void }).preventDefault?.();
-        console.warn('[browser] 已拦下非 http(s) 跳转，留在当前页：', url);
+  }, []);
+  useEffect(() => {
+    const now = new Set<number>();
+    for (const t of ws.allTabs) {
+      const deepSleeping = t.sleep === 'deep' && !ws.drivingIds.includes(t.id);
+      if (!deepSleeping) now.add(t.id);
+    }
+    const prev = hostKeysRef.current ?? new Set<number>();
+    for (const id of prev) {
+      if (!now.has(id)) ws.hostGone(id);
+    }
+    for (const t of ws.allTabs) {
+      if (now.has(t.id) && !prev.has(t.id)) {
+        // create 期间视图离屏 —— 回执落地后重发一次几何，页才落位（F7：不闪左上角、也不漏帧）
+        void ws.hostMounted(t).then(() => {
+          sendRectsRef.current?.();
+        });
+      }
+    }
+    hostKeysRef.current = now;
+    return () => {
+      // 真卸载（层没了 = 关光了所有页）→ 把剩下的宿主全销毁（路径① 的原生侧那一半）
+      if (panelUnmountedRef.current) {
+        for (const id of hostKeysRef.current ?? []) ws.hostGone(id);
+        hostKeysRef.current = new Set<number>();
       }
     };
-    el.addEventListener('page-title-updated', onTitle);
-    el.addEventListener('did-navigate', onNav);
-    el.addEventListener('did-navigate-in-page', onNav);
-    el.addEventListener('will-navigate', onWillNavigate);
-    // Phase 3：guest 一就绪就把 owner 报给主进程（早报早好；拿不到 id 时 noteOwner 自己会跳过）
-    el.addEventListener('dom-ready', onDomReady);
-    anyEl.__wbOff = () => {
-      el.removeEventListener('page-title-updated', onTitle);
-      el.removeEventListener('did-navigate', onNav);
-      el.removeEventListener('did-navigate-in-page', onNav);
-      el.removeEventListener('will-navigate', onWillNavigate);
-      el.removeEventListener('dom-ready', onDomReady);
+  }, [ws.allTabs, ws.drivingIds]);
+
+  /**
+   * ADR-0002 ②：几何同步 —— 渲染进程量舞台 rect，逐页发 (rect, visible)。
+   *
+   * 坐标系：舞台的 `getBoundingClientRect`（视口坐标）== 窗口内容区坐标
+   * （内容区即视口，原生视图 setBounds 相对内容区左上角），**直接透传**，不做偏移换算。
+   *
+   * 去重：签名（各页 rect+visible）不变就不发；拖拽/缩放/层状态变化才按 rAF 节奏发。
+   *
+   * visible 映射**以 App 算好的层 class 为准**（`.browserLayer--hidden` / `--embed`）——
+   * 不在这边再维护一套「什么情况下可见」的逻辑，两份逻辑永远对不齐才是事故之源：
+   *   - embed 态：只有要嵌的那一张露脸（它的 rect 按求助卡的 rect+clip 收缩）；
+   *   - 普通态：层没隐藏 且 这张页是当前智能体的当前页。
+   *   隐藏 = `visible: false`（视图仍附着、页照跑），**绝不是销毁**。
+   */
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    let raf = 0;
+    let lastSig = '';
+    let alive = true;
+
+    type ViewState = { tabId: number; rect: { x: number; y: number; width: number; height: number }; visible: boolean };
+
+    const compute = (): ViewState[] => {
+      const layer = stage.closest('.browserLayer');
+      const layerCls = layer ? layer.getAttribute('class') ?? '' : '';
+      const embedMode = layerCls.includes('browserLayer--embed');
+      const hidden = layerCls.includes('browserLayer--hidden');
+      const s = stage.getBoundingClientRect();
+      const out: ViewState[] = [];
+      for (const t of ws.allTabs) {
+        const deepSleeping = t.sleep === 'deep' && !ws.drivingIds.includes(t.id);
+        if (deepSleeping) continue; // 深休眠 = 宿主已销毁，无视图可发
+        const otherAgent = ws.currentAgentId !== null && t.agentId !== ws.currentAgentId;
+        const on = !otherAgent && t.id === active?.id && t.agentId === active?.agentId;
+        const isEmbedTarget = embedActive && !otherAgent && ws.webContentsIdOf(t.id) === embed?.wcId;
+        const visible = embedMode ? isEmbedTarget : !hidden && !otherAgent && on;
+        let rect = { x: s.left, y: s.top, width: s.width, height: s.height };
+        if (embedMode && isEmbedTarget && embed?.rect) {
+          // 求助卡的 clip 是 `inset(上 右 下 左)` —— 等价于把原生视图的 bounds 四边各收掉一块
+          const c = /inset\(\s*([\d.]+)px\s+([\d.]+)px\s+([\d.]+)px\s+([\d.]+)px\s*\)/.exec(embed.rect.clip);
+          const top = c ? parseFloat(c[1]) : 0;
+          const right = c ? parseFloat(c[2]) : 0;
+          const bottom = c ? parseFloat(c[3]) : 0;
+          const left = c ? parseFloat(c[4]) : 0;
+          rect = {
+            x: s.left + embed.rect.left + left,
+            y: s.top + embed.rect.top + top,
+            width: Math.max(0, embed.rect.width - left - right),
+            height: Math.max(0, embed.rect.height - top - bottom),
+          };
+        }
+        out.push({ tabId: t.id, rect, visible });
+      }
+      return out;
     };
-  };
+
+    const send = (force = false): void => {
+      if (!alive) return;
+      const states = compute();
+      const sig = states
+        .map((x) => `${x.tabId}:${Math.round(x.rect.x)},${Math.round(x.rect.y)},${Math.round(x.rect.width)},${Math.round(x.rect.height)}:${x.visible ? 1 : 0}`)
+        .join('|');
+      if (!force && sig === lastSig) return;
+      lastSig = sig;
+      for (const x of states) {
+        void window.workbench?.browserViewRect?.({
+          tabKey: x.tabId,
+          rect: {
+            x: Math.round(x.rect.x),
+            y: Math.round(x.rect.y),
+            width: Math.round(x.rect.width),
+            height: Math.round(x.rect.height),
+          },
+          visible: x.visible,
+        });
+      }
+    };
+
+    const schedule = (): void => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        send();
+      });
+    };
+    sendRectsRef.current = (): void => send(true);
+
+    const ro = new ResizeObserver(schedule);
+    ro.observe(stage);
+    window.addEventListener('resize', schedule);
+    // 层的三态 class 变化（App 算的可见性依据）→ 立刻重发
+    const layer = stage.closest('.browserLayer');
+    let mo: MutationObserver | null = null;
+    if (layer && typeof MutationObserver !== 'undefined') {
+      mo = new MutationObserver(schedule);
+      mo.observe(layer, { attributes: true, attributeFilter: ['class'] });
+    }
+    schedule();
+    return () => {
+      alive = false;
+      if (raf) cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener('resize', schedule);
+      mo?.disconnect();
+      sendRectsRef.current = null;
+    };
+  }, [ws.allTabs, ws.view, ws.currentAgentId, ws.drivingIds, ws.embedWcId, active, embedActive, embed]);
+
+  /**
+   * ADR-0002 ③：切当前页 → 原生视图置顶（原生视图的 z 序 = 子序）。
+   * 同一时刻只有一张页 visible，置顶是「切换瞬间不闪」的保险，不是正确性依赖。
+   */
+  useEffect(() => {
+    if (active) void window.workbench?.browserViewOrder?.(active.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id]);
 
   return (
     <div className={embedActive ? 'browserPanel browserPanel--embed' : 'browserPanel'}>
@@ -274,8 +411,8 @@ export function BrowserPanel({
         </button>
       </div>
 
-      {/* 舞台：所有智能体、所有 tab 的 webview 都挂在这里，只靠 z-index 分层 */}
-      <div className="browserPanel__stage">
+      {/* 舞台：所有智能体、所有 tab 的页宿主（ADR-0002 起是占位 div，真页面在主进程原生视图里）都挂在这里，只靠 z-index 分层 */}
+      <div className="browserPanel__stage" ref={stageRef}>
         {ws.tabs.length === 0 && <div className="browserPanel__empty small">这个智能体还没有打开网页</div>}
         {ws.allTabs.map((t) => {
           /**
@@ -302,12 +439,11 @@ export function BrowserPanel({
           const isEmbedTarget = embedActive && !otherAgent && ws.webContentsIdOf(t.id) === embed?.wcId;
 
           /*
-           * ★ 第 24 步：**深休眠的页不渲染 <webview>** —— 这才是真的省内存。
+           * ★ 第 24 步：**深休眠的页不渲染宿主** —— 这才是真的省内存。
            *
-           * 为什么必须"不渲染"而不是"藏起来"：
-           *   `<webview>` 只要挂在 DOM 上，Electron 就为它保留一个 guest 渲染进程，
-           *   那份内存一分都省不下来。`display:none` / `opacity:0` 都**不省内存**。
-           *   所以浅休眠（`'shallow'`）只是降帧、页照样挂着；**只有深休眠才卸载**。
+           * ADR-0002 起这条更直白：不渲染宿主 div = 生命周期效果里走 `hostGone`
+           * = 主进程**销毁**原生视图（guest 渲染进程真的没了，内存真省了）。
+           * 浅休眠（`'shallow'`）只是降帧、宿主照样在；**只有深休眠才卸载**。
            *
            * ★ 红线：`drivingIds` 里的页**永远不会**是 deep ——
            *   判定层（sleepPolicy）已经把"正在被驾驶"硬拦掉了，
@@ -331,10 +467,19 @@ export function BrowserPanel({
             );
           }
 
+          /**
+           * ADR-0002：**占位 div**（与老 `<webview>` 同名同类 —— class / 修饰符 / z 分层
+           * 一个字节没动）。真页面在主进程的原生视图里：
+           *   - 几何：本组件的 rect 效果按这张 div 量舞台 + 内联 style，走 `browserViewRect`；
+           *   - 生命周期：宿主 div 挂载/卸载 → `ws.hostMounted` / `ws.hostGone`；
+           *   - 加载地址：create 时用**当前 `t.url` 兜底**（深休眠唤醒回到最后在的地方，
+           *     与老 `src` 口径一致，见 `hostMounted`）。
+           * 分区（登录态）与 target=_blank 收编都在主进程 create/guest 接线里，口径不变。
+           */
           return (
-            <webview
+            <div
               key={t.id}
-              ref={(el) => bindRef(t.id, el as unknown as HTMLElement | null)}
+              ref={(el) => bindRef(t.id, el)}
               className={
                 embedActive
                   ? isEmbedTarget
@@ -349,9 +494,9 @@ export function BrowserPanel({
               /**
                * 第 27 步：几何跟随（**影子层方案**的核心）。
                *
-               * 量出来的 rect 直接写进内联 style —— webview 元素本身**从头到尾没动过位置**，
-               * 还在 `.browserPanel__stage` 里、还是同一个 guest、还是同一个 wcId。
-               * 变的只有 CSS：它看起来落在聊天卡片里了而已。
+               * 量出来的 rect 直接写进内联 style —— 宿主 div 本身**从头到尾没动过位置**，
+               * 还在 `.browserPanel__stage` 里；变的只有 CSS：它看起来落在聊天卡片里了而已。
+               * 原生视图跟着这块内联几何走（rect 效果里把 clip 收缩算进 bounds）。
                *
                * ★ 没量到 rect 时**不给内联样式**（退回铺满舞台），而不是给个 0×0 ——
                *   尺寸归零会让 CDP 驾驶的点击坐标全部失效（本模块顶部的红线）。
@@ -369,39 +514,6 @@ export function BrowserPanel({
                     }
                   : undefined
               }
-              /*
-               * ★ 深休眠唤醒后要重新加载，`key` 不能只是 t.id ——
-               *   同一张页从"休眠占位卡"变回 `<webview>` 时 React 会新建元素，
-               *   但 `src` 若仍是 `bootUrl`（开页时的地址），用户会**丢掉会话中的导航**
-               *   （比如从首页点进商品页、睡了 40 分钟、唤醒后回到首页）。
-               *   所以用 `url`（当前真实地址）当 src 的兜底：优先回到他最后在的地方。
-               */
-              src={t.url && t.url !== t.bootUrl && !isStartPage(t.url) ? t.url : t.bootUrl}
-              /*
-               * Phase 3：分区按**这张页所属的项目**算 —— 同项目的智能体共用一套 cookie / 登录态。
-               * 注意 `t.projectId` 是开页那一刻定下的（不是现在的项目），
-               * 所以切项目不会让已开的页换一套登录态。
-               */
-              partition={partitionFor(t.projectId)}
-              /*
-               * target=_blank / window.open 由主进程 setWindowOpenHandler 拦下 → 推给渲染层
-               * 真开一条 tab（第 23 步），不会创建 BrowserWindow、不会弹系统浏览器。
-               *
-               * ★ 值必须写成字符串 "true"，**不能**用裸的 `allowpopups`（布尔）。
-               *   Electron 的 webview 是靠「属性在不在」（hasAttribute）决定放不放行弹窗的；
-               *   而 React 18 对**未知属性**上的布尔值不写进 DOM —— 实测
-               *   `hasAttribute('allowpopups')` = false。属性丢了不是"少个属性"：
-               *   Chromium 直接把弹窗挡掉，主进程的 handler **一次都进不去**
-               *   （electron.log 里连一行 "[webview] target=_blank" 都没有），
-               *   于是「页里点开链接 → 真开一条 tab」在真机里从来没生效过。
-               *
-               * ★ 类型为什么要收窄：JSX 上这个属性来自 `@types/react` 的
-               *   `WebViewHTMLAttributes.allowpopups?: boolean`（本目录 `webview.d.ts` 里那份
-               *   在 `jsx: react-jsx` 下并不生效，实测报错类型就是 boolean）。它声明成布尔，
-               *   可**运行时布尔会被丢掉** —— 类型与运行时不一致，只能在这里显式收窄。
-               *   写 `"true"` 时 DOM 上就是 `allowpopups="true"`，Electron 认的就是"属性存在"。
-               */
-              allowpopups={'true' as unknown as boolean}
             />
           );
         })}

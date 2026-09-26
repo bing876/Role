@@ -240,9 +240,12 @@ print("\n[E] 驾驶执行层是否看可见性？")
 print("    期望：执行层只认 webContents id 与存活状态，完全不看可见性。")
 
 drv = read(ELEC / "driver.ts")
-ok_drv = ("wc.getType() === 'webview'" in drv) and ("isDestroyed" in drv) and not re.search(r"isVisible|occluded", drv)
+# ADR-0002 第二片：内嵌页宿主只有 view-host 的 WebContentsView 一条路（wcId 在
+# viewHostRegistry 里），webview 时期的 getType() 分支随 webviewTag 退场。
+# 断言口径跟着生产码走：认 registry + 存活，不看可见性。
+ok_drv = ("viewHostRegistry.has(wc.id)" in drv) and ("isDestroyed" in drv) and not re.search(r"isVisible|occluded", drv)
 check(
-    "E1 driver.ts 只查 isDestroyed / getType==='webview'，不查可见性",
+    "E1 driver.ts 只查 registry/存活，不查可见性",
     ok_drv,
     "无 isVisible/occluded 依赖" if ok_drv else "发现可见性依赖",
 )

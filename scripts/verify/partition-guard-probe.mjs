@@ -219,14 +219,21 @@ async function main() {
     `加闸=${r1.storage} / 不加闸=${r3.storage}`,
   );
 
-  // ---------------- (D) 静态：主进程真的挂了这个处理器吗 ----------------
-  console.log('\n[D] 静态：应用里确实注册了这道闸（防止"函数在、但没接上"）');
+  // ---------------- (D) 静态：建页口确实挂了这道闸吗 ----------------
+  // ADR-0002 第二片：宿主换成 WebContentsView 后，`will-attach-webview` 随 `webviewTag`
+  // 一起退场，建页口收敛为 view-host 的 create —— 闸跟着挪到建页口（同一判定函数）。
+  // 所以这里的断言口径是：① 建页口真的调了闸；② 旧挂点已移除（防"两套挂点各说各话"）。
+  console.log('\n[D] 静态：建页口（view-host create）确实挂了这道闸（防止"函数在、但没接上"）');
   const src = fs.readFileSync(MAIN_TS, 'utf8');
-  chk(/\.on\(\s*'will-attach-webview'/.test(src), '★ main.ts 注册了 will-attach-webview');
-  chk(/decideWebviewPartition\s*\(\s*raw\s*,\s*ownedProjectIds/.test(src),
-      '★ 处理器里用的是 decideWebviewPartition + 真实项目集合');
-  chk(/webPreferences\.partition\s*=\s*d\.partition/.test(src),
-      '★ 被判定要隔离时**确实改写了** webPreferences.partition');
+  const viewHostSrc = fs.readFileSync(path.join(REPO, 'apps', 'desktop', 'electron', 'view-host.ts'), 'utf8');
+  chk(/deps!\.decidePartition\s*\(\s*raw\s*\)/.test(viewHostSrc),
+      '★ view-host 的 create 里调了闸（decidePartition）');
+  chk(/session\.fromPartition\s*\(\s*d\.partition\s*\)/.test(viewHostSrc),
+      '★ 判定出的分区**确实用于**建页（session.fromPartition(d.partition)）');
+  chk(!/\.on\(\s*'will-attach-webview'/.test(src),
+      '★ 旧挂点 will-attach-webview 已移除（第二片退场口径，防两套挂点并存）');
+  chk(/decidePartition:\s*\(raw\)\s*=>\s*decideWebviewPartition\s*\(\s*raw\s*,\s*ownedProjectIds\s*,\s*projectsSyncedAt\s*!==\s*null\s*\)/.test(src),
+      '★ main.ts 把闸接进建页口：decideWebviewPartition + 真实项目集合 + 同步状态');
   chk(/ipcMain\.handle\(\s*'workbench:projects:sync'/.test(src),
       '★ 注册了项目列表同步通道（闸的判据来源）');
 

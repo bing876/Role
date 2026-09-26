@@ -34,17 +34,17 @@
 | **33(现状)** | 2024-11 | 130 / 20.16 / 12.3 | 基线 |
 | **34(第一片目标)** | 2025-01-14 | 132.0.6834.83 / 20.18.1 / 13.2 | **breaking 仅 1 条**:Windows 全屏时隐藏菜单栏(#43402)。Node 仍是 20.x |
 | 35 | 2025-03-04 | 134.0.6998.44 / 22.14.0 / 13.4 | breaking:`console-message` 参数移进 event 对象、webRequest filter 空数组弃用、`getPreloads/setPreloads` 弃用(改 `registerPreloadScript`)、`isAeroGlassEnabled` 弃用 |
-| 36 | 2025 | 136(按规律外推,以官方 notes 为准)/ 22.x | 维护期为主(36.2.1 修 webview focus 崩溃等) |
-| 37 | 2025 | 138(同上)/ 22.x | Web Serial/WebUSB blocklist;移除弃用的 `ProtocolResponse.session=null` |
-| 38 | 2025-09-02 | 140(同上)/ 22.x | 崩溃修复批次;官方通知 35.x EOL |
-| 39 | 2025 底 | 142(同上)/ 22.x | **ASAR Integrity 转正**(默认不影响我们:没启用就不会校验) |
-| 40 | 2026-01-13 | 144.0.7559.60 / 24.11.1 / 14.4 | **Node 20→22→24 跨两代发生在 40** |
-| 41 | 2026-03-10 | 146.0.7680.65 / 24.14.0 / 14.6 | macOS ASAR Integrity digest;Wayland 改进;MSIX 自动更新;官方建议装 41.0.2+ |
-| 42 | 2026-05-07 | 148.0.7778.96 / 24.15.0 / 14.8 | — |
-| 43 | 2026-07-02 | 150.0.7871.46 / 24.17.0 / 15.0 | — |
-| **44(最新稳定)** | 2026-08-25(44.4.5 @ 09-22) | 152.0.7977.130 / 24.21.0 / 15.2 | 当前 stable |
+| 36 | 2025-04-28 | 136.0.7103.48 / 22.14.0 / 13.6 | `NativeImage.getBitmap()` 弃用、Session extensions API 挪到 `Session.extensions`、`isAeroGlassEnabled` **移除**、PrinterInfo 字段删、`clearDataStorage({quota:'syncable'})` 移除、GTK 4 成 GNOME 默认(平台行为) |
+| 37 | 2025-06-24 | 138.0.7204.35 / 22.16.0 / 13.8 | Web Serial/WebUSB blocklist 支持(加性)、utilityProcess 两处崩溃修复、移除 `ProtocolResponse.session=null` |
+| 38 | 2025-09-02 | 140.0.7339.41 / 22.18.0 / 14.0 | **macOS 11 停止支持**;`ELECTRON_OZONE_PLATFORM_HINT` 移除(ozone 默认 auto,Linux Wayland 会话原生 Wayland);`plugin-crashed` 事件移除;`webFrame.routingId`/`findFrameByRoutingId` 弃用;35.x EOL |
+| 39 | 2025-10-27 | 142.0.7444.52 / 22.20.0 / 14.2 | **ASAR Integrity 转正**(未启用则无影响);`--host-rules` 弃用;`window.open` popup 恒可缩放;`desktopCapturer` 在 macOS≥14.2 需 `NSAudioCaptureUsageDescription`;共享纹理 OSR `paint` 数据结构变化;36.x EOL |
+| 40 | 2026-01-13 | 144.0.7559.60 / 24.11.1 / 14.4 | **Node 22→24 跨代点**(已核实):renderer 端 clipboard 弃用;macOS dSYM 改 tar.xz;E37 EOL。Node 24 代际项:undici 7、require(esm) 默认、`url.parse` 弃用、`tls.createSecurePair` 移除、`spawn/execFile` + `shell:true` 禁 args |
+| 41 | 2026-03-10 | 146.0.7680.65 / 24.14.0 / 14.6 | (已核实)PDF 改 OOPIF 不再建独立 WebContents;cookie `'changed'` 事件 change cause 语义更新;Linux `showHiddenFiles` 弃用;macOS ASAR Integrity digest(**opt-in**,未启用则无影响);官方建议装 41.0.2+ |
+| 42 | 2026-05-07 | 148.0.7778.96 / 24.15.0 / 14.8 | (已核实)macOS 通知迁 `UNNotification`(**需代码签名**,未签名发 `failed` 事件);electron npm 包改**懒下载**二进制(不再 postinstall);OSR 默认 deviceScaleFactor=1.0;`clearStorageData({quotas})` 移除;`ELECTRON_SKIP_BINARY_DOWNLOAD` env 移除 |
+| 43 | 2026-06-29 | 150.0.7871.46 / 24.17.0 / 15.0 | (已核实)下载默认落用户 Downloads 目录(未 setSavePath 时);nativeImage 带色档图像归一化 SRGB;Linux frameless 窗口默认圆角;Linux dialog `showHiddenFiles` 移除(41 已弃用);启动性能优化(Node 启动快照+字节码缓存) |
+| **44(最新稳定,升级路线终点)** | 2026-08-25(44.4.5 @ 09-22) | 152.0.7977.54(44.0.0)/ 24.18.1(44.0.0)→ 44.4.5 含 Node 24.21.0 / 15.2 | (已核实)**macOS 12 停止支持**(E44+ 要求 macOS 13+);`net.request`/`net.fetch` 客户端证书事件 + `Sec-Fetch-Dest` 校验;ANGLE 静态链接(不再随包 libEGL/libGLESv2);32-bit 构建移除;`clipboard` 对齐 W3C 不再暴露 renderer(40 弃用→44 落地);`loginItemSettings` 的 `openAsHidden` 等字段移除;Linux Unity 桌面环境移除 |
 
-(34/35/37/38/40–44 的数字与要点均逐条取自官方 release notes/blog,2026-09-26 抓取;36–39 的 Chromium/Node 为按「每 major +2 Chromium」规律的外推,已在表中注明,该片动手前按纪律 #4 以官方 notes 复核。)
+(34–44 的 breaking 清单已**全部**逐条取自官方 release notes + 官方 blog(2026-09-26 抓取,数字全部核实)——33→44 升级路线爬完,当前 = 最新稳定 44.4.5。)
 
 ### 我们受 breaking 影响的 API 面(grep 实测)
 
@@ -81,12 +81,233 @@
 | 7 | 原生模块 rebuild 失败 | 桌面端**零原生模块**(grep dependencies 确认)→ 无此暴露面;`npm ci`+typecheck 即覆盖 | 无 |
 | 8 | 红线被破:webview 卸载 / display:none / 归零 / 祖先链变 | 本片**只改 electron 版本号,前端一行不动**;`verify:shell` golden 逐字节 + 既有反证 R1–R4 在场 | 无 |
 | 9 | 34+ 上游加速弃 webview(删 webviewTag/行为收紧) | 34 notes 确认未移除;机制上每片升前抓 notes 复核 | 未来事件不列覆盖:靠「每片升前抓官方 notes」的制度化动作兜底;若真发生→WebContentsView 迁移 ADR 提前立项 |
-| 10 | 升级装不上/沙箱环境差异(二进制下载等) | `ELECTRON_SKIP_BINARY_DOWNLOAD=1` 既有惯例;`verify:shell` 是 jsdom,不依赖 electron 二进制 | 无 |
+| 10 | 升级装不上/沙箱环境差异(二进制下载等) | E42 起 electron npm 包**不再 postinstall 下载二进制**(首次跑 bin 时懒下载),`ELECTRON_SKIP_BINARY_DOWNLOAD` env 已被官方移除——沙箱装 E42+ **不带该 env**,二进制天然不拉;`verify:shell` 是 jsdom,不依赖 electron 二进制(E40 及以前各片用该 env 跳过) | 无 |
+
+## 分片记录(纪律 #5:增量追加,不覆盖)
+
+### 第一片:33.2.1 → 34.5.8(2026-09-26,fa639f8)
+
+- 34 官方 breaking 清单仅 1 条(Windows 全屏隐藏菜单栏 #43402);grep 证实无原生菜单/无全屏代码 → 零暴露面。
+- 装后版本 = 34.5.8;lock 只动 electron 一项。verify:shell 50/0;verify:electron 5/0;反证 2/2 红;全量 verify RC=0(359 真实请求,logic 56/0)。
+
+### 第二片:34.5.8 → 37.10.3,合并 35–37 三个 major(2026-09-26)
+
+**合并依据(用户加速口径 2026-09-26)**:连续 35/36/37 三个 major 的官方 breaking 清单逐条核实均零暴露面 → 按口径 2–3 个 major 合一片;每个 major 仍单独过清单(下表)。一旦某 major 有暴露面,立刻拆回单 major。
+
+**35.0.0**(Chromium 134.0.6998.44 / Node 22.14.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面(grep 全 apps/desktop,ts+tsx) |
+|---|---|
+| webRequest filter `excludeUrls` + urls 空数组弃用(#45678) | 零:`webRequest` 零命中 |
+| `getPreloads`/`setPreloads` 弃用(#45329) | 零:两 API 零命中 |
+| `console-message` 参数移进 event 对象(#43617) | 零:`console-message` 零命中 |
+| `isAeroGlassEnabled` 弃用(#45554) | 零:零命中 |
+| ServiceWorkers `fromVersionID`(#45341) | 加性,无主进程 service worker 管理 |
+
+→ **35 零暴露面。**
+
+**36.0.0**(Chromium 136.0.7103.48 / Node 22.14.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| `NativeImage.getBitmap()` 弃用(#46736) | 零:零命中 |
+| app.commandLine 畸形开关崩溃修复(#46446) | 我们用 3 处 `appendSwitch`(main.ts:49–51,均为合法布尔开关、无值)——此项是**崩溃修复**非行为变更,方向上更安全 |
+| Session extensions API 挪到 `Session.extensions`(#45597) | 零:无 `loadExtension`/extensions 使用 |
+| `isAeroGlassEnabled` **移除**(#45563) | 零:零命中 |
+| PrinterInfo 删 status/isDefault(#45500) | 零:无 `webContents.print`/PrinterInfo 使用 |
+| `clearDataStorage({quota:'syncable'})` 移除(#45923) | 零:零命中 |
+| GTK 4 成 GNOME 默认(Chromium 平台行为) | 我们不直接用 GTK API;观测项——Linux/GNOME 用户的窗口行为差异归「真机复跑」(失败模式表 #1 口径) |
+
+→ **36 零暴露面。**
+
+**37.0.0**(Chromium 138.0.7204.35 / Node 22.16.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| Web Serial & WebUSB blocklist 支持(#46600) | 加性:不配 blocklist 条目=行为零变化;我们代码零命中 navigator.serial/usb |
+| utilityProcess 未处理 rejection 崩溃修复(#45921)/ exit 后跑脚本修复(#47492) | 零:无 `utilityProcess` 使用(两条本也是修复) |
+| 移除 `ProtocolResponse.session=null`(#46264) | 零:无 `protocol.handle`/`protocol.intercept` 使用 |
+
+→ **37 零暴露面。**
+
+**结果**:装后版本 = **37.10.3**(34.5.8 → 37.10.3,lock 只动 electron 一项);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=37.10.3/声明 ^37/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 34.5.8→红在装后核对;M2 声明回退 ^34.5.8→红在声明核对);全量 verify **RC=0**(359 真实请求,logic 56/0)。前端/`browser/` 零改动,红线网(golden+R1–R4)原样在场。
+**盖不到的照旧**(失败模式表 #1/#4/#5):真机 webview 渲染(本片 Chromium 132→138,跨度比第一片大,真机复跑优先级提高)/ Windows 行为 / 真打包。
+
+### 第三片:37.10.3 → 39.8.10,合并 38–39 两个 major(2026-09-26)
+
+**合并依据(同加速口径)**:38/39 官方 breaking 清单(含 Chromium 继承项,取自官方 release notes + 官方 blog)逐条核实**零代码暴露面** → 合一片。
+
+**38.0.0**(Chromium 140.0.7339.41 / Node 22.18.0 / V8 14.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| **macOS 11 停止支持**(E38+ 要求 macOS 12+) | 平台支持项,非代码 API——我们不声明最低 macOS 版本、代码零接触。**行为变化,已报告**:若用户群有 macOS 11,那部分用户需停留在 E37 版本线(分发策略事项,不触发拆片) |
+| `ELECTRON_OZONE_PLATFORM_HINT` 移除;ozone 默认 auto(Linux Wayland 会话**默认原生 Wayland**) | 我们不设该 env(grep 零命中)。行为项:Linux Wayland 用户窗口行为可能与 X11 不同(可用 `--ozone-platform=x11` 回退)——归真机观测 |
+| `plugin-crashed` 事件移除 | 零命中 |
+| `webFrame.routingId` 弃用 | 零命中 |
+| `webFrame.findFrameByRoutingId` 弃用 | 零命中 |
+
+→ **38 零代码暴露面**(两条平台行为项已单列报告)。
+
+**39.0.0**(Chromium 142.0.7444.52 / Node 22.20.0 / V8 14.2)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| `--host-rules` 开关弃用(改 `--host-resolver-rules`) | 零:我们只 appendSwitch 三个后台节流开关(main.ts:49–51) |
+| `window.open` popup 恒可缩放 | **零**——两处 `setWindowOpenHandler`(webview guest main.ts:223 / 主窗口 main.ts:322)均 `action:'deny'`(新 tab 走渲染层 / 外链走系统浏览器),Electron 从不为我们创建 popup,行为变化无落点 |
+| `desktopCapturer` 在 macOS≥14.2 需 `NSAudioCaptureUsageDescription` | 零:`desktopCapturer` 零命中(无屏幕/音频捕获功能) |
+| 共享纹理 OSR `paint` 数据结构变化(`OffscreenSharedTexture` 统一 handle) | 零:offscreen/paint/SharedTexture 零命中 |
+| ASAR Integrity 转正(Notable,非 breaking) | 未启用该功能 → 无校验行为,零影响 |
+
+→ **39 零代码暴露面。**
+
+**结果**:装后版本 = **39.8.10**(37.10.3 → 39.8.10,lock 只动 electron 一项);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=39.8.10/声明 ^39/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 37.10.3→红在装后核对;M2 声明回退 ^37.10.3→红在声明核对);全量 verify **RC=0**(359 真实请求,logic 56/0)。前端/`browser/` 零改动。
+**盖不到的照旧 + 新增真机关注点**:真机 webview 渲染(Chromium 138→142)/ Windows 行为 / 真打包 / **macOS 11 用户停 E37** / **Linux Wayland 默认原生**(观测项)。
+**下一片**:39→40——**Node 22.20→24.11 跨代点**,40 那片单独细看 Node 24 变化(不合并);40–44 的 breaking 清单动手前抓完整 release notes 复核(目前为 blog 摘要)。
+
+### 第四片:39.8.10 → 40.10.6,单 major 39→40,不合并(2026-09-26)
+
+**不合并依据(用户口径)**:40 是 **Node 22.20→24.11.1 跨代点**,单独细看——除 Electron 级 breaking 外,还要把 Node 24 代际项(undici/fetch 行为、require(esm)、被移除 API)与 Chromium 143/144 继承项逐条对照我们 server+desktop 代码与依赖。
+
+**Electron 40.0.0**(Chromium 144.0.7559.60 / Node 24.11.1 / V8 14.4)— 官方 breaking 仅两条:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| renderer 进程直接调 `clipboard` API 弃用(官方迁移路径:preload + contextBridge) | 全仓 grep `clipboard` 零命中(桌面 main/preload/渲染层/服务端均无) |
+| macOS dSYM 改 `dsym.tar.xz` 压缩(原 dsym.zip) | 无 dsym 工具链、未配签名(grep 零命中);打包 `--publish never`,零影响 |
+
+另:E37 EOL(支持策略表,与我们无关)。
+
+**Node 24 代际项**(nodejs.org v24.0.0 官方 blog)— 逐条对照:
+
+| Node 24 变化 | 我们的暴露面 |
+|---|---|
+| **Undici 7**(内置 fetch/HTTP client 升级) | 我们只用**全局 fetch 的 JSON POST**(llm.ts 上游 LLM / auth.ts 短信 / tavily.ts 搜索);无 undici 直接 import、无自定义 dispatcher、无 undici 专属选项。memories.ts 的 `fetch('active')` 是局部闭包函数,非全局 fetch。零暴露面 |
+| **require(esm) 默认生效**(CJS 可 require 同步 ESM) | 桌面 main 源码零 `require()`(tsc CJS 产物,无原生 require 调用);server 的 pglite 是**双模块**(main=dist/index.cjs,CJS require 直接命中 CJS 入口,根本不走 require(esm));且 E39 的 Node 22.20 已默认启用 require(esm)——行为与上一片完全一致,零变化 |
+| `tls.createSecurePair` **移除** | 零命中 |
+| `url.parse()` 运行时弃用 | 全仓零命中(含 url 模块 import 检查) |
+| `SlowBuffer` 运行时弃用 | 零命中 |
+| Zlib 类不带 `new` 弃用 | 零命中(无 zlib 直接类实例化) |
+| `spawn`/`execFile` 传 args **且 `shell:true`** 将抛错 | 我们全部 3 处 spawn(server-supervisor.ts:拉 server / taskkill / 拉 PG)均为 `(file, args, options)` 标准形,**无一处 `shell:true`**。零暴露面 |
+| `AsyncLocalStorage` 默认改用 AsyncContextFrame | 零命中 |
+| V8 13.6 新特性(Float16Array 等,加性)/ npm 11 / URLPattern global / `--permission` flag 改名 | 均加性或零接触 |
+
+**Chromium 143/144 继承项**(developer.chrome.com 官方 release notes)— 逐条对照:
+
+| 移除/弃用 | 我们的暴露面 |
+|---|---|
+| 144:Private Aggregation API 移除 | 零(广告/隐私沙箱 API,未用) |
+| 144:Shared Storage API 移除 | 零 |
+| 144:Protected Audience 移除 | 零 |
+| 144:XML 外部实体加载 | 零(无 XML 解析路径) |
+| 143:Deprecate XSLT | 零(无 XSLT) |
+| 143:Intl.Locale info getters 弃用 | 零(无 `new Intl.Locale`/getter 命中) |
+| 143:FedCM 两项(隐私强制/nonce 迁移) | 零(无 FedCM 登录) |
+
+→ **40 全维度零代码暴露面**(Electron 级 / Node 24 代际 / Chromium 143–144 继承,三条线各自逐条核完)。
+
+**结果**:装后版本 = **40.10.6**(39.8.10 → 40.10.6,lock 变更全部在 electron 子树:electron 本体 + 安装期依赖 `@electron/get` 5.x 换血 + 嵌套 `@types/node 24`);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=40.10.6/声明 ^40/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 39.8.10→红在装后核对;M2 声明回退 ^39.8.10→红在声明核对);全量 verify **RC=0**(429s,359 真实请求,logic 56/0)。前端/`browser/` 零改动,webview 未碰。
+
+**盖不到的照旧 + 真机关注点**:Chromium 142→144 真机 webview 渲染探针优先级继续提高;打包/Windows 照旧。另注意:桌面 supervisor 用 `ELECTRON_RUN_AS_NODE=1` 让 server 跑在 Electron 自带 node 里 → 打包桌面端 server 进程自此跑 **Node 24.11.1**(上片 22.20),Node 24 代际项已核零暴露面,但真机驱动时值得看一眼 server 日志无 deprecation 告警。
+
+**下一片**:40→41(macOS ASAR Integrity digest,配签名才需重签;41 完整 notes 动手前抓)。
+
+### 第五片:40.10.6 → 42.11.8,合并 41–42 两个 major(2026-09-26)
+
+**合并依据(用户口径:「若 41 与 42 均零暴露面,可按加速口径合并」)**:41/42 官方 breaking 清单(官方 release notes + 官方 blog)+ Node 24.14/24.15 minor + Chromium 145–148 继承项逐条核实,均**零代码暴露面** → 合一片。
+
+**41.0.0**(Chromium 146.0.7680.65 / Node 24.14.0 / V8 14.6)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| PDF 改 OOPIF,**不再为 PDF 建独立 WebContents**(官方迁移指引:检测 PDF 资源改用 frame tree) | 零:全仓 `pdf` 命中仅渲染层知识上传的文件扩展名白名单(`accept=".pdf"`),无任何 PDF WebContents 检测/计数代码。行为项:浏览器面板里打开 PDF 链接的渲染进程结构变化,无代码依赖——归真机观测 |
+| cookie `'changed'` 事件 change cause 语义更新(inserted / explicit / inserted-no-change-overwrite / inserted-no-value-change-overwrite) | 零:`session.cookies.on('changed')` 零订阅 |
+| Linux dialog `showHiddenFiles` 弃用(GTK 计划移除) | 零:零命中(macOS/Windows 仍支持) |
+| **macOS ASAR Integrity digest**(Notable,非 breaking):**opt-in**——需 `asar integrity-digest on` + 重签名才启用 | **零影响,用户指定写明:我们未启用 ASAR Integrity(未配 `asarIntegrity`),且未配任何签名 → 该功能对我们不生效,零行为变化**。将来若配签名+启用 Integrity,macOS 包需跑 `@electron/asar` v4.1.0+ 的 digest 命令并重签 |
+| E38 EOL(支持策略) | 与我们无关 |
+
+**42.0.0**(Chromium 148.0.7778.96 / Node 24.15.0 / V8 14.8)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| macOS 通知迁 `UNNotification` API:**应用需代码签名才能弹通知**,未签名 → `Notification` 发 `failed` 事件 | 零:我们**完全不使用** Electron 原生 `Notification`(main 进程 import 列表无它,`new Notification(` 零命中)。行为变化无落点 |
+| electron npm 包**不再 postinstall 下载二进制**,改首次跑 bin 时懒下载(另有 `install-electron` 脚本可手动触发) | 零代码暴露面,**装后约定变更**:E42+ 沙箱安装不再需要(也不支持)`ELECTRON_SKIP_BINARY_DOWNLOAD`,二进制天然不拉。仓库脚本零引用(仅历史文档提及),ADR 失败模式表 #10 已更新 |
+| OSR 默认 deviceScaleFactor 改 1.0(原用主屏 dsf) | 零:offscreen/`deviceScaleFactor` 零命中(未用 OSR) |
+| `Session.clearStorageData({quotas})` 的 `quotas` 对象移除(上游 Chromium 移除) | 零:`clearStorageData`/`clearData` 零命中 |
+| `ELECTRON_SKIP_BINARY_DOWNLOAD` env 移除 | 同上条,仅沙箱装约定,仓库脚本零引用 |
+
+**Node 代际项**(41=24.14.0 LTS,42=24.15.0 LTS;均为 **minor 升,非跨代**;24.0.0 的 breaking 已在第四片核完):24.14 notable 全 SEMVER-MINOR(trackPromises/`http.setGlobalProxyFromEnv`/`fs.watch ignore`/sqlite defensive mode 等,零接触);24.15 notable 全 minor(`require(esm)` **标稳定**=状态变化非行为变化,`Duplex.toWeb()` 类型选项改名=类型级未用,http2 `http1Options` 等)。→ **零暴露面**。
+
+**Chromium 145–148 继承项**(官方 release notes)— 逐条对照:
+
+| 移除/弃用 | 我们的暴露面 |
+|---|---|
+| 145:macOS 废弃虚拟相机支持移除 | 零(无摄像头 API) |
+| 145:BMP 内嵌 JPEG/PNG 扩展移除 | 零(无 BMP 处理;guest 网页极端用例归真机观测) |
+| 145:默认 User-Agent 字符串精简 | 零影响——我们自建 UA 清洗(main.ts 第 17 步):对默认 UA 做**正则去 token**(Electron/<版本>+产品名),对输入 token 构成不敏感 |
+| 147:Inline XSLT(为 SVG 生成)移除 | 零:143 已核 XSLT 零命中 |
+| 146 / 148 | 官方 release notes **无 Deprecations and removals 节** |
+
+→ **41/42 两 major 均零代码暴露面**(Electron 级 / Node minor / Chromium 继承三条线各自逐条核完)。
+
+**结果**:装后版本 = **42.11.8**(40.10.6 → 42.11.8;lock 变更**仅 electron 一项版本 + 声明**,electron 子树内部 meta 随版本走,是本系列最干净的一片);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=42.11.8/声明 ^42/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 40.10.6→红在装后核对;M2 声明回退 ^40.10.6→红在声明核对);全量 verify **RC=0**(418s,359 真实请求,logic 56/0)。前端/`browser/` 零改动,webview 未碰。
+
+**盖不到的照旧 + 真机关注点**:Chromium 144→148 跨四个 minor 的真机 webview 渲染探针;打包/Windows 照旧。两条**平台行为项单列**(零代码):macOS 用户若日后配签名,通知 API 已换轨(我们不用通知,无感);Linux Wayland frameless 窗口多了 GTK 阴影/扩展 resize 边界(#49885,我们是 `frame:true` 主窗口,预期无感,观测项)。
+
+**下一片**:42→43/44(官方 blog 摘要:43=C150/Node 24.17,44=C152/Node 24.21=当前稳定;动手前抓完整 release notes,同三线核对法,43/44 均零则合并)。
+
+### 第六片:42.11.8 → 44.4.5,合并 43–44 两个 major,爬到最新稳定(2026-09-26)
+
+**合并依据(用户口径:「43/44 同理。目标:爬完 44(最新稳定)」)**:43/44 官方 breaking 清单(官方 release notes)+ Node 24.17/24.18 + Chromium 149–152 继承项逐条核实,均**零代码暴露面** → 合一片,升 **44.4.5**(= releases.electronjs.org 当前 stable,升级路线 33→44 到此爬完)。
+
+**43.0.0**(Chromium 150.0.7871.46 / Node 24.17.0 / V8 15.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| 文件下载默认落用户 **Downloads 目录**(原默认行为变化) | **零**——我们挂 `ses.on('will-download')`(main.ts:155)且**恒 `item.setSavePath()` 到项目下载目录**(`projectDownloadDir(projectId)`),默认值永不生效 |
+| `nativeImage` 带色档图像像素归一化 SRGB | 零:`nativeImage` 全仓零命中(不用原生图像 API) |
+| Linux frameless 窗口默认圆角(`roundedCorners:false` 可关) | 零:主窗口 `frame` 取默认 **true**(main.ts:285 无 `frame:false`),非 frameless,不适用 |
+| Linux `dialog` 的 `showHiddenFiles` **移除**(41 弃用→43 落地) | 零:41 片已核零命中 |
+
+**44.0.0**(Chromium 152.0.7977.54 / Node 24.18.1 / V8 15.2)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| **macOS 12 (Monterey) 停止支持**(E44+ 要求 macOS 13+) | 平台支持项,零代码。⚠️ **分发策略事项,与 E38 的 macOS 11 同类**:macOS 12 用户需停留在 E43 版本线;零代码不触发拆片 |
+| `net.request`/`net.fetch` 新增 `select-client-certificate` 事件(请求客户端证书的服务器不再直接失败) | 零:桌面 electron 全文件 import 一览(app/BrowserWindow/dialog/ipcMain/shell/webContents/contextBridge/ipcRenderer)**无 `net` 模块** |
+| `net.request` 对 `Sec-Fetch-Dest: document/frame/iframe/fencedframe` 且无 `Sec-Fetch-Mode: navigate` 的请求拒绝 | 零:同上,`net` 模块零使用 |
+| ANGLE 静态链接,不再随包 `libEGL`/`libGLESv2` | 打包内部变化,零代码、无自定义 extraResources 依赖这两个库 |
+| 32-bit 构建移除(Windows ia32 / Linux armv7l) | 分发项:我们 x64(arm64 亦保留),零代码 |
+| `clipboard` 对齐 W3C,**不再暴露给 renderer** | 零:40 片(弃用阶段)已核全仓零命中 |
+| `loginItemSettings` 的 `openAsHidden`/`wasOpenedAsHidden`/`restoreState` 移除 | 零:`setLoginItemSettings`/`getLoginItemSettings` 零命中 |
+| Linux **Unity 桌面环境**支持移除 | 平台环境项(legacy Unity,非 Ubuntu 默认),零代码 |
+
+**Node 代际项**(43=24.17.0,44=24.18.1;均为 minor):24.17.0 = **安全发布**(11 个 CVE 修复:tls hostname 归一化/WebCrypto 输出长度/dns NUL 字节等,全修复向,对我们是正面收益——server TLS/fetch 路径同享);24.18.0 notable 全 minor 加性(根证书 NSS 3.123.1/`Buffer.poolSize` 64KiB/crypto 强化/WebCrypto 加固)。→ **零暴露面**。
+
+**Chromium 149–152 继承项**(官方 release notes)— 逐条对照:
+
+| 移除/弃用 | 我们的暴露面 |
+|---|---|
+| 149 | 官方 release notes **无 Deprecations and removals 节** |
+| 150 | 官方原话:**「There are no deprecations or removals in this release.」** |
+| 151:macOS 12 支持移除 | 平台项,与 E44 breaking 同源,已上表 |
+| 151:FontFaceSet IDL 移除 `[LegacyNoInterfaceObject]` | 零(不用 FontFaceSet legacy 接口) |
+| 152:Private Aggregation API 移除 | 零(144 起已核) |
+
+→ **43/44 两 major 均零代码暴露面**(Electron 级 / Node minor / Chromium 继承三条线各自逐条核完)。
+
+**结果**:装后版本 = **44.4.5**(42.11.8 → 44.4.5;lock 变更**仅 electron 一项版本 + 声明**);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=44.4.5/声明 ^44/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 42.11.8→红在装后核对;M2 声明回退 ^42.11.8→红在声明核对);全量 verify **RC=0**(427s,359 真实请求,logic 56/0)。前端/`browser/` 零改动,webview 未碰。
+
+**盖不到的照旧 + 真机关注点**:Chromium 148→152 的真机 webview 渲染探针(本系列累计 33→44 共 11 个 major,真机回归是最后关口);打包/Windows 照旧。两条**平台支持项累计单列**(零代码,分发策略):E38 起 macOS 11 停支持、**E44 起 macOS 12 停支持**——macOS 12 用户需停 E43 线;Linux Unity 桌面环境(legacy)E44 起不支持。
+
+**升级路线状态**:**33→44 爬完,= 最新稳定(44.4.5)**。后续维护 = 跟官方后续 major 滚动升(同一套验收+反证+全量 verify 流程,verify 脚本 `TARGET_MAJOR` 参数化可复用);webview→WebContentsView 迁移另立 ADR(不碰)。
 
 ## 来源(纪律 #4,2026-09-26 抓取)
 
 - browser-use:https://github.com/browser-use/browser-use(README/AGENTS.md;LICENSE 原文=MIT;116k★,最后提交 2026-09-15)、https://docs.browser-use.com/open-source/browser-use-cli(CDP 连接:`BU_CDP_URL`/`cdp_url`)
 - Stagehand:https://github.com/browserbase/stagehand(LICENSE 原文=MIT;25.4k★,最后提交 2026-09-25)、https://docs.stagehand.dev/v4/configuration/browser(`localBrowser.connect({cdpUrl})` 需已暴露 DevTools endpoint)、PR #3018 / #2542(CDP 连接工程实践)
 - Nanobrowser:https://github.com/nanobrowser/nanobrowser(Chrome 扩展、Apache-2.0、13.8k★、仓库最后更新 2026-08-18、50 open issues)
-- Electron:https://releases.electronjs.org/(44.4.5/43.7.5/42.11.8 及 Chromium/Node 对应表)、v34.0.0 与 v35.0.0 release notes(breaking 清单)、v37.0.0/v38.0.0 release notes(webview 修复记录、35 EOL 通知)、https://www.electronjs.org/blog(40/41/42/43/44 发布与 ASAR Integrity@39)、https://www.electronjs.org/docs/latest/api/webview-tag(webview 不推荐警告)、browser-view 文档(BrowserView deprecated)
+- Electron:https://releases.electronjs.org/(44.4.5/43.7.5/42.11.8 及 Chromium/Node 对应表)、**v34.0.0–v44.0.0 全部 11 个 release notes**(breaking 清单,2026-09-26 逐条复核)、官方 blog electron-38-0 / electron-39-0 / electron-40-0 / electron-41-0(Chromium 继承 breaking:macOS 11 移除 / OZONE 默认 auto / plugin-crashed 移除 / routingId 弃用;--host-rules 弃用 / window.open 恒可缩放 / desktopCapturer plist / OSR paint 结构;renderer clipboard 弃用 / dSYM tar.xz;41:PDF OOPIF / cookie changed cause / showHiddenFiles 弃用 / ASAR Integrity digest opt-in)、https://www.electronjs.org/blog(42/43/44 发布)、https://www.electronjs.org/docs/latest/api/webview-tag(webview 不推荐警告)、browser-view 文档(BrowserView deprecated)
+- Node 24 代际项:https://nodejs.org/en/blog/release/v24.0.0(undici 7 / require(esm) 默认 / `url.parse` 弃用 / `tls.createSecurePair` 移除 / Zlib 无 `new` 弃用 / `spawn`+`shell:true` 禁 args / AsyncLocalStorage 默认)、https://github.com/nodejs/node/pull/57199(shell:true 禁 args 的精确语义)、https://nodejs.org/en/blog/release/v24.14.0 / v24.15.0(minor notable 全加性,require(esm) 24.15 标稳定)、v24.17.0(**安全发布**,11 CVE 修复)/ v24.18.0(minor 加性,根证书 NSS 3.123.1)
+- Chromium 143–152:https://developer.chrome.com/release-notes/143 / 144 / 145 / 146 / 147 / 148 / 149 / 150 / 151 / 152(移除项:Private Aggregation / Shared Storage / Protected Audience / XML 外部实体;XSLT 弃用→147 Inline XSLT 移除 / Intl.Locale getters / FedCM 两项;145 macOS 虚拟相机 / BMP 内嵌扩展移除;146/148/149 无移除节;**150 官方明示无弃用/移除**;151 macOS 12 移除 / FontFaceSet IDL;152 Private Aggregation 移除)
 - 库内:`docs/智能体协同-总计划.md`(Electron 升级排阶段 3)、`apps/desktop/electron/driver.ts`(自建 CDP 驱动)、`apps/desktop/electron/main.ts:306`(`webviewTag: true`)、`apps/desktop/package.json`(electron `^33.2.1`、无原生依赖)

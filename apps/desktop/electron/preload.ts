@@ -90,6 +90,20 @@ const bridge: WorkbenchBridge = {
    */
   browserThrottle: (webContentsId: number, throttle: boolean) =>
     ipcRenderer.invoke('workbench:browser:throttle', webContentsId, throttle),
+  /**
+   * ADR-0002：页宿主族（`<webview>` → 主进程托管的 WebContentsView）。
+   * 标题/地址变化走既有的 `on('pageinfo')`（payload 是 { wcId, title?, url? } 的 JSON）。
+   */
+  browserViewCreate: (req: { tabKey: number; projectId: number | null; url: string }) =>
+    ipcRenderer.invoke('workbench:browser:view-create', req),
+  browserViewRect: (req: { tabKey: number; rect: { x: number; y: number; width: number; height: number }; visible: boolean }) => {
+    ipcRenderer.invoke('workbench:browser:view-rect', req);
+  },
+  browserViewOrder: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-order', tabKey),
+  browserViewNavigate: (req: { tabKey: number; url: string }) =>
+    ipcRenderer.invoke('workbench:browser:view-navigate', req),
+  browserViewFocus: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-focus', tabKey),
+  browserViewClose: (tabKey: number) => ipcRenderer.invoke('workbench:browser:view-close', tabKey),
   agentAnswer: (text: string, targetWebContentsId?: number) =>
     ipcRenderer.invoke('workbench:agent:answer', text, targetWebContentsId),
 
@@ -113,7 +127,7 @@ const bridge: WorkbenchBridge = {
   /**
    * ★ 项目列表同步：拿到 `/projects` 结果后推给主进程，供**分区闸**判定归属。
    *
-   * 主进程的 `will-attach-webview` 是同步事件（没机会 await 一次 HTTP），
+   * 分区闸（view-host 的 create 里）要当场判定项目归属（没机会 await 一次 HTTP），
    * 所以只能由渲染层把"这个账号有哪些项目"显式推过去。
    * 传空数组表示"确实没有项目"，与"还没同步过"是两种状态。
    */
@@ -124,7 +138,7 @@ const bridge: WorkbenchBridge = {
    * ★ 主进程拦下了一个分区不合法 / 跨账号的内嵌页 —— 渲染层据此把那张页标成失败，
    * 而不是让它变成一张永远空白的卡片（用户会以为"网页坏了"）。
    */
-  onWebviewBlocked: (cb: (info: { partition: string; reason: string }) => void) => {
+  onBrowserBlocked: (cb: (info: { partition: string; reason: string }) => void) => {
     const handler = (_e: unknown, payload: string) => {
       try {
         cb(JSON.parse(payload) as { partition: string; reason: string });
@@ -132,8 +146,8 @@ const bridge: WorkbenchBridge = {
         /* 坏 payload 忽略，不让它把渲染层带崩 */
       }
     };
-    ipcRenderer.on('workbench:webview:blocked', handler);
-    return () => ipcRenderer.off('workbench:webview:blocked', handler);
+    ipcRenderer.on('workbench:browser:blocked', handler);
+    return () => ipcRenderer.off('workbench:browser:blocked', handler);
   },
 
   // ---- 第 22 步：可调配置（并发数 / 多实例上限）。权威副本在主进程 userData 下的 JSON ----

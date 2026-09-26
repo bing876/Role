@@ -11,7 +11,7 @@
  *   sites.ts                「打开百度」→ URL
  *   intent.ts               「在这张页面上做事 / 停 / 继续」的判定
  *   useBrowserWorkspace.ts  按智能体分桶的 tab 状态 + 开/关/切 + 驾驶接口（无上限）
- *   BrowserPanel.tsx        中栏那块 UI（tab + URL 栏 + webview 宿主）
+ *   BrowserPanel.tsx        中栏那块 UI（tab + URL 栏 + 页宿主占位 div；真页面在主进程 WebContentsView 里，见 ADR-0002）
  *   styles.css              这块 UI 的样式（第 19 步只改这里）
  *
  * Phase 3 的两层粒度别混：

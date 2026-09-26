@@ -93,25 +93,33 @@ async function main() {
   console.log('\n[C] 应用层有没有闸门拦住"渲染层指定任意 partition"');
   const mainSrc = read(MAIN_TS);
   /**
-   * ★ 这一节在 2026-09-20 之后**反了过来**，这是有意的，不要改回去：
+   * ★ 这一节在 2026-09-20 之后**反了过来**，2026-09-26（ADR-0002 第二片）又**换了锚点**，
+   *   这两次都是有意行为，不要改回去：
    *   修复前它断言"主进程**没有** will-attach-webview"（那是漏洞的成立条件之一）；
-   *   修复后主进程已经注册了这道闸，所以现在断言的是"**有**"。
+   *   修复后主进程已注册这道闸，断言改成"**有**"；
+   *   宿主迁 WebContentsView 后 will-attach 随 webviewTag 退场，闸挪到建页口（view-host
+   *   create，同一判定函数），断言跟着锚点走："**建页口挂了闸 + 旧挂点已移除**"。
    *   探针的职责是**如实描述当前代码**，不是永久保留一条当时的结论 ——
    *   留着一条明知已不成立的红灯，只会让后来人以为环境坏了。
    *
    *   (A)(B) 两节仍然有效：它们说的是 Electron **本身**的机制
    *   （分区之间确实隔离、`session.fromPartition` 无访问控制），那是不会变的底座。
    */
-  chk(/\.on\(\s*'will-attach-webview'/.test(mainSrc),
-      '★ 主进程**已注册** will-attach-webview 分区闸（修复后）',
-      '没注册的话渲染层写什么分区就用什么分区');
+  // ADR-0002 第二片：宿主换成 WebContentsView 后 will-attach-webview 随 webviewTag 退场，
+  // 闸跟着挪到建页口（view-host 的 create，同一判定函数）。探针断言的是"闸还活着"，
+  // 锚点必须跟着生产码走 —— 断旧挂点只会让明知已不成立的红灯吓人。
+  const viewHostSrc = read(path.join(REPO, 'apps', 'desktop', 'electron', 'view-host.ts'));
+  chk(/deps!\.decidePartition\s*\(\s*raw\s*\)/.test(viewHostSrc),
+      '★ 建页口（view-host create）**已挂**分区闸（第二片后），没有它渲染层报什么 projectId 就信什么');
+  chk(!/\.on\(\s*'will-attach-webview'/.test(mainSrc),
+      '旧挂点 will-attach-webview 已随 webviewTag 退场（防两套挂点各说各话）');
   chk(/decideWebviewPartition/.test(mainSrc),
       '分区闸用的是可单独验证的纯判定函数');
   chk(/PROJECT_PARTITION_RE\.exec\(storage\)/.test(mainSrc),
       '主进程另外还用正则**读**分区名（下载归属用）');
-  const panel = read(BROWSER_PANEL);
-  chk(/partition=\{partitionFor\(t\.projectId\)\}/.test(panel),
-      'partition 仍由渲染层在 <webview> 上指定（所以主进程那道闸是必需的）');
+  const workspace = read(path.join(REPO, 'apps', 'desktop', 'src', 'browser', 'useBrowserWorkspace.ts'));
+  chk(/browserViewCreate\?\.\(\{\s*tabKey:\s*t\.id,\s*projectId:\s*t\.projectId/.test(workspace),
+      '页宿主由建页口创建、projectId 仍由渲染层声明（所以主进程那道闸是必需的）');
 
   console.log('\n' + '='.repeat(70));
   console.log('结果：' + total + ' 条断言，' + fails.length + ' 条失败');

@@ -830,7 +830,7 @@ export default function App() {
    * 进入某个项目：先把「新项目 id」和「它的名单」**一次性**写进 state，再补拉历史 / 项目记忆 /
    * 会话状态 / 资料列表。这样中间不会出现「项目已经换了、名单还是上一个项目的」那一帧。
    *
-   * **绝不碰浏览器**：所有智能体、所有页的 webview 一直挂着（第 20 步的规矩），
+   * **绝不碰浏览器**：所有智能体、所有页的页宿主一直挂着（第 20 步的规矩，ADR-0002 起即 view-host 视图），
    * 项目 A 里正在跑的那一路驾驶切到 B 之后照旧推进 —— 这是本子阶段最关键的一条验收。
    */
   const enterProject = async (id: number): Promise<void> => {
@@ -888,7 +888,7 @@ export default function App() {
     curAgentRef.current = agent.id; // 立刻生效，免得同一 tick 里的回调写错桶
     setCurAgentId(agent.id);
     // 第 20 步：切智能体 = 换一套浏览器（tab / 当前页 / cookie 都按智能体分开），
-    // 但**只换「哪一桶可见」**——所有页的 webview 一直挂着不卸载，
+    // 但**只换「哪一桶可见」**——所有页的页宿主一直挂着不卸载，
     // 所以切回来页面和滚动都还在，原来在跑的那几路驾驶也不会断。
     setProjMem([]);
     setChatNote('');
@@ -1236,7 +1236,7 @@ export default function App() {
   /**
    * 浏览器相关的**全部状态与动作**都在 apps/desktop/src/browser/ 里，这里只把它挂上：
    *   - 按智能体分桶的 tab 状态、开页/关页、同站复用、驾驶接口 → browser/useBrowserWorkspace.ts
-   *   - URL 栏 / webview 宿主 / 桌面侧协议闸 → browser/BrowserPanel.tsx、browser/url.ts
+   *   - URL 栏 / 页宿主（view-host 视图落位）/ 桌面侧协议闸 → browser/BrowserPanel.tsx、browser/url.ts
    *   - 「打开百度」→ URL、「在这张页面上做事」/「停」→ browser/sites.ts、browser/intent.ts
    *
    * currentAgentId 是**响应式**的：切智能体就换「哪一桶可见」（页本身一张都不卸载，

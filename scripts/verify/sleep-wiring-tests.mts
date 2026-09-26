@@ -67,17 +67,17 @@ log('=== ② 状态真的落进 tab（界面才看得到）===');
 }
 
 log('');
-log('=== ③ ★★ 深休眠真的卸载 <webview>（否则内存根本没省）===');
+log('=== ③ ★★ 深休眠真的卸载页宿主（ADR-0002：占位 div + 原生视图，否则内存根本没省）===');
 {
   const p = stripComments(panel);
   check(
-    '★★ 深休眠走占位卡分支，不渲染 webview',
+    '★★ 深休眠走占位卡分支，不渲染宿主',
     /deepSleeping[\s\S]{0,120}return\s*\(/.test(p) && /browserPanel__slept/.test(p),
   );
   check(
-    '★ 占位卡在 webview 之前 return（顺序反了就永远卸载不掉）',
-    p.indexOf('deepSleeping') > 0 && p.indexOf('deepSleeping') < p.indexOf('<webview'),
-    `deepSleeping@${p.indexOf('deepSleeping')} <webview@${p.indexOf('<webview')}`,
+    '★ 占位卡在宿主 div 之前 return（顺序反了就永远卸载不掉）',
+    p.indexOf('deepSleeping') > 0 && p.indexOf('deepSleeping') < p.indexOf('bindRef(t.id, el)'),
+    `deepSleeping@${p.indexOf('deepSleeping')} hostdiv@${p.indexOf('bindRef(t.id, el)')}`,
   );
   check(
     '★★ 只卸载 deep，**不卸载 shallow**（浅休眠的意义就是页还活着）',
@@ -137,7 +137,8 @@ log('=== ⑥ 唤醒路径完整（切 tab 自动唤醒 = Chrome 行为）===');
 {
   const w = stripComments(ws);
   check('★ activate 里判断了休眠并唤醒', /activate[\s\S]{0,600}if\s*\(t\.sleep\)/.test(w));
-  check('★ 唤醒后**重新计算**元素再聚焦（深休眠那张之前根本没挂载）', /wakeTab[\s\S]{0,300}webviewRefs\.current\[tabId\][\s\S]{0,80}focus/.test(w));
+  // ADR-0002：宿主换原生视图后没有元素可 focus —— 唤醒后**延迟**走 view-focus（深休眠那张要等宿主重建）
+  check('★ 唤醒后**延迟**再给焦点（深休眠那张之前根本没挂载）', /wakeTab[\s\S]{0,300}browserViewFocus/.test(w));
   check('手工唤醒有宽限期（否则刚醒又被判睡、图标会闪）', /wakeGraceRef/.test(w) && /WAKE_GRACE_MS/.test(w));
   // 参数形态是 `const wakeTab = (tabId: number, manual = true) => ...`，
   // 中间有 ` = `，所以不能写成紧邻的 `wakeTab\s*\(`（第一版就是这么写错的）。
@@ -158,7 +159,8 @@ log('=== ⑦ 其余细节 ===');
   check('占位卡样式是**不透明**的（底下已经没页面了）', /\.browserPanel__slept\s*\{[\s\S]{0,300}background:\s*#f/.test(css));
   check('占位卡给别的智能体时不露脸（与 --off 同语义）', /\.browserPanel__slept--off/.test(css));
   // 深休眠唤醒后要回到"最后在的那个地址"，不能退回开页时的首页
-  check('★ 唤醒后按当前 url 恢复（不是退回 bootUrl，否则丢掉会话中的导航）', /isStartPage\(t\.url\)\s*\?\s*t\.bootUrl\s*:\s*t\.url|t\.url\s*&&\s*t\.url !== t\.bootUrl/.test(p));
+  // ADR-0002：src 的口径从 BrowserPanel 的 <webview> 属性搬进了 workspace 的 hostMounted（create 的 url）
+  check('★ 唤醒后按当前 url 恢复（不是退回 bootUrl，否则丢掉会话中的导航）', /t\.url\s*&&\s*t\.url !== t\.bootUrl && !isStartPage\(t\.url\)\s*\?\s*t\.url\s*:\s*t\.bootUrl/.test(ws));
 }
 
 log('');

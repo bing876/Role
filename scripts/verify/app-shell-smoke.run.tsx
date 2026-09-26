@@ -6,20 +6,26 @@
  *
  * 这一层要挡住的是**结构性事故**，不是像素：M1'–M8' 会把 3714 行的 App.tsx 拆成
  * 外壳 + 7 个 feature，任何一次「顺手加个 wrapper」「把面板挪进条件渲染」都可能把
- * `<webview>` 从它原来的父节点上摘下来 —— 而 `browser/` 里的驾驶坐标全部来自
- * 页内 `getBoundingClientRect`，**元素一被卸载重建，正在跑的那张页当场没了、点击坐标全废**
+ * **页宿主**从它原来的父节点上摘下来 —— 而 `browser/` 里的驾驶坐标全部来自
+ * 页内 `getBoundingClientRect`，**宿主一被卸载重建，正在跑的那张页当场没了、点击坐标全废**
  * （收尾 7 的 `.browserLayer--bg` 注释与 `panel-visibility-coupling-probe.py` 都在守这条）。
  *
  * 所以本脚本用 **jsdom 挂载整个 `<App/>`**（不是抄一份组件、不是只渲染 BrowserPanel），
  * 走**真实路径**把一张页开出来（主进程 `open` 事件 → `browser.openFromMain` → `openUrl`），
  * 然后钉两件事：
- *   ① **祖先链 golden**：`<webview>` 到 `html` 的每一层 `tag.className` 逐字节一致；
+ *   ① **祖先链 golden**：页宿主（`.browserPanel__view`）到 `html` 的每一层 `tag.className` 逐字节一致；
  *   ② **节点身份**：切换可见度档位 / 切换浏览器视图 / 切换智能体之后，
  *      **还是同一个 DOM 元素对象**（不是「长得一样的新元素」）。
  *
+ * ADR-0002（页宿主 `<webview>` → 主进程托管的 WebContentsView）之后，本网额外钉：
+ *   ③ **宿主生命周期**：开页 → create 被调（projectId/url 对）；切后台/隐藏 →
+ *      只发 `visible:false`，**绝不调 close**（隐藏≠卸载）；关光所有页 → close 被调、宿主消失；
+ *   ④ **几何通道**：`view-rect` 有发送（含 embed 的 clip 收缩口径）；`pageinfo` 事件
+ *      能把标题/地址带回标签（宿主换原生视图后没有 DOM 元素事件了）。
+ *
  * ⚠️ 硬规则的准确表述（见 批次M 侦查报告 §4.2）：**除了三条有意路径**——
  *   ① `allTabs` 归零（关光所有页）、② 该页进入**深休眠**、③ `key={t.id}` 变化——
- *    之外，祖先链与节点身份必须逐字节不变。**写成「webview 永远不卸载」是错的**，
+ *    之外，祖先链与节点身份必须逐字节不变。**写成「宿主永远不卸载」是错的**，
  *    按那种写法测会在这三条上假红。本脚本对路径 ① 是**正向断言**（关光页就必须卸载）。
  *
  * 用法（一般由 npm script 调）：
@@ -102,6 +108,17 @@ if (!(dom.window as unknown as { matchMedia?: unknown }).matchMedia) {
 // ---------------------------------------------------------------------------
 const bridgeCalls: string[] = [];
 const handlers = new Map<string, (payload?: unknown) => void>();
+/**
+ * ADR-0002：页宿主族（`<webview>` → 主进程托管的 WebContentsView）的桩 ——
+ * create 回**真 wcId**（计数），其余记调用。断言就查这几份流水。
+ */
+const viewCreateLog: { tabKey: number; projectId: number | null; url: string; wcId: number }[] = [];
+const viewRectLog: { tabKey: number; rect: { x: number; y: number; width: number; height: number }; visible: boolean }[] = [];
+const viewOrderLog: number[] = [];
+const viewCloseLog: number[] = [];
+const viewNavigateLog: { tabKey: number; url: string }[] = [];
+const viewFocusLog: number[] = [];
+let wcIdSeq = 0;
 const bridge = new Proxy(
   {
     isElectron: false,
@@ -135,6 +152,28 @@ const bridge = new Proxy(
     resourceSnapshot: async () => null,
     resourceInstances: async () => [],
     agentLanes: async () => [],
+    // ---- ADR-0002：页宿主族 —— 必须给**真值**（hostMounted 会 await create 的回执拿 wcId）----
+    browserViewCreate: (req: { tabKey: number; projectId: number | null; url: string }) => {
+      wcIdSeq += 1;
+      viewCreateLog.push({ ...req, wcId: wcIdSeq });
+      return Promise.resolve({ wcId: wcIdSeq });
+    },
+    browserViewRect: (req: { tabKey: number; rect: { x: number; y: number; width: number; height: number }; visible: boolean }) => {
+      viewRectLog.push(req);
+    },
+    browserViewOrder: (tabKey: number) => {
+      viewOrderLog.push(tabKey);
+    },
+    browserViewNavigate: (req: { tabKey: number; url: string }) => {
+      viewNavigateLog.push(req);
+      return Promise.resolve({ ok: true });
+    },
+    browserViewFocus: (tabKey: number) => {
+      viewFocusLog.push(tabKey);
+    },
+    browserViewClose: (tabKey: number) => {
+      viewCloseLog.push(tabKey);
+    },
     /** 主进程 → 渲染层的唯一订阅口（App 用 bridge.on('open' | 'agent' | 'settings' …)） */
     on: (channel: string, handler: (payload?: unknown) => void) => {
       handlers.set(channel, handler);
@@ -266,7 +305,7 @@ const qa = (sel: string): Element[] => Array.from(doc.querySelectorAll(sel));
 // 5. 工具：祖先链 / 节点身份
 // ---------------------------------------------------------------------------
 /**
- * `<webview>` → 根：每一层的 `tag.块与元素名`。
+ * 页宿主（`.browserPanel__view`，ADR-0002 前是 `<webview>`）→ 根：每一层的 `tag.块与元素名`。
  *
  * ★ 为什么要剥掉 BEM **修饰符**（`--bg` / `--embed` / `--off` …）：
  *   它们正是「**只改看得见多少、不改跑不跑**」的实现方式 ——
@@ -319,7 +358,7 @@ await act(async () => {
 await flush();
 
 log('');
-log('=== M0 · 冒烟网：三列 + webview 宿主 + 祖先链/节点身份 ===');
+log('=== M0 · 冒烟网：三列 + 页宿主（.browserPanel__view）+ 祖先链/节点身份/宿主生命周期 ===');
 log('');
 
 log('--- ① 外壳三列 ---');
@@ -351,6 +390,9 @@ await check('还没有开页时，.browserLayer 不存在', () => {
 await check('桥上已经注册了 open / opentab 订阅（主进程开页的唯一入口）', () => {
   assert.ok(handlers.has('open'), '没有注册 open 处理函数');
   assert.ok(handlers.has('opentab'), '没有注册 opentab 处理函数');
+});
+await check('ADR-0002：桥上已经注册了 pageinfo 订阅（宿主换原生视图后，标题/地址改由主进程推）', () => {
+  assert.ok(handlers.has('pageinfo'), '没有注册 pageinfo 处理函数（页标题/地址回不来）');
 });
 
 log('');
@@ -388,16 +430,53 @@ await check('BrowserPanel 与 ComputerVisibility 都在浏览器层里，且互�
     `两者不再是兄弟：panel 的父是 ${panel!.parentElement?.getAttribute('class')}，可见度组件的父是 ${vis!.parentElement?.getAttribute('class')}`,
   );
 });
-await check('webview 宿主（.browserPanel__stage）里真的有一个 <webview>', async () => {
-  await waitFor('<webview> 出现', () => q('webview') !== null);
-  const wv = q('webview') as Element;
+await check('页宿主（.browserPanel__stage 里）真的有一个 .browserPanel__view（ADR-0002 占位 div）', async () => {
+  await waitFor('.browserPanel__view 出现', () => q('.browserPanel__view') !== null);
+  const wv = q('.browserPanel__view') as Element;
   const stage = q('.browserPanel__stage') as Element;
-  assert.ok(stage.contains(wv), '<webview> 不在舞台里');
+  assert.ok(stage.contains(wv), '.browserPanel__view 不在舞台里');
+  assert.equal(wv.tagName, 'DIV', `宿主应该是占位 div，现在是 <${wv.tagName.toLowerCase()}>`);
+});
+await check('ADR-0002 ③：开页走了真 create（projectId + 当前 url 对得上，回真 wcId）', async () => {
+  await waitFor('view-create 被调', () => viewCreateLog.length >= 1);
+  const c = viewCreateLog[0];
+  assert.ok(Number.isInteger(c.tabKey) && c.tabKey >= 0, `create 的 tabKey 非法：${JSON.stringify(c)}`);
+  assert.equal(c.projectId, PROJECT.id, `create 的 projectId 不对（应是开页那一刻的项目 ${PROJECT.id}）：${JSON.stringify(c)}`);
+  assert.ok(c.url.startsWith('https://'), `create 的 url 不是 http(s)：${c.url}`);
+  assert.ok(Number.isInteger(c.wcId) && c.wcId >= 0, `create 没回真 wcId：${JSON.stringify(c)}`);
+});
+await check('ADR-0002 ④：几何通道通了（view-rect 有发送；后台开页 = 视图藏着但活着）', async () => {
+  const c = viewCreateLog[0];
+  await waitFor('当前页的 rect', () => viewRectLog.some((r) => r.tabKey === c.tabKey));
+  // 'open' 事件走 openFromMain —— **后台开页**（不拉用户进浏览器）：
+  // 层是 --hidden → 视图必须 visible=false，但**绝不销毁**（隐藏≠卸载，老红线的宿主侧版本）
+  const forTab = viewRectLog.filter((r) => r.tabKey === c.tabKey);
+  assert.ok(forTab.length >= 1, '当前页一张 rect 都没发');
+  assert.ok(!viewCloseLog.includes(c.tabKey), '后台开页却调了 view-close（视图被销毁了）');
+  const last = forTab[forTab.length - 1];
+  assert.equal(last.visible, false, `后台开页时视图不该露脸（visible=${last.visible}）—— 老语义：页在后台挂着`);
+});
+await check('ADR-0002 ④：pageinfo 事件能把标题带回标签（宿主换原生视图后没有 DOM 元素事件了）', async () => {
+  const c = viewCreateLog[0];
+  // create 回执落地后 hostMounted 会立刻报 owner —— 用它当「wcId 已登记」的证据，
+  // 否则 pageinfo 按 wcId 换 tabId 会落空（假红）
+  await waitFor('create 回执 + owner 登记', () => bridgeCalls.some((k) => k.startsWith('browserOwner(')));
+  const before = q('.browserTab__label')?.textContent ?? '';
+  let delivered = 0;
+  await act(async () => {
+    delivered = emitBridge('pageinfo', JSON.stringify({ wcId: c.wcId, title: '冒烟页标题' }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await flush(2);
+  assert.equal(delivered, 1, 'pageinfo 事件没有处理函数接住');
+  const after = q('.browserTab__label')?.textContent ?? '';
+  assert.ok(after.includes('冒烟页标题'), `标签没跟着 pageinfo 更新（before=${before} after=${after}）`);
 });
 
 log('');
 log('--- ④ 祖先链 golden（逐字节）---');
-const wvEl = q('webview') as Element;
+/** ADR-0002：宿主换占位 div 后，golden 首节点由 `webview.browserPanel__view` 变 `div.browserPanel__view`（有意变更，--update-golden 重画） */
+const wvEl = q('.browserPanel__view') as Element;
 const chainNow = ancestorChain(wvEl);
 log(`  当前链（由内到外）：${chainNow.join('  ←  ')}`);
 await check('祖先链与 golden 一致', () => {
@@ -409,7 +488,7 @@ await check('祖先链与 golden 一致', () => {
    */
   if (UPDATE_GOLDEN) {
     mkdirSync(dirname(GOLDEN), { recursive: true });
-    writeFileSync(GOLDEN, JSON.stringify({ note: 'M0 冒烟网：<webview> 的祖先链 golden。除三条有意卸载路径外必须逐字节不变。BEM 修饰符（--bg/--embed/--off）不算结构，已归一化。', chain: chainNow }, null, 2) + '\n', 'utf8');
+    writeFileSync(GOLDEN, JSON.stringify({ note: 'M0 冒烟网：页宿主（.browserPanel__view；ADR-0002 前是 <webview>，同 class 占位 div）的祖先链 golden。除三条有意卸载路径外必须逐字节不变。BEM 修饰符（--bg/--embed/--off）不算结构，已归一化。', chain: chainNow }, null, 2) + '\n', 'utf8');
     log(`    （已按 --update-golden 重写 golden：${rel}）`);
     return;
   }
@@ -424,14 +503,14 @@ const identity = markIdentity(wvEl);
 const baselineChain = ancestorChain(wvEl);
 const assertSameNode = (what: string): void => {
   /**
-   * ★ 用**元素对象本身**判断，不用 querySelector('webview')：
-   *   后者只会拿到文档里第一个 webview —— 期间若又开了一张新页（例如顶栏「🌐 浏览器」
+   * ★ 用**元素对象本身**判断，不用 querySelector('.browserPanel__view')：
+   *   后者只会拿到文档里第一个宿主 div —— 期间若又开了一张新页（例如顶栏「🌐 浏览器」
    *   在没有标签页时会顺手开一张），第一个可能就是别人了，那是**假红**。
    *   这里要的是：「我标记的那个元素，还在不在 DOM 里」。
    */
-  assert.ok(doc.contains(wvEl), `${what} 之后原来那个 <webview> 已经不在文档里（被卸载重建）`);
+  assert.ok(doc.contains(wvEl), `${what} 之后原来那个页宿主已经不在文档里（被卸载重建）`);
   const el = wvEl;
-  assert.equal(identityOf(el), identity, `${what} 之后 <webview> 换成了新元素（老元素被卸载重建）`);
+  assert.equal(identityOf(el), identity, `${what} 之后页宿主换成了新元素（老元素被卸载重建）`);
   const now = ancestorChain(el as Element);
   assert.ok(
     JSON.stringify(now) === JSON.stringify(baselineChain),
@@ -439,7 +518,7 @@ const assertSameNode = (what: string): void => {
   );
 };
 
-await check('切可见度档位（status → preview → takeover ×3）不换 webview 元素', async () => {
+await check('切可见度档位（status → preview → takeover ×3）不换宿主元素', async () => {
   const btns = qa('.computerVisibility__actions button');
   assert.equal(btns.length, 3, `档位按钮不是 3 个（${btns.length} 个）`);
   for (const b of btns) {
@@ -451,7 +530,7 @@ await check('切可见度档位（status → preview → takeover ×3）不换 w
     assertSameNode('切可见度档位');
   }
 });
-await check('切浏览器视图（全屏 ↔ 后台）不换 webview 元素', async () => {
+await check('切浏览器视图（全屏 ↔ 后台）不换宿主元素', async () => {
   /**
    * 先切回「有页的那个智能体」：顶栏「🌐 浏览器」在**当前智能体没有标签页**时会顺手
    * `openNewTab()`，那会往舞台上再挂一张页，让后面「关光所有页」那一段变得不干净。
@@ -489,7 +568,7 @@ await check('视图切换前后，.browserLayer 的 class 始终在文档化的�
   }
 });
 
-await check('切智能体（换一个人）不换 webview 元素', async () => {
+await check('切智能体（换一个人）不换宿主元素', async () => {
   const contacts = qa('aside.sidebar .contact-item');
   assert.ok(contacts.length >= 2, `左栏智能体不足 2 个（${contacts.length} 个）`);
   for (const c of contacts) {
@@ -514,8 +593,8 @@ await check('⑧-1 第四列可见时,左缘有拖动手柄', () => {
   assert.ok(q('.browserCol__resizer'), '第四列可见但 .browserCol__resizer 不在');
 });
 
-await check('⑧-2 向左连续拖宽、过阈值 → 覆盖形态（盖聊天、聊天列不让位、webview 同一元素）', async () => {
-  const before = q('webview') as Element;
+await check('⑧-2 向左连续拖宽、过阈值 → 覆盖形态（盖聊天、聊天列不让位、宿主同一元素）', async () => {
+  const before = q('.browserPanel__view') as Element;
   await act(async () => {
     firePointer(q('.browserCol__resizer'), 'pointerdown', 500);
     firePointer(q('.browserCol__resizer'), 'pointermove', 100); // 420 + 400 = 820 → 夹到 640 ≥ 阈值 480
@@ -527,11 +606,11 @@ await check('⑧-2 向左连续拖宽、过阈值 → 覆盖形态（盖聊天�
   assert.ok(cls.includes('browserLayer--overlay'), `拖过阈值应进覆盖形态：${cls}`);
   const appCls = (q('div.app') as Element).getAttribute('class') ?? '';
   assert.ok(!appCls.includes('app--col'), `覆盖形态下聊天列不该让位（应全宽被盖）：${appCls}`);
-  assert.ok(before === q('webview'), '拖宽把 <webview> 换成了新元素');
+  assert.ok(before === q('.browserPanel__view'), '拖宽把页宿主换成了新元素');
 });
 
 await check('⑧-3 向右收回（回阈值以下）→ 第四列形态,聊天列让位回来', async () => {
-  const before = q('webview') as Element;
+  const before = q('.browserPanel__view') as Element;
   await act(async () => {
     firePointer(q('.browserCol__resizer'), 'pointerdown', 100);
     firePointer(q('.browserCol__resizer'), 'pointermove', 400); // 640 - 300 = 340 ≥ MIN 320、< 阈值 480
@@ -543,10 +622,17 @@ await check('⑧-3 向右收回（回阈值以下）→ 第四列形态,聊天�
   assert.ok(!cls.includes('browserLayer--hidden'), `收回后应在第四列形态：${cls}`);
   const appCls = (q('div.app') as Element).getAttribute('class') ?? '';
   assert.ok(appCls.includes('app--col'), `第四列形态下聊天列应让位（app--col 缺失）：${appCls}`);
-  assert.ok(before === q('webview'), '收回把 <webview> 换成了新元素');
+  assert.ok(before === q('.browserPanel__view'), '收回把页宿主换成了新元素');
 });
 
-await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏≠卸载）;「🌐 启用」→ 列回来', async () => {
+await check('⑧-4 「💬 对话」→ 隐藏形态:页宿主仍挂着（隐藏≠卸载,且没调 view-close）;「🌐 启用」→ 列回来', async () => {
+  // ⑤ 的「切智能体」循环停在最后一位（卡布,没页）—— 先切回有页的小助，
+  // 否则「当前页该露脸」无从谈起（别家的页露脸才是串了）
+  await act(async () => {
+    click(qa('aside.sidebar .contact-item')[0], '切回有页的智能体');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
   const navBtns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
   await act(async () => {
     click(navBtns[0], '💬 对话');
@@ -555,8 +641,13 @@ await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏�
   await flush(2);
   const clsHidden = (q('.browserLayer') as Element).getAttribute('class') ?? '';
   assert.ok(clsHidden.includes('browserLayer--hidden'), `「💬 对话」后应进隐藏形态：${clsHidden}`);
-  const wv = q('webview') as Element;
-  assert.ok(doc.contains(wv), '隐藏形态下 <webview> 被卸载了（违反 隐藏≠卸载）');
+  const wv = q('.browserPanel__view') as Element;
+  assert.ok(doc.contains(wv), '隐藏形态下页宿主被卸载了（违反 隐藏≠卸载）');
+  // ADR-0002 F3：隐藏≠卸载的宿主侧证据 —— 没发 close，且最后一次 rect 是 visible=false（藏起来，不是销毁）
+  const c = viewCreateLog[0];
+  assert.ok(!viewCloseLog.includes(c.tabKey), `隐藏形态却调了 view-close（tabKey=${c.tabKey}）—— 隐藏不该销毁宿主`);
+  const lastRect = [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey);
+  assert.ok(lastRect && lastRect.visible === false, '隐藏形态下当前页的最后一次 rect 不是 visible=false（视图该藏起来）');
   await act(async () => {
     click(navBtns[1], '🌐 启用');
     await new Promise((r) => setTimeout(r, 0));
@@ -564,6 +655,10 @@ await check('⑧-4 「💬 对话」→ 隐藏形态:webview 仍挂着（隐藏�
   await flush(2);
   const clsOpen = (q('.browserLayer') as Element).getAttribute('class') ?? '';
   assert.ok(!clsOpen.includes('browserLayer--hidden'), `「🌐 启用」后列应打开：${clsOpen}`);
+  // ADR-0002 F1：列回来 → 当前页露脸（visible=true 的 rect 必须跟上，视图不能一直藏着）
+  await waitFor('启用后 visible=true 的 rect', () => viewRectLog.some((r) => r.tabKey === c.tabKey && r.visible === true), 8);
+  const lastOpen = [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey);
+  assert.ok(lastOpen && lastOpen.visible === true, '「🌐 启用」后当前页没有 visible=true 的 rect（视图没落位露脸）');
 });
 
 await check('⑧-5 触发①:点会话内链接（来源）→ 列从隐藏弹出（内嵌浏览器打开）', async () => {
@@ -764,7 +859,7 @@ await check('⑩-2 点 chip 真切换智能体（与第二列 active 行同步�
   assert.equal(selTitle, '小助', 'rail 选中态没跟着动');
 });
 
-await check('⑩-3 视图开关与旧顶栏同源:「启用」→ 第四列弹出;「对话」→ 隐藏(webview 不卸载)', async () => {
+await check('⑩-3 视图开关与旧顶栏同源:「启用」→ 第四列弹出;「对话」→ 隐藏(宿主不卸载)', async () => {
   const layerBefore = q('.browserLayer') as Element;
   assert.ok(layerBefore, '浏览器层不在(前置状态不对?)');
   await act(async () => {
@@ -1018,7 +1113,7 @@ await check('⑭-3 F2-③ 两槽在场:成功槽朴素 + 失败槽红;演示行�
 
 log('');
 log('--- ⑥ 路径 ①（有意卸载）：关光所有页 → 必须卸载 ---');
-await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失', async () => {
+await check('关掉最后一张页后，.browserLayer 与页宿主一起消失（ADR-0002：并调了 view-close）', async () => {
   // 批次 M-2:tab 可能分布在多个智能体名下（⑧ 在会话里点链接开的页属于当时的智能体），
   // 顶栏只列**当前**智能体的 tab → 轮转每个智能体把可见 tab 关光,直到层消失。
   const contacts = qa('aside.sidebar .contact-item');
@@ -1039,8 +1134,12 @@ await check('关掉最后一张页后，.browserLayer 与 <webview> 一起消失
       await flush(2);
     }
   }
-  await waitFor('浏览器层消失', () => q('.browserLayer') === null && q('webview') === null);
-  assert.ok(q('webview') === null, `<webview> 应该随最后一张页一起卸载（还有 ${qa('webview').length} 个）`);
+  await waitFor('浏览器层消失', () => q('.browserLayer') === null && q('.browserPanel__view') === null);
+  assert.ok(q('.browserPanel__view') === null, `页宿主应该随最后一张页一起卸载（还有 ${qa('.browserPanel__view').length} 个）`);
+  // 三条有意卸载路径里的路径①：关光所有页 = 每条页都走过 view-close（销毁原生宿主）
+  for (const c of viewCreateLog) {
+    assert.ok(viewCloseLog.includes(c.tabKey), `tabKey=${c.tabKey} 关掉了却没调 view-close（原生宿主泄漏）`);
+  }
 });
 
 log('');
