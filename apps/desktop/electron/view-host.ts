@@ -37,7 +37,7 @@ export const viewHostRegistry = new Set<number>();
 export interface ViewHostDeps {
   /** 主窗口（视图挂在它的 contentView 下） */
   window: () => BrowserWindow | null;
-  /** 分区闸（与 will-attach-webview 同一个判定函数，口径见 main.ts 里那道闸的注释） */
+  /** 分区闸（ADR-0002 第二片起唯一执行点；口径见 main.ts 分区闸注释） */
   decidePartition: (raw: string) => { partition: string; quarantined: boolean; reason?: string };
   /** 被闸改写/拦下时通知渲染层（那张页会落到兜底分区，页能开但没有任何项目登录态） */
   notifyBlocked: (info: { partition: string; reason?: string }) => void;

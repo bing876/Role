@@ -70,7 +70,7 @@ const isHttpUrl = (url: string): boolean => /^https?:\/\//i.test(url);
 /**
  * Phase 3：**登录态隔离粒度 = 项目**（同项目的多个智能体共用一套 cookie / localStorage）。
  *
- * 渲染层的 <webview> 用 `partition="persist:workbench-browser-project-<projectId>"`，
+ * 页宿主（view-host 建的 WebContentsView）的分区是 `persist:workbench-browser-project-<projectId>`，
  * Electron 会把这个分区落到 `<userData>/Partitions/<分区名>/` —— 这天然就是
  * 「每个项目在 userData 下有自己的子目录」（cookie / localStorage / 站点数据全在里面）。
  *
@@ -94,11 +94,11 @@ const downloadHooked = new Set<string>();
  * 只能由渲染层在页就绪时报一次（IPC `workbench:browser:owner`，见 preload 的 browserOwner()）。
  * 另外驾驶中的那几路还有 `lastAgentByWc` 兜底。
  */
-const webviewOwner = new Map<number, number>();
+const guestOwner = new Map<number, number>();
 
 /** 这次下载是哪个智能体触发的（拿不到就说拿不到，**绝不瞎猜成某一个**） */
 function ownerAgentOf(wcId: number): { agentId: number | null; source: string } {
-  const fromRenderer = webviewOwner.get(wcId);
+  const fromRenderer = guestOwner.get(wcId);
   if (typeof fromRenderer === 'number') return { agentId: fromRenderer, source: 'renderer' };
   const fromLane = lastAgentByWc.get(wcId);
   if (typeof fromLane === 'number') return { agentId: fromLane, source: 'lane' };
@@ -197,7 +197,7 @@ function hookProjectDownloads(contents: WebContents): void {
  *     甚至弹出 Windows 的「获取打开此链接的应用」系统框。
  */
 /**
- * guest（内嵌页）接线 —— webview 时期与 WebContentsView 时期**同一套**（ADR-0002 决定 8/失败表 F12）：
+ * guest（内嵌页）接线 —— 唯一接线路径：view-host 的 create 对 `view.webContents` 调这里（ADR-0002 F12：
  * 后台节流关 / 按项目下载 / owner 登记清理 / 弹窗收编 / 非 http(s) 协议闸 / 桌面 chrome 补丁 /
  * **pageinfo 推送**（宿主换原生视图后，标题/地址变化不再有 DOM 元素事件，由这里推给渲染层）。
  */
@@ -212,7 +212,7 @@ function wireBrowserGuest(contents: WebContents): void {
 
   // 页没了就把 owner 登记清掉，别让 wcId 被复用后认错人
   contents.once('destroyed', () => {
-    webviewOwner.delete(contents.id);
+    guestOwner.delete(contents.id);
   });
 
   /**
@@ -231,20 +231,20 @@ function wireBrowserGuest(contents: WebContents): void {
    *   openUrl(agentId, url)** 去开 —— 和用户点「＋」走的是同一条路，
    *   不新增机制、不碰 maxBrowserInstances 以外的任何规则。
    *
-   * `webviewOwner` 里记着这张 guest 是哪个智能体开的（渲染层在页就绪时报过），
+   * `guestOwner` 里记着这张 guest 是哪个智能体开的（渲染层在页就绪时报过），
    * 用它保证「A 的页里点出来的新 tab 仍然属于 A」，不会串到别的智能体。
    */
   contents.setWindowOpenHandler(({ url }) => {
     if (isHttpUrl(url)) {
-      const owner = webviewOwner.get(contents.id);
+      const owner = guestOwner.get(contents.id);
       const sourceWcId = contents.id;
-      console.log(`[webview] target=_blank / window.open → 新开一条 tab：${url}`);
+      console.log(`[guest] target=_blank / window.open → 新开一条 tab：${url}`);
       setImmediate(() => {
         // 推给渲染层：它会开一条新 tab（而不是把当前这张页导航走）
         sendToMainWindow('workbench:browser:opentab', JSON.stringify({ url, agentId: owner ?? null, sourceWcId }));
       });
     } else {
-      console.warn('[webview] 已拦下非 http(s) 的 window.open（不弹系统框、不新开窗口）：', url);
+      console.warn('[guest] 已拦下非 http(s) 的 window.open（不弹系统框、不新开窗口）：', url);
     }
     return { action: 'deny' };
   });
@@ -253,13 +253,13 @@ function wireBrowserGuest(contents: WebContents): void {
   contents.on('will-navigate', (event, url) => {
     if (isHttpUrl(url)) return;
     event.preventDefault();
-    console.warn('[webview] 已拦截非 http(s) 跳转，留在当前页：', url);
+    console.warn('[guest] 已拦截非 http(s) 跳转，留在当前页：', url);
   });
   // 3xx 重定向到自定义协议 → 同样取消
   contents.on('will-redirect', (event, url) => {
     if (isHttpUrl(url)) return;
     event.preventDefault();
-    console.warn('[webview] 已拦截非 http(s) 重定向，留在当前页：', url);
+    console.warn('[guest] 已拦截非 http(s) 重定向，留在当前页：', url);
   });
   // 子框架（iframe / 广告位）里的跳转也要拦，否则照样能唤起系统
   contents.on('will-frame-navigate', (details: unknown) => {
@@ -267,7 +267,7 @@ function wireBrowserGuest(contents: WebContents): void {
     const url = d?.url ?? '';
     if (!url || isHttpUrl(url)) return;
     d?.preventDefault?.();
-    console.warn('[webview] 已拦截子框架的非 http(s) 跳转：', url);
+    console.warn('[guest] 已拦截子框架的非 http(s) 跳转：', url);
   });
 
   /**
@@ -311,12 +311,10 @@ function wireBrowserGuest(contents: WebContents): void {
   contents.on('did-navigate-in-page', (_e, url) => pushPageInfo({ url }));
 }
 
-app.on('web-contents-created', (_event, contents) => {
-  // ADR-0002 回滚窗口内 webviewTag 仍开着：真出现 webview guest（旧路径 / 手动实验）照旧接上。
-  // 新的 WebContentsView guest 是 `webContents` 类型，不走这里 —— 由 view-host 的 create 显式接线。
-  if (contents.getType() !== 'webview') return;
-  wireBrowserGuest(contents);
-});
+/**
+ * ADR-0002 第二片：`web-contents-created` 的 webview 分支已随 `webviewTag` 退场。
+ * guest 接线现在只有一条路：view-host 的 create 对 `view.webContents` 显式调 `wireBrowserGuest`。
+ */
 
 function createMainWindow(): void {
   mainWindow = new BrowserWindow({
@@ -339,9 +337,9 @@ function createMainWindow(): void {
       // 额外：开启 Chromium 沙箱
       sandbox: true,
       webSecurity: true,
-      // 4. 允许渲染层使用 <webview> 内嵌真实网页（工作台浏览器区域）
-      webviewTag: true,
-      // 5. 禁用主窗口后台节流，最小化或遮挡时保持高频定时器与 IPC 响应
+      // 4. 禁用主窗口后台节流，最小化或遮挡时保持高频定时器与 IPC 响应
+      //（ADR-0002 第二片：`webviewTag` 已关 —— 页宿主是主进程托管的 WebContentsView，
+      //  渲染层的 DOM 里不再有内嵌 webview，这个开关连同它的回滚窗口一起退场。）
       backgroundThrottling: false,
     },
   });
@@ -372,55 +370,22 @@ function createMainWindow(): void {
   });
 
   /**
-   * ★★ 内嵌页的**分区闸**（这是唯一能钉死 `partition` 的地方）。
+   * ★★ 内嵌页的**分区闸**（ADR-0002 第二片起，唯一执行点在 `view-host.ts` 的 create 里）。
    *
-   * 背景（为什么需要它）：
-   *   渲染层的 `<webview partition="persist:workbench-browser-project-<projectId>">` 里
-   *   那个分区名**完全由渲染层决定**。Electron 的 `session.fromPartition(name)`
-   *   本身**没有任何访问控制** —— 知道名字就能拿到那个 session 里的全部 cookie。
-   *   而 `will-attach-webview` 是主进程**唯一**能在 guest 挂载前改写/拦下 webPreferences 的时机。
-   *   此前应用**没有**注册这个处理器（实测确认），所以渲染层写什么分区就用什么分区。
+   * 历史：webview 时期这道闸挂在 `will-attach-webview`（主进程唯一能在 guest 挂载前改写
+   * webPreferences 的时机）——渲染层写什么分区就用什么分区，知道名字就能拿到 session 里
+   * 全部 cookie，所以必须有闸。宿主换成 WebContentsView 后，`will-attach-webview` 随
+   * `webviewTag` 一起退场，**建页口收敛成唯一**：view-host 的 `viewHostCreate`。
+   * 渲染层现在只报 `projectId`，分区字符串由主进程拼并过闸（`decideWebviewPartition`，
+   * 口径与 will-attach 时期逐字一致：必须是自己名下项目的分区，越界改写 `-none` 兜底分区
+   * + 推 `workbench:browser:blocked`），渲染层被攻破也造不出自造分区名。
    *
-   * ⚠️ 这里**刻意不做"强制改写成当前项目"**（那是想当然的修法，会改坏已设计好的行为）：
-   *   `BrowserPanel.tsx` 明确约定「`t.projectId` 是**开页那一刻**定下的，
-   *   所以**切项目不会让已开的页换一套登录态**」——
-   *   页可以跨项目共存，把它们统一改写会让旧页突然换成另一套 cookie，等于把用户登出。
-   *
-   * 所以闸门口径是「**必须是这个用户自己的项目分区**」，而不是"必须是当前项目"：
-   *   - 形状必须是 `persist:workbench-browser-project-<正整数>`（或兜底的 `-none`）。
-   *     其它一律拦下 —— 包括**空分区**（那会落到默认 session，和主窗口共用一套 cookie）
-   *     和任意自造的名字（`persist:whatever`）。
-   *   - 项目号必须是**当前登录用户名下**的项目。这样渲染层即便被攻破，
-   *     也够不到"别的账号在这台机器上留下的分区"。
+   * ⚠️ 仍**刻意不做"强制改写成当前项目"**：`t.projectId` 是开页那一刻定下的，
+   * 切项目不换已开页的登录态（把它们统一改写 = 把用户登出）。
    *
    * 诚实说明（别把它当成一道墙）：**同一账号的多个项目之间，这道闸拦不住** ——
-   *   因为渲染层本来就合法地同时承载多个项目的标签页（见上面的 BrowserPanel 约定）。
-   *   分区在本产品里的定位是「**登录态隔离**」（一个项目登过的站点不带进另一个项目），
-   *   是**功能**不是安全边界。这道闸真正收掉的是"伸到自己的项目集合之外"那部分。
+   * 分区在本产品里的定位是「登录态隔离」（功能），不是安全边界。
    */
-  mainWindow.webContents.on('will-attach-webview', (_event, webPreferences) => {
-    // 显式禁用 webview 后台节流，确保内嵌页隐藏时 JS 定时器与渲染正常运行
-    webPreferences.backgroundThrottling = false;
-    const raw = typeof webPreferences.partition === 'string' ? webPreferences.partition : '';
-    /**
-     * ★ 处置方式：**改写到隔离的兜底分区**，而不是 `preventDefault()` 直接拦掉。
-     *
-     * 为什么不用 preventDefault：那会让这张页**根本没有 guest** ——
-     * 用户看到的是一张永远空白的卡片，而屏幕上没有任何解释，
-     * 正是我们一直在修的那种"静默失败"（用户会以为网页坏了）。
-     *
-     * 改写到 `...-none` 的效果：
-     *   - 页面照常能开、能看，只是**没有任何项目的登录态**（那是个独立空分区）；
-     *   - 攻击者拿到的是一个空 session，**什么也读不到** —— 安全性不打折；
-     *   - 正常用户看到的只是"这张页没登录"，比白屏好得多。
-     */
-    const d = decideWebviewPartition(raw, ownedProjectIds, projectsSyncedAt !== null);
-    if (d.quarantined) {
-      webPreferences.partition = d.partition;
-      console.warn(`[main] 内嵌页分区被改写为隔离分区：${d.reason}`);
-      sendToMainWindow('workbench:webview:blocked', JSON.stringify({ partition: raw, reason: d.reason }));
-    }
-  });
 
   if (isDev) {
     void mainWindow.loadURL(DEV_SERVER_URL!);
@@ -434,9 +399,9 @@ function createMainWindow(): void {
 // 内嵌浏览器区域（工作台浏览器）
 //
 // 注意：这里**不再创建任何 BrowserWindow**。
-// 网页由渲染层的 <webview partition="persist:workbench-browser-project-<projectId>"> 承载
+// 网页由主进程托管的 WebContentsView 承载（view-host.ts 建；ADR-0002）
 // （Phase 3：按项目分区 —— 同项目的智能体共用一套 cookie / 登录态，跨项目完全隔离），
-// 主进程只做一件事：把渲染进程发来的指令原样转发回去，由渲染层决定显示 / 隐藏 / 聚焦。
+// 渲染层只发指令，显示 / 隐藏 / 聚焦 / 几何由主进程按它报的 rect 落位。
 //
 // 这样做的原因：浏览器区域是主窗口界面的一部分（右侧那一栏），
 // 用独立窗口反而要多维护一套窗口生命周期（位置、还原、关闭、焦点竞争）。
@@ -473,7 +438,7 @@ ipcMain.handle('workbench:focus', () => {
 // ---------------------------------------------------------------------------
 // 第 3 步：本地驾驶（遥控器先通）
 //
-// 渲染进程把「一个动作」丢过来，主进程在内嵌 webview 的 guest webContents 上
+// 渲染进程把「一个动作」丢过来，主进程在内嵌页的 guest webContents 上
 // 用 debugger / CDP 执行，再把 { ok, pageSnapshot } 原样回给渲染层。
 // 渲染进程全程碰不到 BrowserWindow / webContents / debugger，只认 preload 白名单。
 // ---------------------------------------------------------------------------
@@ -877,7 +842,7 @@ onSettingsChange((s) => sendToMainWindow('workbench:browser:settings', JSON.stri
  * 一路驾驶 = **一张内嵌页** + 一个目标 + 自己那一份循环状态。
  *
  * 第 16 步之前这些都是全局单例（agentEpoch / agentGoal / sensitiveWaiters …），
- * 因为全窗口只有一张 webview。第 17 步要两路同时跑，就必须按 **guest webContents id** 拆开：
+ * 因为全窗口只有一张内嵌页。第 17 步要两路同时跑，就必须按 **guest webContents id** 拆开：
  *   - 同一张页上的新指令 → 覆盖这一路的旧指令（第 16 步「最新指令优先」的忠实推广）；
  *   - 不同页上的指令 → 互不打扰（第二句不会把第一张降级成不能动的占位）。
  */
@@ -1032,8 +997,8 @@ function isLoopbackBase(raw: string): boolean {
  * ★ 分区闸用的状态：当前账号名下的项目号 + 「项目列表同步过没有」。
  *
  * 为什么要单独记一个"同步过没有"：
- *   `will-attach-webview` 是**同步**事件（`preventDefault()` 必须当场调），
- *   没法在里面 await 一次 `/projects`。所以只能由渲染层在拿到项目列表后显式推过来。
+ *   分区闸（view-host 的 create 里）要**当场**判定项目归属，没法在那儿 await 一次
+ *   `/projects`。所以只能由渲染层在拿到项目列表后显式推过来。
  *   在那之前主进程**确实不知道**这个用户有哪些项目 —— 此时若"不知道就拦"，
  *   启动瞬间打开的合法标签页会被全拦死。所以：没同步过 → 放行但告警；同步过 → 严格执行。
  */
@@ -1048,7 +1013,7 @@ let projectsSyncedAt: number | null = null;
 viewHostInit({
   window: () => mainWindow,
   decidePartition: (raw) => decideWebviewPartition(raw, ownedProjectIds, projectsSyncedAt !== null),
-  notifyBlocked: (info) => sendToMainWindow('workbench:webview:blocked', JSON.stringify(info)),
+  notifyBlocked: (info) => sendToMainWindow('workbench:browser:blocked', JSON.stringify(info)),
   wireGuest: wireBrowserGuest,
 });
 
@@ -1569,7 +1534,7 @@ ipcMain.handle('workbench:session:sync', (_event, apiBaseRaw: unknown, tokenRaw:
 /**
  * ★ 项目列表同步 —— 渲染层拿到 `/projects` 的结果后推过来，供分区闸判定归属。
  *
- * 为什么不让主进程自己去拉：`will-attach-webview` 是**同步**事件，
+ * 为什么不让主进程自己去拉：分区闸（view-host 的 create 里）要**当场**判定，
  * `preventDefault()` 必须当场调用，没机会 await 一次 HTTP。
  * 所以只能由渲染层在拿到列表时显式推一次（与 `session:sync` 同一个思路）。
  *
@@ -1617,7 +1582,7 @@ ipcMain.handle(
   },
 );
 
-/** 第 17 步：当前正在驾驶的 webview guest id 列表（渲染层开第 3 张页时用来挑「没在跑的那张」） */
+/** 第 17 步：当前正在驾驶的页 guest id 列表（渲染层开第 3 张页时用来挑「没在跑的那张」） */
 ipcMain.handle('workbench:agent:lanes', () => [...lanes.keys()]);
 
 /**
@@ -1631,17 +1596,17 @@ ipcMain.handle('workbench:browser:owner', (_event, wcIdRaw: unknown, agentIdRaw:
   const agentId = Number(agentIdRaw);
   if (!Number.isInteger(wcId) || wcId < 0) return;
   if (!Number.isInteger(agentId) || agentId <= 0) return;
-  webviewOwner.set(wcId, agentId);
+  guestOwner.set(wcId, agentId);
 });
 
 /**
  * 第 24 步：**浅休眠** —— 把一张后台内嵌页的节流拉到最紧。
  *
  * 浅休眠与深休眠的分工（改这里前先看懂）：
- *   - 浅休眠**不卸载** `<webview>`（页面、滚动、SPA 状态全在，唤醒是瞬时的），
+ *   - 浅休眠**不卸载**页宿主（页面、滚动、SPA 状态全在，唤醒是瞬时的），
  *     它要解决的是 **CPU**：视频在后台继续解码、广告 iframe 在后台轮询、
  *     `setInterval` 在后台空转 —— 这些让笔记本发烫。
- *   - 深休眠才卸载、才省内存（那是渲染层的事，不经过这里）。
+ *   - 深休眠才卸载（view-host 的 close）、才省内存（那是渲染层发起的，不经过这里）。
  *
  * `setBackgroundThrottling(true)` 是 Electron 的机制：把这个 guest 标记成"后台"，
  * Chromium 就会按后台规则降频（定时器被钳到 1 秒级、requestAnimationFrame 基本停摆）。

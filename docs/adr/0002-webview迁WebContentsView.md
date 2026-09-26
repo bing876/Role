@@ -129,6 +129,52 @@ BEM 修饰符(`--bg/--embed/--off/--on/--hidden/--overlay/--dragging`)不算结�
   - `sleep-wiring-tests.mts` 三条静态探针的锚点跟生产码重指(占位卡先于宿主 div return / 唤醒后延迟 `browserViewFocus` / 唤醒 url 口径搬进 workspace 的 `hostMounted`);`sleep-revert-tests.mts` 的 deepSleeping 变异 `count: 1→3`(判定现在有三处必须一致的落点);9/9 照抓。
   - `webview.d.ts` 随生产 `<webview>` 标签消失(决定②),`global.d.ts` 里对应注释同步删。
 
+## 实施记录(第二片,2026-09-26)
+
+**范围**:关 `webviewTag` + 清 `will-attach-webview` 与 webview 专属件,让 webview 彻底退场。
+**前置预检(动手前,对全仓)**:生产码 `<webview>` 标签**零实例**(第一片已换完,仅历史注释提及);
+`onWebviewBlocked` 渲染层**零消费**(仅 preload 暴露 + webBridge 桩);driver 无生产桩依赖
+`getType() === 'webview'`(drive-shape-probe (B) 只投畸形入参,走 shape 闸,不受 resolveTarget 变更影响)。
+→ 满足「动手前确认零残留/零依赖」的开工条件,无需要先行修复的项。
+
+**改动清单(全部随本记录同片)**:
+1. `main.ts`:
+   - `webviewTag: true` 删除(连同一句注释里对它的回滚说明)。
+   - `will-attach-webview` 分区闸 handler + 整段历史注释 → 一段退场说明(判定函数
+     `decideWebviewPartition` 本体保留,由建页口调用,口径不变)。
+   - `web-contents-created` 的 webview dispatcher(给 webview guest 挂下载/导航拦截)删除;
+     该 guest 的拦截已由 view-host 建页口统一挂接(第一片),此处只剩主窗口的逻辑。
+   - 通道 `workbench:webview:blocked` → **`workbench:browser:blocked`**(渲染层零消费,改名零 blast
+     radius);`webviewOwner` map → **`guestOwner`**;全部 `[webview]` 日志前缀 → `[guest]`。
+2. `driver.ts`:`resolveTarget` 的 `wc.getType() === 'webview' ||` 条件删除——
+   webviewTag 关掉后这种 guest 不可能存在,条件成死代码;只认 `viewHostRegistry`
+   (create 时登记、close/destroyed 时注销),报错口径不变(点名了但页没了 → 当场停,绝不猜)。
+3. `preload.ts` / `webBridge.ts` / `packages/shared/src/index.ts`(+dist 重建):
+   `onWebviewBlocked` → **`onBrowserBlocked`**,通道串同步,doc 注释同步。
+4. `view-host.ts` / `useProjects.ts` / `main.ts` 内所有「will-attach 同步事件」口径注释
+   → 「建页口当场判定」口径(判定逻辑本身没动)。
+5. **3 个手动 live 探针重指**(不在 package.json 链,纪律=锚点跟生产码,防「明知已不成立的
+   红灯」):
+   - `partition-guard-probe.mjs` (D):断言从「main.ts 注册 will-attach + 改写
+     webPreferences.partition」→「view-host create 调闸 + `session.fromPartition(d.partition)`
+     + **旧挂点已移除** + 闸接进建页口带真实项目集合」。
+   - `partition-isolation-probe.mjs` (C):同口径;`partition={partitionFor(...)}` 锚点
+     → workspace 的 `browserViewCreate({ tabKey, projectId, ... })`。
+   - `panel-visibility-coupling-probe.py` (E1):`getType() === 'webview'` 锚点
+     → `viewHostRegistry.has(wc.id)`。
+6. **不动的**:`newtab-fix-tests` / `manual-click-probe` / `rootcause-browser-probe` /
+   `pointer-events-click-test` / `iframe-click-http` / `iframe-shadow-probe` 六个 live 探针是
+   **自包含 harness**(各开自己的 `webviewTag` 窗口验 Electron 本身的 webview 行为,
+   不依赖生产 main.ts 的开关)→ 合法保留;`scripts/electron-upgrade` / `computer-visibility`
+   等链上脚本的 webview 提及仅注释级 → 保留。
+
+**验收口径**:golden **逐字节不变**(第一片已重画成 `div.browserPanel__view`,本片不许再画);
+`verify:shell` 54/0 + R1–R6/C1–C5 全绿;`verify:electron` 5/0;全量 verify 0 FAIL。
+
+**结论**:`webviewTag` 关、`will-attach-webview` 退场、webview 专属件(类型声明/dispatcher/
+通道名/日志/探针锚点)清零 —— **webview 完全退场**。内嵌页宿主只剩 view-host 的
+WebContentsView 一条路;分区闸、下载归属、驾驶执行全部在 view-host 建页口收口。
+
 ## 来源
 
 - `apps/desktop/src/browser/BrowserPanel.tsx`(webview 宿主/影子层/深休眠渲染分支,逐行读)、`useBrowserWorkspace.ts`(wcId 映射/owner/浅休眠)、`webview.d.ts`、`index.ts`、`styles.css`(`.browserPanel__view` z-index 族)

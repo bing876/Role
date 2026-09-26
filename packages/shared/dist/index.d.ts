@@ -436,8 +436,8 @@ export interface WorkbenchBridge {
     /**
      * ★ 项目列表**显式同步**：渲染层拿到 `/projects` 结果后推给主进程，供**分区闸**判定归属。
      *
-     * 为什么需要：`will-attach-webview` 是同步事件（`preventDefault()` 必须当场调用），
-     * 主进程没机会在里面 await 一次 HTTP，所以只能由渲染层把
+     * 为什么需要：分区闸（view-host 的 create 里，ADR-0002）要**当场**判定项目归属，
+     * 主进程没机会在那儿 await 一次 HTTP，所以只能由渲染层把
      * "这个账号有哪些项目"显式推过去。
      *
      * 传**空数组**是有意义的：表示"这个账号确实一个项目都没有"，
@@ -456,7 +456,7 @@ export interface WorkbenchBridge {
      * 用户会以为"网页坏了"，而实际上是安全策略挡住了它）。
      * @returns 取消订阅的函数
      */
-    onWebviewBlocked: (cb: (info: {
+    onBrowserBlocked: (cb: (info: {
         partition: string;
         reason: string;
     }) => void) => () => void;

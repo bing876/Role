@@ -82,7 +82,7 @@ export function useProjects({
       if (sessionRef.current?.token !== sess.token) return null;
       setProjects(r.projects);
       /**
-       * ★ 把项目列表推给主进程 —— 分区闸（`will-attach-webview`）靠它判定归属。
+       * ★ 把项目列表推给主进程 —— 分区闸（view-host 的 create，ADR-0002）靠它判定归属。
        * 主进程那个事件是**同步**的，没法自己去拉，所以必须在这里显式同步一次。
        * 拿不到列表时（上面 catch）不同步，主进程会保持"还没同步过"的宽松状态。
        */
