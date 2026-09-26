@@ -124,10 +124,60 @@ export interface TaskState {
  * `ask_user` / `done` 本步**只定类型、不接业务**（第 3 步不接大模型），
  * 执行器遇到它们只会返回“未实现”，留着给后面的步骤填。
  */
+/**
+ * ADR-0004 · 浏览器深度 第二片:稳健元素定位的**语义目标**。
+ *
+ * 全是**抗改版**维度(没有 class):稳定属性(id/aria-label/name/data-testid)优先,
+ * 文本 + tag + 结构兜底。站点换 class / 调 DOM 顺序后,同一语义目标照样解析到同一颗元素。
+ */
+export interface SemanticTarget {
+  /** 稳定属性(按此优先级,最抗改版):id */
+  id?: string;
+  /** data-testid */
+  testId?: string;
+  /** aria-label */
+  ariaLabel?: string;
+  /** name */
+  name?: string;
+  /** 兜底:可见文本(包含匹配)。 */
+  text?: string;
+  /** 兜底:标签名(如 'button'),收窄候选。 */
+  tag?: string;
+  /** 兜底:CSS 祖先选择器(结构约束,如 'form' / 'nav'),在同文案多元素时定位置。 */
+  within?: string;
+}
+
+/** 语义定位的解析结果(先解析,再操作)。 */
+export interface SemanticLocateResult {
+  found: boolean;
+  /** 命中方式:id / testid / aria / name / text / text+tag / text+within / text+tag+within / none */
+  via:
+    | 'id'
+    | 'testid'
+    | 'aria'
+    | 'name'
+    | 'text'
+    | 'text+tag'
+    | 'text+within'
+    | 'text+tag+within'
+    | 'none';
+  /** 人/模型可读的解析描述(进回执 detail,可诊断「这次凭什么找到的」)。 */
+  description: string;
+  /** 命中元素的可见文本(截断 60 字)。 */
+  label: string;
+  /** 元素中心坐标(最顶层视口,供 CDP 用);未命中为 null。 */
+  cx: number | null;
+  cy: number | null;
+  w: number;
+  h: number;
+  /** 页面侧解析异常(换页途中 document 为 null 等)——不抛,如实回。 */
+  error?: string;
+}
+
 export type BrowserAction =
   | { action: 'open_url'; url: string }
-  | { action: 'click'; target: string }
-  | { action: 'type'; target: string; text: string; submit?: boolean }
+  | { action: 'click'; target: string; semantic?: SemanticTarget }
+  | { action: 'type'; target: string; text: string; submit?: boolean; semantic?: SemanticTarget }
   | { action: 'scroll'; direction: 'up' | 'down' }
   | { action: 'wait'; seconds: number }
   | { action: 'read_page' }
