@@ -606,6 +606,36 @@ export default function App() {
    *       下一句「继续」走已验收的 `resumeTask`（先读真实页 → 服务端解挂 → 原地接上），不新造第二条路。
    *   A③ 补充注入成功 → 状态行**瞬态**「已收到补充」约 2.5 秒后自动消失，**不弹横幅**。
    */
+  /**
+   * B3（降噪片·用户拍板）：**首进引导只出现一次**，标记落 localStorage（按项目）。
+   * 引导 = 聊天为空时那张欢迎卡（「欢迎使用 AI 自主浏览器工作台…立即打开内嵌浏览器」）。
+   * 判据：这个项目见过一次就不再出现；已经有历史消息的会话**立刻补标记**（老用户不会突然又看到）。
+   * localStorage 不可用（隐私模式）→ 退化成旧行为（每次都显示），**不挡用**。
+   */
+  const guideKey = (pid: number | null): string => `workbench.guided.${pid ?? 'none'}`;
+  const [guidedSeen, setGuidedSeen] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    const next: Record<string, boolean> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('workbench.guided.')) next[k] = true;
+      }
+    } catch {
+      /* localStorage 不可用：退化成旧行为 */
+    }
+    setGuidedSeen(next);
+  }, []);
+  const guideShown = (pid: number | null): boolean => Boolean(guidedSeen[guideKey(pid)]);
+  const markGuideSeen = (pid: number | null): void => {
+    if (pid === null) return;
+    try {
+      localStorage.setItem(guideKey(pid), '1');
+    } catch {
+      /* 同上 */
+    }
+    setGuidedSeen((prev) => (prev[guideKey(pid)] ? prev : { ...prev, [guideKey(pid)]: true }));
+  };
   const [supplementFlash, setSupplementFlash] = useState(false);
   const supplementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onSupplementAccepted = (): void => {
@@ -710,6 +740,18 @@ export default function App() {
       HOME_URL,
     },
   });
+
+  /**
+   * B3：这个项目的对话**已经有内容** ⇒ 引导期早过了，立刻补标记（不必等用户做什么）。
+   * 放在这里而不是 hooks 区，是因为要等 `useChat` 把 `messages` 交出来。
+   */
+  useEffect(() => {
+    if (messages.length > 0 && curProjectId !== null && !guidedSeen[guideKey(curProjectId)]) {
+      markGuideSeen(curProjectId);
+    }
+    // guidedSeen / markGuideSeen 都是稳定派生；这里只看「有没有内容」与「哪个项目」
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, curProjectId]);
 
   const {
     user: userMem,
@@ -1598,6 +1640,7 @@ export default function App() {
       if (p.kind === 'step') {
         const line = `${p.summary}${p.ok ? '' : ' ❌'}`;
         setAgentSteps((prev) => prev.concat(line).slice(-6));
+        say(`· ${line}`);
         trace(`· ${line}`);
       } else if (p.kind === 'ask') {
         setAgentSteps([]);
@@ -1770,7 +1813,14 @@ export default function App() {
     persona: null,
     conversationId: null,
   }));
-  const sidebarAgents: AgentView[] = agents.length > 0 ? agents : curProjectId !== null ? [] : loginAgentsFallback;
+  /**
+   * B5（降噪片·用户拍板）：**占位名「新智能体」的行不显示**。
+   * 「＋ 添加」会先用占位名建出来（随后靠 chips 改名），在改名之前它在左栏就是一条
+   * 没有任何信息的空占位行 —— 用户要的是"看不到它"，而不是"看到一条叫『新智能体』的家伙"。
+   * 改完名（chips 答完 / 跳过但自己写了名）名字一变，那一行自然就回来了。
+   */
+  const namedAgents = agents.filter((a) => a.name !== '新智能体');
+  const sidebarAgents: AgentView[] = namedAgents.length > 0 ? namedAgents : curProjectId !== null ? [] : loginAgentsFallback;
   const curAgent = sidebarAgents.find((a) => a.id === curAgentId) ?? null;
   /**
    * G1（2026-09-25,规格 C1 收紧）：「＋ 添加」只在小助（管家）上下文生效。
@@ -2406,7 +2456,8 @@ export default function App() {
             输入框上方一行 chips（见下方 .inputbar 前的 <PersonaChips/>）。建好即 ready
             （默认人设），chips 只是可选精调：可点 / 可自己写 / 可跳过,打字/跳过/答完即消失。
           */}
-          {messages.length === 0 && !streaming && (
+          {/* B3：首进引导（欢迎卡）**只出现一次**（标记落 localStorage，按项目） */}
+          {messages.length === 0 && !streaming && !guideShown(curProjectId) && (
             <div className="welcomeCard">
               <h4 className="welcomeCard__title">
                 <span>🤖</span> 欢迎使用 AI 自主浏览器工作台
@@ -2766,15 +2817,21 @@ export default function App() {
               {streaming ? '打字中…' : '发送'}
             </button>
           )}
-          {/* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */}
-          <button
-            type="button"
-            className="inputbar-btn end"
-            title="结束这轮聊天，把这段总结进两层记忆"
-            onClick={() => void tidyCurrentAgent()}
-          >
-            结束
-          </button>
+          {/*
+            B6（降噪片·用户拍板）：**「结束」键条件显示** —— 只有"这段对话真的有内容可整理"时才给。
+            空对话（还没说过话）摆一个「结束」没有任何意义，只会让输入栏看着更挤。
+          */}
+          {messages.length > 0 && (
+            /* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */
+            <button
+              type="button"
+              className="inputbar-btn end"
+              title="结束这轮聊天，把这段总结进两层记忆"
+              onClick={() => void tidyCurrentAgent()}
+            >
+              结束
+            </button>
+          )}
         </div>
       </main>
       {/*

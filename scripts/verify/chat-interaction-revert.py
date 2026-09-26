@@ -147,6 +147,31 @@ DEFECTS = [
         'expect': ['⑲-10'],
         'cmd': LOGIC,
     },
+    # ---- 下面三条是「降噪片」的 B5/B6/B3 ----
+    {
+        'name': 'I14(B5) 占位名「新智能体」的行照旧显示（空占位又回来）',
+        'file': APP,
+        'old': "  const namedAgents = agents.filter((a) => a.name !== '新智能体');\n",
+        'new': "  const namedAgents = agents.filter(() => true);\n",
+        'expect': ['⑳-1'],
+        'cmd': LOGIC,
+    },
+    {
+        'name': 'I15(B6) 「结束」键不再条件显示（空对话也摆一个）',
+        'file': APP,
+        'old': "          {messages.length > 0 && (\n            /* 第 15 步：结束这轮",
+        'new': "          {true && (\n            /* 第 15 步：结束这轮",
+        'expect': ['⑳-2'],
+        'cmd': LOGIC,
+    },
+    {
+        'name': 'I16(B3) 首进引导不落标记（欢迎卡每次回来）',
+        'file': APP,
+        'old': "      localStorage.setItem(guideKey(pid), '1');\n",
+        'new': "      /* 反证注入：不落标记 */;\n",
+        'expect': ['⑳-3'],
+        'cmd': LOGIC,
+    },
 ]
 
 

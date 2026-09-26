@@ -2332,6 +2332,75 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
   await act(async () => root19.unmount());
 }
 
+/**
+ * ===========================================================================
+ * ⑳ 降噪片（2026-09-26 用户拍板 B3/B5/B6）—— 与「用户操心的事越少越好」直接相关
+ * ===========================================================================
+ */
+log('');
+log('--- ⑳ 降噪片：占位行不显示 / 结束键条件显示 / 首进引导一次性 ---');
+{
+  currentProjectId = 7;
+  dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+  // B3：这一条要能看到「标记落盘」，所以先清掉上一段留下的标记
+  try {
+    dom.window.localStorage.removeItem('workbench.guided.7');
+  } catch {
+    /* ignore */
+  }
+
+  await check('⑳-1（B5）占位名「新智能体」的智能体不显示在左栏', async () => {
+    // 临时往名单里塞一个占位名的家伙（「＋ 添加」会先用占位名建出来）
+    AGENTS.push({
+      id: 199,
+      name: '新智能体',
+      kind: 'worker',
+      deletable: true,
+      projectId: 7,
+      personaStatus: 'ready',
+      persona: null,
+      conversationId: 599,
+      status: 'idle',
+    });
+    const root20 = await mountApp(true);
+    await ensure('⑳-1 前置：名单拉回来', () => qa('.contact-item').length > 0);
+    const names = qa('.contact-name').map((x) => x.textContent ?? '');
+    assert.ok(!names.includes('新智能体'), `占位行还在左栏：${JSON.stringify(names)}`);
+    assert.ok(names.includes('小助'), `正常智能体被误伤：${JSON.stringify(names)}`);
+    await act(async () => root20.unmount());
+    AGENTS.pop();
+  });
+
+  await check('⑳-2（B6）「结束」键条件显示：有内容才给（结构闸 + 有消息时在场）', async () => {
+    const root20b = await mountApp(true);
+    await ensure('⑳-2 前置：历史消息在', () => (q('.chat')?.textContent ?? '').includes('九七号的历史'));
+    assert.ok(
+      qa('.inputbar button').some((b) => (b.textContent ?? '').includes('结束')),
+      '有消息时「结束」键不见了（条件写反了）',
+    );
+    await act(async () => root20b.unmount());
+    // 结构闸：那个按钮必须真的被「有内容」这个条件包着（空对话不该给）
+    const src = readFileSync(join(process.env.SMOKE_REPO ?? process.cwd(), 'apps', 'desktop', 'src', 'App.tsx'), 'utf8');
+    assert.ok(
+      /\{messages\.length > 0 && \(\s*\/\*[\s\S]{0,200}?className="inputbar-btn end"/.test(src),
+      '「结束」键没有被 `messages.length > 0` 包着（空对话又会冒出来）',
+    );
+  });
+
+  await check('⑳-3（B3）首进引导（欢迎卡）一次性：标记落 localStorage，见过就不再出', async () => {
+    const root20c = await mountApp(true);
+    await ensure('⑳-3 前置：历史消息在', () => (q('.chat')?.textContent ?? '').includes('九七号的历史'));
+    await flush(3);
+    assert.equal(
+      dom.window.localStorage.getItem('workbench.guided.7'),
+      '1',
+      '有内容却没落「已引导」标记（下次还会弹欢迎卡）',
+    );
+    assert.ok(q('.welcomeCard') === null, '已经见过引导了，欢迎卡还在');
+    await act(async () => root20c.unmount());
+  });
+}
+
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
 log(`  （期间发出 ${requests.length} 条真实请求）`);
