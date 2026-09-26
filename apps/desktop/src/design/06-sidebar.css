@@ -272,6 +272,16 @@
 .projectBox__row {
   padding: 3px 6px;
 }
+/* B4 项目下拉：原生 <select>（取代「按钮 + 展开列表 + 行」，降噪） */
+.projectBox__select {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+}
 /* F2-③：成功槽（朴素） */
 .projectBox__note {
   color: #b45309;

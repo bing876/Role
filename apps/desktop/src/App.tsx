@@ -2011,60 +2011,46 @@ export default function App() {
             这里只在功能上把「项目层」跑通，用既有的 .contact / .btn / .authInput 拼出来，不加新视觉。
             切换只换「看不见的项目视角 + 名单 + 资料列表」，**浏览器一张页都不动**（见 enterProject）。
           */}
+          {/*
+            B4 项目下拉：项目切换 = 原生 <select>（降噪：不再「按钮 + 展开列表 + 行」）。
+            选中即 switchProject（换项目视角 + 重拉名单/资料，浏览器一张页都不动）。
+            「新建项目」入口保留（常显）；F2-③ 成功/失败两槽照旧。
+          */}
           <div className="projectBox">
             <div className="small projectBox__cur">
               当前项目：{projects.find((p) => p.id === curProjectId)?.name ?? '（还没读到）'}
             </div>
+            <select
+              className="projectBox__select"
+              value={curProjectId ?? ''}
+              disabled={projectBusy}
+              aria-label="切换项目"
+              onChange={(e) => void switchProject(Number(e.target.value))}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.id === curProjectId ? '（使用中）' : ''}
+                </option>
+              ))}
+            </select>
+            <input
+              className="authInput projectBox__name"
+              placeholder="新项目名字（≤24 字）"
+              value={newProjectName}
+              maxLength={24}
+              onChange={(e) => setNewProjectName(e.target.value)}
+            />
             <div className="buttons-row">
               <button
                 type="button"
-                className="btn projectBox__toggle"
-                disabled={projectBusy}
-                onClick={() => setProjectsOpen((v) => !v)}
+                className="btn projectBox__create"
+                disabled={projectBusy || !newProjectName.trim()}
+                onClick={() => void createProject()}
               >
-                {projectsOpen ? '收起项目' : `切换项目（${projects.length}）`}
+                {projectBusy ? '处理中…' : '新建项目'}
               </button>
             </div>
-            {projectsOpen && (
-              <div className="projectBox__list" role="list" aria-label="我的项目">
-                {projects.map((p) => (
-                  <button
-                    type="button"
-                    role="listitem"
-                    key={p.id}
-                    data-project-id={p.id}
-                    disabled={projectBusy}
-                    className={p.id === curProjectId ? 'contact projectBox__row contact--on' : 'contact projectBox__row'}
-                    onClick={() => void switchProject(p.id)}
-                  >
-                    <div className="contact__meta">
-                      <div className="contact__name">{p.name}</div>
-                      <div className="small">
-                        {p.id === curProjectId ? '使用中' : '点击切到这里'}
-                        {p.henAgentId ? ' · 有母鸡' : ' · 默认项目'}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                <input
-                  className="authInput projectBox__name"
-                  placeholder="新项目名字（≤24 字）"
-                  value={newProjectName}
-                  maxLength={24}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                />
-                <div className="buttons-row">
-                  <button
-                    type="button"
-                    className="btn projectBox__create"
-                    disabled={projectBusy || !newProjectName.trim()}
-                    onClick={() => void createProject()}
-                  >
-                    {projectBusy ? '处理中…' : '新建项目'}
-                  </button>
-                </div>
-              </div>
-            )}
             {/* F2-③：成功/失败两个槽 + 两套样式（失败槽 = 红，一眼看出坏没坏） */}
             {projectNote && <div className="small projectBox__note">{projectNote}</div>}
             {projectErr && <div className="small projectBox__note projectBox__note--err">{projectErr}</div>}

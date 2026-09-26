@@ -494,6 +494,18 @@ MUTATIONS = [
         'replace': '            {true && (  // 反证注入：设置抽屉恒开（拆掉默认收起闸门）\n              <div className="settingsDrawer__panel">',
         'expect': '设置抽屉默认就该收起',
     },
+    # ---- B4：项目切换 = 原生 <select>（降噪：不再「按钮 + 展开列表 + 行」）----
+    #   注入一个残留的 .projectBox__row 旧行按钮：B4 该把「行」换成 <select>，
+    #   旧行还在 = 没换干净 → ⑤ 的 B4 验收（「旧项目行不该还在」）必红。
+    {
+        'file': APP_TSX,
+        'id': 'B4',
+        'visible': True,
+        'name': '把项目切换打回「旧项目行按钮」：<select> 旁边残留一个 .projectBox__row（没换成下拉）',
+        'anchor': '            </select>\n            <input\n              className="authInput projectBox__name"',
+        'replace': '            </select>\n            <button type="button" className="projectBox__row"></button>\n            <input\n              className="authInput projectBox__name"',
+        'expect': '旧的「项目行」按钮还在',
+    },
 ]
 
 

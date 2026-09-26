@@ -872,20 +872,31 @@ log('--- ⑤ 项目：列表 / 切换（名单与资料一起换）/ 新建 ---'
 /** 项目面板的展开按钮（文案里带「项目」二字） */
 const projectToggle = (): Element | null => qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('项目')) ?? null;
 
-await check('项目面板列出两个项目，当前那个标着「使用中」', async () => {
-  click(projectToggle(), '项目面板入口');
-  await flush(3);
-  const rows = qa('.projectBox__row');
-  assert.equal(rows.length, 2, `项目行数不对：${rows.length}`);
-  const on = qa('.projectBox__row').filter((r) => r.className.includes('contact--on'));
+await check('★ B4：项目切换 = 原生 <select>，列出两个项目、当前那个标「使用中」', async () => {
+  const sel = q('.projectBox__select') as HTMLSelectElement | null;
+  assert.ok(sel, '项目下拉（<select>）不见了（B4：项目切换应为下拉）');
+  assert.equal(q('.projectBox__row') === null, true, '旧的「项目行」按钮还在（B4 该换成 <select> 了）');
+  const opts = qa('.projectBox__select option');
+  assert.equal(opts.length, 2, `项目选项数不对：${opts.length}`);
+  const on = opts.filter((o) => (o.textContent ?? '').includes('使用中'));
   assert.equal(on.length, 1, `「使用中」的项目应当只有一个：${on.length}`);
   assert.match(on[0].textContent ?? '', /默认项目/, `使用中的不是 7 号：${on[0].textContent}`);
+  assert.equal(sel.value, '7', `下拉选中值应是当前项目（7 号）：${sel.value}`);
 });
 
-await check('点 8 号项目 → POST /projects/8/activate（body {}），随后按新项目重拉名单与资料', async () => {
+/** 选下拉里的某个项目（React 受控 <select>：走原生 value setter + change 事件） */
+const selectProject = async (id: string): Promise<void> => {
+  const sel = q('.projectBox__select') as HTMLSelectElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(sel, id);
+    sel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  });
+};
+
+await check('下拉选 8 号项目 → POST /projects/8/activate（body {}），随后按新项目重拉名单与资料', async () => {
   const before = requests.length;
-  const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '8');
-  click(row ?? null, '8 号项目');
+  await selectProject('8');
   await waitFor('发出 activate', () => requests.some((r) => r.path === '/projects/8/activate'));
   await flush(4);
   const act = requests.filter((r) => r.path === '/projects/8/activate').pop()!;
@@ -952,9 +963,7 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
 await check('★ F2-③：切换项目失败时，失败进专门的红色槽（成功槽保持干净）', async () => {
   activateFails = true;
   const before = requestsTo('/projects/7/activate').length;
-  const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '7');
-  assert.ok(row, '找不到「默认项目」那一行（7 号）');
-  click(row, '7 号项目（这一次服务端会拒绝）');
+  await selectProject('7');
   await waitFor('发出 activate（失败那一次）', () => requestsTo('/projects/7/activate').length > before);
   await flush(4);
   activateFails = false;
