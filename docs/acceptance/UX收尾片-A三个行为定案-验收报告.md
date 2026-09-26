@@ -135,3 +135,62 @@
 | ④ 派活出折叠卡 | **未做**（需要构造一次协同派单；现有证据 `verify:collab` 的 C3 折叠卡 jsdom 断言 + 反证） |
 | ⑤ 记忆出确认卡 | **未做**（需要真库落一条 pending 记忆；现有证据 `verify:memory` 系列 + 规格表 C4 第 2 轮） |
 | ⑥ 长任务重启续上 | **未做，且被 C 挡住**（`verify:loop:kill9` 红着 ⇒ 这条链当前不可信，先修 C） |
+
+---
+
+## 六、2A-③ 真下载（本次补做，通过 ✅）
+
+方法：让浏览器面板打开一个 `application/octet-stream` 的 URL（Chromium 不会内联显示 ⇒ 必然触发 `will-download`），
+再直读磁盘上的下载目录与记录文件。
+
+```
+[before] jsonl 行数 = 0 | root 存在 = false
+[open]   window.workbench.openBrowser('https://httpbin.org/bytes/64')
+[after ] jsonl 行数 = 1
+[last record] {"at":"2026-09-26T15:31:33.949Z","projectId":210,"agentId":226,"agentSource":"renderer",
+               "filename":"64","savePath":"…\browser-projects\210\downloads\64",
+               "url":"https://httpbin.org/bytes/64",
+               "partition":"…\Partitions\workbench-browser-project-210"}
+[dirs] ["210","_downloads.jsonl"]
+  210/downloads → ["64"]
+✅ 真下载落项目目录：通过
+```
+
+**这一条同时验到三件产品事实**：① 文件真的落到**项目目录**（`browser-projects/<projectId>/downloads/`，不是用户 Downloads）；
+② 记录里带**正确的归属**（`projectId:210` + `agentId:226`，`agentSource:"renderer"` —— 说明渲染层的 `browserOwner` 登记生效了）；
+③ 分区 = `persist:workbench-browser-project-210`，与「登录态按项目隔离」一致。
+
+---
+
+## 七、C（`verify:loop:kill9`）根因定位（本次只查未修）
+
+**症状**（可重复，与我的改动无关 —— 已 `git stash` 全部改动后重跑基线同样 7 FAIL + 卡住）：
+
+- `kill 后库里还有这个循环（status=（行不存在））` ⇒ **checkpoint 那一行根本没落库**（不是"循环丢了"，是"从没写成"）；
+- 连带 `pending_call_id=（空）`、重启 `restored=0`。
+
+**最小探针**（历史记录 + 本轮复核）在**全新的临时数据目录**上复现：
+`[checkpoint] 保存失败 … could not open file "base/5/16918"` —— 这是 **pglite 存储层**的 Postgres 报错
+（`could not open file` 是"关系文件打不开"，不是 SQL 错、不是权限错）。
+
+⇒ **根因不在 kill-9 逻辑本身**，而在 `@electric-sql/pglite` 这条依赖在本机的写入/文件布局上出了问题。
+**为什么本片不修**：修它要么换/锁 pglite 版本、要么把这条套件改成用仓库里已有的 `embedded-postgres` 真 PG 二进制
+（`~/workbuddy-ai/pg2`）—— 两者都是**验证基础设施的独立一片**，且要先能稳定复现才有把握，
+按「不做大重写」的红线我没有在本片硬塞。
+
+**建议的下一步（供你选）**：① 锁/换 `@electric-sql/pglite` 版本（最小改动，但要先查 changelog）；
+② 把 `loop-kill9-db` 改成用真 PG（与 `verify:db` 同一条路，最稳但改动大）；
+③ 先加一条**前置断言**「checkpoint 写一次能不能成」，让失败被正确归因（半小时，立刻可做）。
+
+---
+
+## 八、D（2A 真机）状态
+
+| 项 | 状态 |
+|---|---|
+| ① 建智能体 | **通过**（上一片已验：左栏 小助 → 小助+小美） |
+| ② 定时任务回一句话 | **通过**（上一片已验：回「已设成…」） |
+| ③ 下载落项目目录 | **本轮补做，通过**（见 §六，含真文件 + 真记录 + 真归属） |
+| ④ 派活出折叠卡 | **未做**（需要构造一次协同派单；现有证据 `verify:collab` 的 C3 折叠卡 jsdom 断言 + 反证） |
+| ⑤ 记忆出确认卡 | **未做**（需要真库落一条 pending 记忆；现有证据 `verify:memory` 系列 + 规格表 C4 第 2 轮） |
+| ⑥ 长任务重启续上 | **未做，且被 C 挡住**（`verify:loop:kill9` 红着 ⇒ 这条链当前不可信，先修 C） |
