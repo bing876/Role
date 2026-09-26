@@ -15,12 +15,39 @@
  * 用法:npx tsx scripts/verify/electron-upgrade.mts
  */
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 /** 脚本在 scripts/verify/ 下,仓库根 = 上两级 */
 const REPO = fileURLToPath(new URL('../..', import.meta.url));
+/** 本地 tsx CLI —— 用它替代 npx（Windows 上 npx 只有 .cmd，CreateProcess 起不来） */
+const TSX_CLI = `${REPO}node_modules/tsx/dist/cli.mjs`;
+
+/**
+ * ★ 起子进程统一走这里（2026-09-26 修）。三条约束：
+ *  ① **不要用 `npx`**：Windows 的 CreateProcess 不解析 `.cmd`（PATH 上只有 npx.cmd）⇒ ENOENT。
+ *  ② **不要用 `execFileSync` / `spawnSync`**：本机沙箱把**同步** spawn 拦成 `EBUSY`
+ *     （实测：`spawnSync(node)` EBUSY、`execFileSync(node)` EBUSY，而**异步 `spawn` 正常**）。
+ *  ③ 所以这里用异步 `spawn` + Promise，本机与真机都能跑。
+ */
+function run(args: string[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const c = spawn(process.execPath, args, { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    c.stdout.on('data', (d) => {
+      out += String(d);
+    });
+    c.stderr.on('data', (d) => {
+      out += String(d);
+    });
+    c.on('error', (e) => reject(new Error(`${args.join(' ')} 起不来：${e.message}`)));
+    c.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${args.join(' ')} 退出码 ${code}\n${out}`.slice(0, 600)));
+    });
+  });
+}
 
 let passes = 0;
 let fails = 0;
@@ -53,15 +80,17 @@ async function main(): Promise<void> {
     assert.ok(decl.startsWith('^34'), `声明应为 ^34,实际 ${decl}`);
   });
 
-  await check('verify:shell 全绿(webview 祖先链 golden + 红线网在新版 Electron 上成立)', () => {
+  await check("verify:shell 全绿(webview 祖先链 golden + 红线网在新版 Electron 上成立)", async () => {
     // verify:shell = tsx scripts/verify/app-shell-smoke.mts(jsdom 真挂 App,不依赖 electron 二进制)
-    execFileSync('npx', ['tsx', 'scripts/verify/app-shell-smoke.mts'], { cwd: REPO, stdio: 'pipe' });
+    await run([TSX_CLI, 'scripts/verify/app-shell-smoke.mts']);
   });
 
-  await check('桌面 + electron 双 tsconfig 类型绿(新版类型兼容)', () => {
-    const tsc = `${REPO}node_modules/.bin/tsc`;
-    execFileSync(tsc, ['-p', 'apps/desktop', '--noEmit'], { cwd: REPO, stdio: 'pipe' });
-    execFileSync(tsc, ['-p', 'apps/desktop/tsconfig.electron.json', '--noEmit'], { cwd: REPO, stdio: 'pipe' });
+  await check('桌面 + electron 双 tsconfig 类型绿(新版类型兼容)', async () => {
+    // ★ 不走 `${REPO}node_modules/.bin/tsc`（2026-09-26 修）：那在 Windows 上是 `.cmd` shim，
+    //   CreateProcess 起不来。直接走 typescript 包里的真入口 tsc.js。
+    const tsc = `${REPO}node_modules/typescript/bin/tsc`;
+    await run([tsc, '-p', 'apps/desktop', '--noEmit']);
+    await run([tsc, '-p', 'apps/desktop/tsconfig.electron.json', '--noEmit']);
   });
 
   await check('桌面端无原生模块(升级零 rebuild 暴露面)', () => {

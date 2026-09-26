@@ -65,7 +65,8 @@ def run_acceptance() -> tuple[int, str]:
 
 
 def main() -> int:
-    original = HANDOFF.read_text(encoding='utf8')
+    original_bytes = HANDOFF.read_bytes()
+    original = original_bytes.decode('utf8').replace('\r\n', '\n')
     before = hashlib.md5(original.encode('utf8')).hexdigest()
     print('')
     print('=== 收尾 8 · 反证：交接文件脱敏的三道闸，拆一道就得红 ===')

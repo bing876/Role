@@ -12,7 +12,8 @@
     "start": "npm run build:electron && npm run build:renderer && node scripts/start-electron.mjs",
     "package": "npm run build && electron-builder --publish never",
     "package:dir": "npm run build && electron-builder --dir --publish never",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "dev:renderer": "vite"
   },
   "build": {
     "appId": "com.bing876.aiworkbench",

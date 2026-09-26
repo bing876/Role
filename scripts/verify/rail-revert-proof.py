@@ -17,6 +17,19 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+_NPM = _shutil.which('npm') or 'npm'
+
 OUTDIR = os.path.join(REPO, 'docs', 'acceptance', 'app-shell')
 PY = sys.executable
 
@@ -108,7 +121,7 @@ def run_shell():
     """跑 verify:shell（真生产代码 + jsdom），返回 (退出码, 变红的断言名列表, PASS 数, 日志路径)。"""
     log = os.path.join(OUTDIR, 'browser-column-revert-last.log')
     with open(log, 'w', encoding='utf-8', errors='replace') as f:
-        r = subprocess.run(['npx', 'tsx', 'scripts/verify/app-shell-smoke.mts'],
+        r = subprocess.run([NODE, TSX_CLI, 'scripts/verify/app-shell-smoke.mts'],
                            cwd=REPO, stdout=f, stderr=subprocess.STDOUT, timeout=900)
     txt = read_raw(log)
     fails = [x.strip() for x in re.findall(r'^\s*✗\s*(.+)$', txt, re.M)]

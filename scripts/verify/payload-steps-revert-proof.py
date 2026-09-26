@@ -18,6 +18,19 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+_NPM = _shutil.which('npm') or 'npm'
+
 AGENT = REPO / 'apps' / 'server' / 'src' / 'routes' / 'agent.ts'
 
 ANCHOR = "    const summary = typeof b?.summary === 'string' ? scrubStepSummary(b.summary).slice(0, 300) : '';"
@@ -30,7 +43,8 @@ def run(cmd: list[str], timeout: int = 900) -> tuple[int, str]:
 
 
 def main() -> int:
-    original = AGENT.read_text(encoding='utf8')
+    original_bytes = AGENT.read_bytes()
+    original = original_bytes.decode('utf8').replace('\r\n', '\n')
     before = hashlib.md5(original.encode('utf8')).hexdigest()
     print('')
     print('=== QA-27 · 反证:摘掉 task/step 脱敏闸,验收必须红 ===')
@@ -55,7 +69,7 @@ def main() -> int:
             problems.append(f'静态审计没咬住(code={code1}, hit={hit1})')
             print(f'  ★★ 审计没咬住')
 
-        code2, out2 = run(['npx', 'tsx', 'scripts/verify/task-encryption-pglite.mts'], timeout=1200)
+        code2, out2 = run([NODE, TSX_CLI, 'scripts/verify/task-encryption-pglite.mts'], timeout=1200)
         # ⑤-B 六条应红:找含 ⑤-B 的 FAIL 行
         hit2 = '⑤-B' in out2 and ('✗' in out2 or 'FAIL' in out2)
         print('')
@@ -69,7 +83,7 @@ def main() -> int:
             problems.append(f'动态 pglite 没咬住(code={code2}, hit={hit2})')
             print(f'  ★★ 动态 pglite 没咬住')
     finally:
-        AGENT.write_text(original, encoding='utf8')
+        AGENT.write_bytes(original_bytes)
 
     after = hashlib.md5(AGENT.read_text(encoding='utf8').encode('utf8')).hexdigest()
     print('')
@@ -78,7 +92,7 @@ def main() -> int:
         problems.append('源码没还原干净')
 
     code1b, _ = run(['node', 'scripts/verify/payload-steps-audit.mjs'])
-    code2b, _ = run(['npx', 'tsx', 'scripts/verify/task-encryption-pglite.mts'], timeout=1200)
+    code2b, _ = run([NODE, TSX_CLI, 'scripts/verify/task-encryption-pglite.mts'], timeout=1200)
     print(f'  还原后:audit 退出码={code1b}(应 0),pglite 退出码={code2b}(应 0)')
     if code1b != 0 or code2b != 0:
         problems.append('还原后仍红 —— 没还原干净')

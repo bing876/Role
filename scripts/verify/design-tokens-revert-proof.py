@@ -17,6 +17,18 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+
 THEME = REPO / 'apps' / 'desktop' / 'src' / 'design' / '99-theme.css'
 MAIN = REPO / 'apps' / 'desktop' / 'src' / 'main.tsx'
 INDEX = REPO / 'apps' / 'desktop' / 'src' / 'design' / 'index.css'
@@ -60,7 +72,7 @@ MUTATIONS = [
 
 def run_tokens() -> tuple[int, str]:
     proc = subprocess.run(
-        ['npx', 'tsx', 'scripts/verify/design-tokens.mts'],
+        [NODE, TSX_CLI, 'scripts/verify/design-tokens.mts'],
         cwd=REPO,
         capture_output=True,
         text=True,

@@ -14,6 +14,19 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+_NPM = _shutil.which('npm') or 'npm'
+
 CHAT = REPO / 'apps' / 'server' / 'src' / 'routes' / 'chat.ts'
 
 MUTATION = {
@@ -29,7 +42,7 @@ MUTATION = {
 
 def run_gate() -> tuple[int, str]:
     proc = subprocess.run(
-        ['npm', 'run', 'verify:typecheck'],
+        [_NPM, 'run', 'verify:typecheck'],
         cwd=REPO,
         capture_output=True,
         text=True,
@@ -39,7 +52,8 @@ def run_gate() -> tuple[int, str]:
 
 
 def main() -> int:
-    original = CHAT.read_text(encoding='utf8')
+    original_bytes = CHAT.read_bytes()
+    original = original_bytes.decode('utf8').replace('\r\n', '\n')
     before = hashlib.md5(original.encode('utf8')).hexdigest()
     print('')
     print('=== QA-01 · 反证:拆掉判空守卫,门禁必须红 ===')

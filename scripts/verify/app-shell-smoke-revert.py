@@ -27,6 +27,18 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+
 APP = REPO / 'apps' / 'desktop' / 'src' / 'App.tsx'
 CSS = REPO / 'apps' / 'desktop' / 'src' / 'design' / '14-browser-column.css'  # M9'：.browserLayer 三态规则从 styles.css 逐字节搬进 14
 GOLDEN = REPO / 'docs' / 'acceptance' / 'app-shell' / 'webview-ancestor-chain.golden.json'
@@ -114,7 +126,7 @@ def judge(rc: int, out: str, mut: dict) -> bool:
 
 def run_smoke() -> tuple[int, str]:
     proc = subprocess.run(
-        ['npx', 'tsx', 'scripts/verify/app-shell-smoke.mts'],
+        [NODE, TSX_CLI, 'scripts/verify/app-shell-smoke.mts'],
         cwd=REPO, capture_output=True, text=True, timeout=600,
     )
     return proc.returncode, proc.stdout + proc.stderr
@@ -166,7 +178,8 @@ def main() -> int:
                 else:
                     print(f'  ✓ 已还原（文件删除），{rel} 不在场')
             continue
-        original = target.read_text(encoding='utf8')
+        original_bytes = target.read_bytes()
+        original = original_bytes.decode('utf8').replace('\r\n', '\n')
         count = original.count(mut['anchor'])
         if count != 1:
             print(f'  ★ 锚点不唯一（{count} 处），反证脚本自身要跟着改：{rel}')
@@ -175,7 +188,7 @@ def main() -> int:
         before = md5(target)
         backup = original
         try:
-            target.write_text(original.replace(mut['anchor'], mut['replace']), encoding='utf8')
+            target.write_text(original.replace(mut['anchor'], mut['replace']), encoding='utf8', newline='')
             rc, out = run_smoke()
             if not judge(rc, out, mut):
                 failures += 1

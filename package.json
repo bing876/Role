@@ -12,6 +12,8 @@
   },
   "scripts": {
     "dev": "npm run build -w @ai-workbench/shared && npm run dev -w @ai-workbench/desktop",
+    "dev:desktop": "npm run build -w @ai-workbench/shared && npm run dev -w @ai-workbench/desktop",
+    "dev:web": "npm run build -w @ai-workbench/shared && npm run dev:renderer -w @ai-workbench/desktop",
     "dev:server": "npm run dev -w @ai-workbench/server",
     "db:up": "docker compose -f apps/server/docker-compose.yml up -d",
     "db:down": "docker compose -f apps/server/docker-compose.yml down",

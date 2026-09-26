@@ -15,6 +15,18 @@ import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+
 DB = REPO / 'apps' / 'server' / 'src' / 'db.ts'
 INDEX = REPO / 'apps' / 'server' / 'src' / 'index.ts'
 MEM = REPO / 'apps' / 'server' / 'src' / 'routes' / 'memories.ts'
@@ -55,17 +67,18 @@ def main() -> int:
     ok = 0
     for mut in MUTATIONS:
         target = mut['file']
-        original = target.read_text(encoding='utf8')
+        original_bytes = target.read_bytes()
+        original = original_bytes.decode('utf8').replace('\r\n', '\n')
         assert original.count(mut['anchor']) == 1, f"{mut['id']} 锚点不唯一: {mut['anchor'][:50]}"
         mut_name = mut['name']
-        target.write_text(original.replace(mut['anchor'], mut['replace'], 1), encoding='utf8')
+        target.write_text(original.replace(mut['anchor'], mut['replace'], 1), encoding='utf8', newline='')
         try:
             proc = subprocess.run(
-                ['npx', 'tsx', 'scripts/verify/routines-lifecycle.mts'],
+                [NODE, TSX_CLI, 'scripts/verify/routines-lifecycle.mts'],
                 cwd=REPO, capture_output=True, text=True, timeout=600,
             )
         finally:
-            target.write_text(original, encoding='utf8')
+            target.write_bytes(original_bytes)
             assert md5(target) == hashlib.md5(original.encode()).hexdigest(), f"{mut['id']} 还原失败"
 
         lines = (proc.stdout + proc.stderr).splitlines()

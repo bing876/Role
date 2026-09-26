@@ -15,18 +15,43 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadEnv, type ServerEnv } from '../../apps/server/src/env';
-import { makeCipher, signToken } from '../../apps/server/src/crypto';
-import { makePool, migrate } from '../../apps/server/src/db';
-import { buildApp } from '../../apps/server/src/index';
-import { initOrchestrator } from '../../apps/server/src/orchestrator/tools';
-import { executeDelegate } from '../../apps/server/src/orchestrator/delegation';
-import { resetRegistryForTest, initRegistry, markAgentBusy } from '../../apps/server/src/orchestrator/registry';
-import { routeTask, logRouteDecision } from '../../apps/server/src/orchestrator/chiefOfStaff';
-import { triggerRoutine, type RoutineRow } from '../../apps/server/src/orchestrator/routines';
-import { __resetProgressCardCacheForTest, writeProgressToAgentChat } from '../../apps/server/src/orchestrator/collabChat';
-import { startLoop, type LoopSession } from '../../apps/server/src/toolLoop';
+import { createRequire } from 'node:module';
+/**
+ * ★★★ 服务端模块必须用 `require`（CJS 图）载入，**不能**用 `import`（2026-09-26 修）
+ * ---------------------------------------------------------------------------
+ * 本文件是 `.mts`（ESM），而 `apps/server` 是 **CommonJS**（tsconfig `module: CommonJS`
+ * + package.json 无 `type`）。tsx 下两者**各有一份模块图** ⇒ 测试 `import` 到的
+ * `orchestrator/tools` 与生产代码内部 `require` 到的**不是同一个实例**。
+ *
+ * 症状（实测）：本文件 line ~177 调 `initOrchestrator(...)` 写的是实例 A 的 `deps`，
+ * 而 `executeDelegate` / `collabChat` 读的是实例 B ⇒ 报
+ * `[orc] 编排器还没初始化（initOrchestrator 要在启动时调一次）`，
+ * A-5 / C-2 两条断言红，而其余 8 条绿（那几条不经过 tools.ts 的 deps）。
+ * 产品代码没问题，是测试拿错了实例。
+ *
+ * ★ 以后往本文件加服务端模块，一律走下面的 `req`，别退回 `import`。
+ */
+import type { ServerEnv } from '../../apps/server/src/env';
+import type { RoutineRow } from '../../apps/server/src/orchestrator/routines';
+import type { LoopSession } from '../../apps/server/src/toolLoop';
 import type { ServerExecutionContext } from '../../apps/server/src/toolRegistry';
+
+const req = createRequire(import.meta.url);
+const { loadEnv } = req('../../apps/server/src/env') as typeof import('../../apps/server/src/env');
+const { makeCipher, signToken } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
+const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
+const { buildApp } = req('../../apps/server/src/index') as typeof import('../../apps/server/src/index');
+const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
+const { executeDelegate } = req('../../apps/server/src/orchestrator/delegation') as typeof import('../../apps/server/src/orchestrator/delegation');
+const { resetRegistryForTest, initRegistry, markAgentBusy } = req(
+  '../../apps/server/src/orchestrator/registry',
+) as typeof import('../../apps/server/src/orchestrator/registry');
+const { routeTask, logRouteDecision } = req('../../apps/server/src/orchestrator/chiefOfStaff') as typeof import('../../apps/server/src/orchestrator/chiefOfStaff');
+const { triggerRoutine } = req('../../apps/server/src/orchestrator/routines') as typeof import('../../apps/server/src/orchestrator/routines');
+const { __resetProgressCardCacheForTest, writeProgressToAgentChat } = req(
+  '../../apps/server/src/orchestrator/collabChat',
+) as typeof import('../../apps/server/src/orchestrator/collabChat');
+const { startLoop } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
 
 let passes = 0;
 let fails = 0;

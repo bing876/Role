@@ -15,6 +15,19 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+_NPM = _shutil.which('npm') or 'npm'
+
 CHAT = REPO / 'apps' / 'server' / 'src' / 'routes' / 'chat.ts'
 
 BUILD_LINE = '              const built = await abMod.buildAgentImmediately(pool, cipher, claims.sub, projForBuild, xiaozhuId, buildIntent);'
@@ -50,7 +63,8 @@ def run_e2e() -> tuple[int, str]:
 
 
 def main() -> int:
-    original = CHAT.read_text(encoding='utf8')
+    original_bytes = CHAT.read_bytes()
+    original = original_bytes.decode('utf8').replace('\r\n', '\n')
     before = hashlib.md5(original.encode('utf8')).hexdigest()
     print('')
     print('=== QA-02 · 反证:"立刻建好"拆回旧病,验收必须红 ===')
@@ -65,7 +79,7 @@ def main() -> int:
         CHAT.write_text(src.replace(m['anchor'], m['replace'], 1), encoding='utf8')
         try:
             # 变异动的是 src,得重新 build 再打 e2e(e2e 打的是 dist)
-            build = subprocess.run(['npm', 'run', 'build', '-w', '@ai-workbench/server'],
+            build = subprocess.run([_NPM, 'run', 'build', '-w', '@ai-workbench/server'],
                                    cwd=REPO, capture_output=True, text=True, timeout=600)
             if build.returncode != 0:
                 code, out = 0, build.stdout + build.stderr + '\n(build 失败,见上)'
@@ -97,7 +111,7 @@ def main() -> int:
     print(f'  反证失败项:{len(problems)}')
 
     # 还原后再 build 一次,把 dist 恢复成本次代码
-    build = subprocess.run(['npm', 'run', 'build', '-w', '@ai-workbench/server'],
+    build = subprocess.run([_NPM, 'run', 'build', '-w', '@ai-workbench/server'],
                            cwd=REPO, capture_output=True, text=True, timeout=600)
     code, out = run_e2e()
     print(f'  还原后 e2e 退出码={code}(应 0)')

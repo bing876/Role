@@ -18,6 +18,18 @@ import subprocess
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+
+# ★ Windows 修（2026-09-26）：CreateProcess 只按 `.exe` 补后缀，**不解析 `.cmd`**，
+# 而 PATH 上只有 npx.cmd ⇒ `['npx', ...]` 必 FileNotFoundError: [WinError 2]。
+# 改成「当前 node + 本地 tsx CLI」，跨平台且不依赖 npx / PATH。
+import os as _os
+import shutil as _shutil
+from pathlib import Path as _Path
+
+_REPO_PATH = _Path(str(REPO))
+NODE = _shutil.which('node') or 'node'
+TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
+
 INSTALLED = REPO / 'node_modules' / 'electron' / 'package.json'
 DECLARED = REPO / 'apps' / 'desktop' / 'package.json'
 
@@ -43,18 +55,19 @@ def main() -> int:
     ok = 0
     for mut in MUTATIONS:
         target: Path = mut['target']
-        original = target.read_text(encoding='utf8')
+        original_bytes = target.read_bytes()
+        original = original_bytes.decode('utf8').replace('\r\n', '\n')
         pj = json.loads(original)
         mut['mutate'](pj)
         target.write_text(json.dumps(pj, indent=2, ensure_ascii=False) + '\n', encoding='utf8')
         try:
             proc = subprocess.run(
-                ['npx', 'tsx', 'scripts/verify/electron-upgrade.mts'],
+                [NODE, TSX_CLI, 'scripts/verify/electron-upgrade.mts'],
                 cwd=REPO, capture_output=True, text=True, timeout=600,
             )
         finally:
-            target.write_text(original, encoding='utf8')
-            assert hashlib.md5(target.read_bytes()).hexdigest() == hashlib.md5(original.encode()).hexdigest(), f"{mut['id']} 还原失败"
+            target.write_bytes(original_bytes)
+            assert hashlib.md5(target.read_bytes()).hexdigest() == hashlib.md5(original_bytes).hexdigest(), f"{mut['id']} 还原失败"
 
         lines = (proc.stdout + proc.stderr).splitlines()
         hit = []
