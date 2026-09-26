@@ -2,9 +2,11 @@
  * 批次 F | Skills CRUD — teach-a-task
  *
  * POST /skills — 教一个任务，落成 skills 表
- * GET /skills?projectId= — 列表
+ * GET /skills?projectId= — 列表（只列 active）
  * POST /skills/:id/revise — 自我修订
  * DELETE /skills/:id — 归档
+ * POST /skills/confirm — G4：确认自动录制的 pending 技能 → active（同 memories confirm 口径）
+ * POST /skills/reject — G4：拒绝 pending 技能 → rejected（留痕不删,永不注入）
  *
  * 加密：所有敏感字段走 cipher.encryptText
  */
@@ -15,7 +17,7 @@ import type { ServerEnv } from '../env';
 import type { JsonCipher } from '../crypto';
 import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
-import { createSkill, listSkills, reviseSkill, archiveSkill } from '../orchestrator/skills';
+import { createSkill, listSkills, reviseSkill, archiveSkill, decidePendingSkill } from '../orchestrator/skills';
 
 export interface SkillsDeps {
   pool: Pool;
@@ -157,4 +159,21 @@ export function registerSkillsRoutes(app: FastifyInstance, { pool, env, cipher }
       return dbErr(reply, err);
     }
   });
+
+  // G4：确认 / 拒绝自动录制的 pending 技能（同 memories confirm|reject 口径）
+  const decide = (target: 'active' | 'rejected') => async (req: FastifyRequest, reply: FastifyReply) => {
+    const claims = authed(req, env);
+    if (!claims) return errJson(reply, 401, '未登录');
+    const id = Number((req.body as { id?: unknown } | null)?.id);
+    if (!Number.isInteger(id) || id <= 0) return errJson(reply, 400, 'id 必填');
+    try {
+      const changed = await decidePendingSkill(pool, claims.sub, id, target);
+      if (!changed) return errJson(reply, 404, '技能不存在，或不是 pending（重复确认/已归档/别人的）');
+      return { ok: true, changed: 1, target, status: target };
+    } catch (err) {
+      return dbErr(reply, err);
+    }
+  };
+  app.post('/skills/confirm', decide('active'));
+  app.post('/skills/reject', decide('rejected'));
 }

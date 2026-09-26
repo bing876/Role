@@ -14,7 +14,7 @@
 import type { Pool } from 'pg';
 import type { JsonCipher } from '../crypto';
 
-export type CollabKind = 'dispatch' | 'accept' | 'reply' | 'progress' | 'system' | 'route' | 'routine';
+export type CollabKind = 'dispatch' | 'accept' | 'reply' | 'progress' | 'system' | 'route' | 'routine' | 'skill';
 
 export interface CollabChatInput {
   kind: CollabKind;
@@ -47,6 +47,10 @@ function buildCollabText(input: CollabChatInput): string {
     case 'routine':
       // ★ 独立前缀，单次触发只出这一张卡（不再先写一条又走 collabChat 写第二条）
       return `【协同·例行】${(detail ?? '').slice(0, 300)}${idTag}${status ? ` [${status}]` : ''}`.trim();
+    case 'skill':
+      // ★ G4：技能录制确认卡（任务完成且用过工具 → 问用户「要存成技能吗」，确认才 active）
+      //   独立前缀【协同·技能】，前端 CollabCard 按【协同·xxx】通用渲染,无需改前端
+      return `【协同·技能】${(detail ?? '').slice(0, 300)}${status ? ` [${status}]` : ''}`.trim();
     case 'system':
     default:
       return `【协同·系统】${fromName} → ${toName}：${(detail ?? '').slice(0, 300)}${idTag}${status ? ` [${status}]` : ''}`.trim();
@@ -73,6 +77,32 @@ export async function writeCollabToAgentChat(
     await pool.query(`INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1,'assistant',$2)`, [convId, enc]);
   } catch (err) {
     console.warn(`[collab-chat] 写入智能体 ${agentId} 的协同消息失败（忽略）：`, (err as Error).message);
+  }
+}
+
+/**
+ * G4 | 往**项目主会话**写一条协同消息（assistant 角色）
+ *
+ * 与 writeCollabToAgentChat 的区别：任务（tasks 表）只挂 project_id、不挂 agent_id,
+ * 所以技能录制确认卡按「项目最近一个会话」落地（用户在项目里正在用的那个对话流）。
+ * 找不到会话就跳过（不抛错,录技能本身不能因写聊天失败而失败）。
+ */
+export async function writeCollabToProjectChat(
+  pool: Pool,
+  cipher: JsonCipher,
+  projectId: number,
+  input: CollabChatInput,
+): Promise<void> {
+  if (!Number.isInteger(projectId) || projectId <= 0) return;
+  try {
+    const conv = await pool.query<{ id: string }>('SELECT id FROM conversations WHERE project_id=$1 ORDER BY id DESC LIMIT 1', [projectId]);
+    if (conv.rows.length === 0) return;
+    const convId = Number(conv.rows[0].id);
+    const text = buildCollabText(input);
+    const enc = cipher.encryptText(text);
+    await pool.query(`INSERT INTO messages (conversation_id, role, content_enc) VALUES ($1,'assistant',$2)`, [convId, enc]);
+  } catch (err) {
+    console.warn(`[collab-chat] 写入项目 ${projectId} 会话的协同消息失败（忽略）：`, (err as Error).message);
   }
 }
 
