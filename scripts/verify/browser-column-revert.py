@@ -35,6 +35,10 @@ PY = sys.executable
 STYLES = os.path.join(REPO, 'apps', 'desktop', 'src', 'design', '14-browser-column.css')  # M9'：第四列规则从 styles.css 逐字节搬进 14
 APP = os.path.join(REPO, 'apps', 'desktop', 'src', 'App.tsx')
 HOOK = os.path.join(REPO, 'apps', 'desktop', 'src', 'app', 'useBrowserColumn.ts')
+# 2026-09-26：「真卸载标志」的复位点在 BrowserPanel（页宿主生命周期）
+PANEL = os.path.join(REPO, 'apps', 'desktop', 'src', 'browser', 'BrowserPanel.tsx')
+# 2026-09-26：create 回执晚于关页的竞态点在 workspace 的 hostMounted（孤儿原生视图）
+WORKSPACE = os.path.join(REPO, 'apps', 'desktop', 'src', 'browser', 'useBrowserWorkspace.ts')
 
 # 每条缺陷：名字 / 文件 / 原文 / 改坏后 / 期望变红的断言关键字
 DEFECTS = [
@@ -49,15 +53,17 @@ DEFECTS = [
         'expect': ['transform 移出视野'],
     },
     {
-        'name': 'C2 「🌐 启用」不再弹列（触发② 失效）',
+        # ★ 2026-09-26 加强：C2 原来的注入（只摘 `col.openColumn()`）在 ADR-0005 之后**不再算缺陷**
+        # ——「启用」里的 `showFullscreen()` 会把 view 置为 fullscreen，那条 effect 照样把列打开。
+        # 所以把注入加强成「启用按钮整体失效（既不切视图也不开列）」，这才对应一条真缺陷。
+        'name': 'C2 「🌐 启用」整体失效（触发② 失效：既不切视图也不开列）',
         'file': APP,
         'old': ("            browser.showFullscreen();\n"
                 "            col.openColumn();\n"
                 "          }}\n"
                 '          aria-label="启用浏览器"\n'
                 '          title="🌐 启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
-        'new': ("            browser.showFullscreen();\n"
-                "            /* 反证注入：不再 openColumn —— 点了启用列也不弹 */\n"
+        'new': ("            /* 反证注入：启用按钮整体失效（既不切视图也不开列） */\n"
                 "          }}\n"
                 '          aria-label="启用浏览器"\n'
                 '          title="🌐 启用内嵌浏览器工作台（没有标签页时自动打开主页）"\n'),
@@ -107,6 +113,62 @@ DEFECTS = [
                 "            </div>\n"
                 "        </div>\n"),
         'expect': ['祖先链与 golden 一致'],
+    },
+    {
+        # ADR-0005（2026-09-26，用户报的「浏览器空白」）：摘掉「view→fullscreen ⇒ 列必开」的同步 effect。
+        # 期望咬住的正是 ⑧-4b：收起列之后一次「开页」必须把列自动弹回来。
+        'name': 'C6 摘掉 ADR-0005 的 view→列同步（页会建好加载，却因层被移出视野而看不见）',
+        'file': APP,
+        'old': ("  useEffect(() => {\n"
+                "    if (browser.view === 'fullscreen') col.openColumn();\n"
+                "    // col.openColumn 是稳定引用(useCallback + setState),不参与依赖\n"
+                "    // eslint-disable-next-line react-hooks/exhaustive-deps\n"
+                "  }, [browser.view]);\n"),
+        'new': ("  useEffect(() => {\n"
+                "    /* 反证注入：不再把 view→fullscreen 同步到列（ADR-0005 被摘掉） */\n"
+                "  }, [browser.view]);\n"),
+        'expect': ['⑧-4b'],
+    },
+    {
+        # 2026-09-26：把「依赖变化绝不销毁视图」这条改回去（= 旧 sticky-flag 的实际行为）。
+        # 期望咬住 ⑰② 与 ⑥-2：allTabs 一变就把已存在的原生视图销毁 → 页重建、驾驶目标作废。
+        'name': 'C7 宿主效果加回 cleanup（allTabs 一变就销毁所有原生视图 —— 真机「指定的内嵌页已不存在」）',
+        'file': PANEL,
+        'old': ("    hostKeysRef.current = now;\n"
+                "    /*\n"
+                "     * ★ 这里**故意没有 cleanup**：依赖变化（开页/关页/drivingIds 变）绝不能销毁视图 ——\n"
+                "     *   「真卸载才销毁」由上一条「代次 + 微任务」的 effect 独家负责。\n"
+                "     */\n"
+                "  }, [ws.allTabs, ws.drivingIds]);\n"),
+        'new': ("    hostKeysRef.current = now;\n"
+                "    /* 反证注入：依赖变化就销毁所有宿主（旧 sticky-flag 的行为） */\n"
+                "    return () => {\n"
+                "      for (const id of hostKeysRef.current ?? []) ws.hostGone(id);\n"
+                "      hostKeysRef.current = new Set<number>();\n"
+                "    };\n"
+                "  }, [ws.allTabs, ws.drivingIds]);\n"),
+        'expect': ['⑰'],
+    },
+    {
+        # 2026-09-26：摘掉「假卸载」判断 → StrictMode 的 setup→cleanup→setup 会把刚建的视图销毁一次。
+        # 期望咬住 ⑰①（挂载之后一张视图都不许被销毁）。
+        'name': 'C8 摘掉「假卸载」判断（StrictMode 的假卸载也销毁刚建的视图）',
+        'file': PANEL,
+        'old': "        if (mountGenerationRef.current !== generation) return; // 被重挂取代 = 假卸载\n",
+        'new': "        /* 反证注入：不再判断假卸载 */\n",
+        'expect': ['⑰'],
+    },
+    {
+        # 2026-09-26：摘掉「回执落地时确认这张页还在」→ create 晚于关页时留下孤儿原生视图。
+        # 期望咬住 ⑱。
+        'name': 'C9 摘掉「create 回执落地先确认页还在」（晚到的视图不销毁 = 孤儿原生视图）',
+        'file': WORKSPACE,
+        'old': ("        if (!findTab(t.id)) {\n"
+                "          void window.workbench?.browserViewClose?.(t.id);\n"
+                "          return;\n"
+                "        }\n"),
+        'new': "        /* 反证注入：不再确认页还在（晚到的视图不销毁） */\n",
+        'expect': ['⑱'],
     },
 ]
 

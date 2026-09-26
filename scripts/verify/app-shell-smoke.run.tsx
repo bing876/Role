@@ -119,6 +119,11 @@ const viewCloseLog: number[] = [];
 const viewNavigateLog: { tabKey: number; url: string }[] = [];
 const viewFocusLog: number[] = [];
 let wcIdSeq = 0;
+/**
+ * ★ 只给「create 回执晚于关页」那条竞态断言用：默认 0 = 立刻回执（不影响其它 56 条断言）。
+ *   设成 >0 才能构造出「关页先到、create 后到」的时序。
+ */
+let viewCreateDelayMs = 0;
 const bridge = new Proxy(
   {
     isElectron: false,
@@ -156,7 +161,11 @@ const bridge = new Proxy(
     browserViewCreate: (req: { tabKey: number; projectId: number | null; url: string }) => {
       wcIdSeq += 1;
       viewCreateLog.push({ ...req, wcId: wcIdSeq });
-      return Promise.resolve({ wcId: wcIdSeq });
+      const reply = { wcId: wcIdSeq };
+      // 默认立刻回执；只有竞态断言把 viewCreateDelayMs 调大（见那里的注释）
+      return viewCreateDelayMs > 0
+        ? new Promise<{ wcId: number }>((resolve) => setTimeout(() => resolve(reply), viewCreateDelayMs))
+        : Promise.resolve(reply);
     },
     browserViewRect: (req: { tabKey: number; rect: { x: number; y: number; width: number; height: number }; visible: boolean }) => {
       viewRectLog.push(req);
@@ -445,16 +454,25 @@ await check('ADR-0002 ③：开页走了真 create（projectId + 当前 url 对�
   assert.ok(c.url.startsWith('https://'), `create 的 url 不是 http(s)：${c.url}`);
   assert.ok(Number.isInteger(c.wcId) && c.wcId >= 0, `create 没回真 wcId：${JSON.stringify(c)}`);
 });
-await check('ADR-0002 ④：几何通道通了（view-rect 有发送；后台开页 = 视图藏着但活着）', async () => {
+await check('ADR-0002 ④ / ADR-0005：几何通道通了（view-rect 有发送；主进程 open = 要给人看 ⇒ 列必须可见）', async () => {
   const c = viewCreateLog[0];
   await waitFor('当前页的 rect', () => viewRectLog.some((r) => r.tabKey === c.tabKey));
-  // 'open' 事件走 openFromMain —— **后台开页**（不拉用户进浏览器）：
-  // 层是 --hidden → 视图必须 visible=false，但**绝不销毁**（隐藏≠卸载，老红线的宿主侧版本）
+  /*
+   * ★ 口径修正（2026-09-26，ADR-0005 决定 4）：
+   *   旧断言写的是「'open' 事件 = 后台开页（层必须 --hidden、视图必须 visible=false）」，
+   *   但那与生产码矛盾 —— `openFromMain` → `openUrl` 里**显式** `setView('fullscreen')`
+   *   （`openUrl` 自己的注释：「调用方都是『用户明确要看浏览器』」）。
+   *   按「改标准 = 改断言」纪律，这里改成与代码实际语义一致的新口径：
+   *   **主进程 open 也是「要给人看」⇒ 列打开、视图露脸**；同时保留「不许销毁」的老红线。
+   */
   const forTab = viewRectLog.filter((r) => r.tabKey === c.tabKey);
   assert.ok(forTab.length >= 1, '当前页一张 rect 都没发');
-  assert.ok(!viewCloseLog.includes(c.tabKey), '后台开页却调了 view-close（视图被销毁了）');
-  const last = forTab[forTab.length - 1];
-  assert.equal(last.visible, false, `后台开页时视图不该露脸（visible=${last.visible}）—— 老语义：页在后台挂着`);
+  assert.ok(!viewCloseLog.includes(c.tabKey), '主进程 open 却调了 view-close（视图被销毁了）');
+  const layerCls = (q('.browserLayer') as Element | null)?.getAttribute('class') ?? '';
+  assert.ok(!layerCls.includes('browserLayer--hidden'), `主进程 open 后列必须可见（ADR-0005）：${layerCls}`);
+  await waitFor('当前页 visible=true 的 rect', () => viewRectLog.some((r) => r.tabKey === c.tabKey && r.visible === true), 8);
+  const last = [...forTab].reverse().find((r) => r.visible === true) ?? forTab[forTab.length - 1];
+  assert.equal(last.visible, true, `主进程 open 后视图必须露脸（visible=${last.visible}）`);
 });
 await check('ADR-0002 ④：pageinfo 事件能把标题带回标签（宿主换原生视图后没有 DOM 元素事件了）', async () => {
   const c = viewCreateLog[0];
@@ -659,6 +677,44 @@ await check('⑧-4 「💬 对话」→ 隐藏形态:页宿主仍挂着（隐藏
   await waitFor('启用后 visible=true 的 rect', () => viewRectLog.some((r) => r.tabKey === c.tabKey && r.visible === true), 8);
   const lastOpen = [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey);
   assert.ok(lastOpen && lastOpen.visible === true, '「🌐 启用」后当前页没有 visible=true 的 rect（视图没落位露脸）');
+});
+
+/**
+ * ★ ADR-0005 回归（2026-09-26 用户报的「浏览器空白」）：**收起列之后，一次「开页」必须把列自动弹回来。**
+ *
+ * 这正是真机上的病灶路径：用户看过浏览器 → 点「💬 对话」收起 → 在聊天里说「打开抖音」
+ * （`useChat` → `browser.openUrl` → `setView('fullscreen')`）→ 旧代码只改 view、没人开列
+ * ⇒ 层落进 `--hidden`（transform 移出视野）⇒ **页已创建、已加载，却看不见**。
+ * 修法 = App 里那条 `view === 'fullscreen' ⇒ col.openColumn()` 的同步 effect。
+ */
+await check('⑧-4b（ADR-0005）：收起列后，「开页」必须把列自动弹回来（浏览器空白的回归位）', async () => {
+  const navBtns = [q('.tab--chat'), q('.tab--browser')].filter((b): b is Element => b !== null);
+  // 前置：先把列收起（用户看完浏览器后的常态）
+  await act(async () => {
+    click(navBtns[0], '💬 对话');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(2);
+  assert.ok(
+    ((q('.browserLayer') as Element).getAttribute('class') ?? '').includes('browserLayer--hidden'),
+    '前置：应先处于隐藏形态',
+  );
+  // 走真实路径开一张新页（主进程 open → openFromMain → openUrl，与聊天里说「打开XX」同一条）
+  await act(async () => {
+    emitBridge('open', 'https://www.baidu.com/');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await flush(3);
+  const cls = (q('.browserLayer') as Element).getAttribute('class') ?? '';
+  assert.ok(
+    !cls.includes('browserLayer--hidden'),
+    `开页之后列必须自动弹回（view=fullscreen ⇒ 列可见，ADR-0005）—— 现在是「${cls}」` +
+      `：页会建好、会加载，却因为整层被 transform 移出视野而看不见`,
+  );
+  // 视图侧跟上：新那张页要有 visible=true 的 rect（否则「列亮了但页还是空」）
+  const tabKeys = viewCreateLog.map((x) => x.tabKey);
+  const newest = tabKeys[tabKeys.length - 1];
+  await waitFor('新页 visible=true 的 rect', () => viewRectLog.some((r) => r.tabKey === newest && r.visible === true), 8);
 });
 
 await check('⑧-5 触发①:点会话内链接（来源）→ 列从隐藏弹出（内嵌浏览器打开）', async () => {
@@ -1142,6 +1198,44 @@ await check('关掉最后一张页后，.browserLayer 与页宿主一起消失�
   }
 });
 
+/**
+ * ★ 2026-09-26 修（自查发现，真机症状 =「指定的内嵌页已经不在了（webContents NNNN 已关闭）」）：
+ *
+ * `BrowserPanel` 的「真卸载标志」`panelUnmountedRef` 是一次性 ref，cleanup 只把它设 true、
+ * **从不设回 false** ⇒ 面板**卸载过一次**（= 用户关光所有页，App 把整层卸掉）之后它永远是 true；
+ * 重新挂载后，宿主效果**每一次依赖变化**（开页 / 关页 / drivingIds 变）都会走
+ * `if (panelUnmountedRef.current)` 分支 ⇒ 把当前**所有**原生视图 `hostGone` 掉
+ * ⇒ 页被销毁重建、正在跑的那路驾驶目标当场作废（AI 只能重开一遍，用户看到"页莫名其妙重载"）。
+ *
+ * 本断言就是那个回归位：**关光页 → 重开 → 再变 allTabs，已存在的视图绝不能被销毁。**
+ */
+await check('⑥-2（2026-09-26 修）关光页之后重开：allTabs 再变不得销毁已有视图（卸载标志必须复位）', async () => {
+  await act(async () => {
+    emitBridge('open', 'https://www.baidu.com/');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await flush(3);
+  const first = viewCreateLog[viewCreateLog.length - 1];
+  assert.ok(first, '重开后没有新的 view-create');
+  await waitFor('重开后第一张页的 rect', () => viewRectLog.some((r) => r.tabKey === first.tabKey), 8);
+  // 再开一张：allTabs 变化 = 宿主效果依赖变化（有 bug 的话，就是这里把所有宿主销毁）
+  await act(async () => {
+    emitBridge('open', 'https://www.taobao.com/');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await flush(3);
+  assert.ok(
+    !viewCloseLog.includes(first.tabKey),
+    `重开之后 allTabs 一变就把已存在的视图销毁了（tabKey=${first.tabKey}）—— ` +
+      `页会被重建、正在跑的驾驶目标当场作废（真机症状：指定的内嵌页已不存在）`,
+  );
+  // 第二张也必须真的建出来（别为了"不销毁"把新页也漏了）
+  assert.ok(
+    viewCreateLog.some((x) => x.tabKey !== first.tabKey),
+    '第二张页没有被 create（修复不能以漏建为代价）',
+  );
+});
+
 log('');
 log('--- ⑦ 样式红线：宿主与舞台不许被 display:none / 尺寸归零 ---');
 await check('14-browser-column + browser/styles.css 里 .browserLayer / .browserPanel__stage 没有 display:none / 0 尺寸', () => {
@@ -1380,6 +1474,170 @@ await check('⑯-3 .agentList 家族去向钉死：__note 有规则,布局新东
   for (const c of ['agentList__add', 'agentList__del']) {
     const re = new RegExp('(?<![\\w.-])' + esc16(c) + '(?![\\w-])');
     assert.ok(!re.test(srcText), `${c} 又出现在源码里（按钮回来了,规则必须跟着回来）`);
+  }
+});
+
+log('');
+log('--- ⑰ 页宿主生命周期（StrictMode 下：假卸载不得销毁视图，真卸载必须销毁）---');
+/**
+ * ★ 2026-09-26 修的第二条（自查发现，真机症状 =「指定的内嵌页已经不在了（webContents NNNN）」）：
+ *
+ *   `main.tsx` 里 `<StrictMode>` 是开着的 ⇒ 开发模式下 React 会在**同一个实例**上跑一遍
+ *   「setup → cleanup → setup」。旧实现用一个布尔标志记「真卸载」，cleanup 只把它设 true、
+ *   **从不设回 false**（`useRef(false)` 的初值只在**新实例**上生效）⇒ 标志从挂载起就永远是 true
+ *   ⇒ 宿主效果**每一次依赖变化**（开页/关页/drivingIds 变）都把所有原生视图销毁重建
+ *   ⇒ 正在跑的那路驾驶目标当场作废（AI 只能重开一遍页）。
+ *   修法 = 「代次 + 微任务」：cleanup 把销毁推迟一个微任务，只在"没有更晚的挂载"时才真销毁 ——
+ *   StrictMode 的**假卸载**被紧随其后的重挂取消，**真卸载**（关光所有页 → 整层卸掉）才执行。
+ *
+ * 这里**单独再挂一个 StrictMode 的 BrowserPanel**（而不是把整个 App 包进 StrictMode ——
+ * 那会让前面 56 条断言的时序全变），只钉三件事：
+ *   ① 挂载（含 StrictMode 的假卸载）之后，一张视图都不许被销毁；
+ *   ② 依赖变化（allTabs 多一张）之后，已存在的视图照样不许被销毁；
+ *   ③ 真卸载（组件没了）必须把登记在册的宿主全销毁（路径① 的原生侧那一半）。
+ */
+await check('⑰ 页宿主生命周期：StrictMode 假卸载不销毁 / 依赖变化不销毁 / 真卸载必须销毁', async () => {
+  const { BrowserPanel } = await import('../../apps/desktop/src/browser/BrowserPanel');
+  const goneLog: number[] = [];
+  const mountedLog: number[] = [];
+  const mkTab = (id: number): Record<string, unknown> => ({
+    id,
+    agentId: 1,
+    projectId: 1,
+    bootUrl: 'https://a.example/',
+    url: 'https://a.example/',
+    title: 'A',
+  });
+  let tabs: Record<string, unknown>[] = [mkTab(90001)];
+  // 只喂 BrowserPanel 真正会碰到的字段；用 getter 保证每次渲染都读到最新（不重建 ws 对象）
+  const ws = {
+    currentAgentId: 1,
+    get tabs() { return tabs; },
+    get allTabs() { return tabs; },
+    activeId: 90001,
+    get active() { return tabs[0] ?? null; },
+    view: 'fullscreen',
+    drivingIds: [] as number[],
+    tabCount: 1,
+    softHint: false,
+    urlBarFocusTick: 0,
+    focusUrlBar: () => undefined,
+    showFullscreen: () => undefined,
+    exitFullscreen: () => undefined,
+    enterEmbed: () => undefined,
+    exitEmbed: () => undefined,
+    embedWcId: null,
+    registerWebview: () => undefined,
+    notePageInfo: () => undefined,
+    hostMounted: async (t: { id: number }) => { mountedLog.push(t.id); },
+    hostGone: (id: number) => { goneLog.push(id); },
+    noteOwner: () => undefined,
+    touchTab: () => undefined,
+    sleepOf: () => undefined,
+    idleMsOf: () => 0,
+    wakeTab: () => undefined,
+    wakeAndActivate: () => undefined,
+    sleepEnabled: true,
+    setSleepEnabled: () => undefined,
+    instanceList: () => [],
+    openUrl: async () => null,
+    openHome: async () => null,
+    openNewTab: () => undefined,
+    closeTab: () => undefined,
+    closeTabsOfAgent: () => undefined,
+    closeAllTabs: () => undefined,
+    activate: () => undefined,
+    navigate: () => undefined,
+    focusActive: () => undefined,
+    webContentsIdOf: () => undefined,
+    awaitWebContentsId: async () => undefined,
+    tabIdOfWebContents: () => null,
+    ownerOf: () => undefined,
+    focusByWebContents: () => undefined,
+    openFromMain: () => undefined,
+    openFromPage: () => undefined,
+    refreshDriving: async () => undefined,
+    stopDriving: () => undefined,
+  };
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const panelRoot = createRoot(host);
+  const renderPanel = async (next: Record<string, unknown>[]): Promise<void> => {
+    tabs = next;
+    await act(async () => {
+      panelRoot.render(
+        React.createElement(React.StrictMode, null, React.createElement(BrowserPanel, { ws: ws as never })),
+      );
+    });
+    await flush(2);
+  };
+
+  await renderPanel([mkTab(90001)]);
+  assert.ok(mountedLog.includes(90001), 'StrictMode 下宿主没被建出来（hostMounted 没被调）');
+  // ① 挂载（含 StrictMode 的假卸载）之后：一张都不许销毁
+  assert.deepEqual(
+    goneLog,
+    [],
+    `StrictMode 的假卸载把刚建的视图销毁了（hostGone=${JSON.stringify(goneLog)}）—— 真机上就是"页被重建、驾驶目标作废"`,
+  );
+  // ② 依赖变化（多一张页）：已存在的视图不许被销毁
+  await renderPanel([mkTab(90001), mkTab(90002)]);
+  assert.deepEqual(goneLog, [], `allTabs 一变就销毁了已存在的视图（hostGone=${JSON.stringify(goneLog)}）`);
+  assert.ok(mountedLog.includes(90002), '第二张页没被建出来（修复不能以漏建为代价）');
+  // ③ 真卸载：登记在册的宿主全销毁（路径① 的原生侧那一半）
+  await act(async () => {
+    panelRoot.unmount();
+  });
+  await flush(2);
+  assert.deepEqual(
+    goneLog.slice().sort((a, b) => a - b),
+    [90001, 90002],
+    `真卸载没有把宿主全销毁（hostGone=${JSON.stringify(goneLog)}）—— 关光所有页时原生视图会泄漏`,
+  );
+  host.remove();
+});
+
+log('');
+log('--- ⑱ 资源：create 回执晚于关页时，绝不留孤儿原生视图 ---');
+/**
+ * ★ 2026-09-26 修的第三条（自查发现，属「资源不释放」）：
+ *   `browserViewCreate` 是异步 IPC，而「关页」可能赶在它回执之前发生（开页后立刻点 ✕ /
+ *   登出时 closeAllTabs 紧跟开页 / 深休眠唤醒后又被判休眠）。那种时序下 `hostGone` 先到 ——
+ *   `viewHostClose` 在 entries 里找不到这条 tabKey（视图还没建）是**空操作**；
+ *   随后 create 回执才落地 ⇒ 原生视图照样建出来并挂在窗口上 ⇒ **孤儿视图**
+ *   （页在后台继续跑、渲染进程与内存收不回来，直到窗口关闭）。
+ *   修法 = 回执落地时先确认这张页还在（`findTab`），不在就当场销毁。
+ */
+await check('⑱ 资源：create 未回执就关页 → 回执落地必须当场销毁，不留孤儿原生视图', async () => {
+  viewCreateDelayMs = 90; // 构造「关页先到、create 后到」
+  try {
+    await act(async () => {
+      emitBridge('open', 'https://www.bing.com/');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    const created = viewCreateLog[viewCreateLog.length - 1];
+    assert.ok(created, '竞态断言：没拿到 create 记录');
+    const tabKey = created.tabKey;
+    assert.ok(!viewCloseLog.includes(tabKey), '前置：这张页还没被关（create 还在飞）');
+    // 立刻关掉它（真实路径：点这张 tab 的 ✕）
+    const tabEls = qa('.browserTab');
+    const target = tabEls.find((el) => (el.querySelector('.browserTab__label')?.textContent ?? '').includes('bing.com')) ?? tabEls[tabEls.length - 1];
+    assert.ok(target, '找不到刚开的那张 tab');
+    await act(async () => {
+      click(target.querySelector('.browserTab__x'), '关页');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    assert.ok(viewCloseLog.includes(tabKey), '前置：关页没有走到 view-close');
+    // 等 create 回执落地（>90ms）后：必须**再**关一次（把晚到的原生视图销毁掉）
+    await flush(6);
+    const closes = viewCloseLog.filter((k) => k === tabKey).length;
+    assert.ok(
+      closes >= 2,
+      `create 回执落地后没有把晚到的视图销毁（tabKey=${tabKey} 只关了 ${closes} 次）—— ` +
+        `这就是孤儿原生视图：页在后台继续跑、渲染进程与内存收不回来`,
+    );
+  } finally {
+    viewCreateDelayMs = 0;
   }
 });
 
