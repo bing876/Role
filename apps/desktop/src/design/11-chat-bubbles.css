@@ -271,3 +271,163 @@
   border-color: #1d4ed8;
   color: #ffffff;
 }
+
+/* ==========================================================================
+   交互对齐片（2026-09-26）· 执行中的轻量状态 + 轨迹抽屉 + 助手气泡 markdown
+   --------------------------------------------------------------------------
+   用户定稿的目标态（对齐市面 AI 工具）：
+     · 执行中主对话流**不出现步骤墙** —— 只有一条状态（旋转 + 一句当前动作）；
+     · 完整轨迹进「可点开、默认收起」的抽屉（原生 <details>，零 JS）；
+     · 助手最终回答渲染成干净 markdown（原来纯文本，`**加粗**` 会原样露出）。
+   边界：只改这一块的外观，不碰第四列/浏览器面板。
+   ========================================================================== */
+
+/* 执行中的一条轻量状态（不是横幅：无底色块、无边框，就一行） */
+.runStatus {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 6px 4px;
+  color: var(--text-weak);
+  font-size: 12px;
+}
+
+.runStatus__row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* 旋转图标：纯 CSS 圆环，不引图标库 */
+.runStatus__spin,
+.inputbar__spin {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #d7d7de;
+  border-top-color: var(--accent, #2563eb);
+  border-radius: 50%;
+  animation: runSpin 0.9s linear infinite;
+}
+
+@keyframes runSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.runStatus__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 轨迹抽屉：默认收起（<details> 的原生行为），点开看完整过程 */
+.runTrace {
+  margin-left: 19px;
+}
+
+.runTrace__sum {
+  cursor: pointer;
+  color: #8a8a92;
+  font-size: 11px;
+  list-style: none;
+  user-select: none;
+}
+
+.runTrace__sum::-webkit-details-marker {
+  display: none;
+}
+
+.runTrace__sum:hover {
+  color: #4a4a52;
+}
+
+.runTrace__list {
+  margin: 4px 0 2px;
+  padding-left: 16px;
+  max-height: 220px;
+  overflow: auto;
+  color: #7c7c85;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.runTrace__list li {
+  word-break: break-word;
+}
+
+/* ---- 输入栏：执行中发送键变「停止」（带旋转图标） ---- */
+.inputbar-btn--stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #fff;
+  border: 1px solid #e0b4b4;
+  color: #b91c1c;
+}
+
+.inputbar-btn--stop:hover {
+  background: #fff5f5;
+  border-color: #d89a9a;
+}
+
+/* ---- 助手气泡里的 markdown（极简：只给模型真会用的那几样）---- */
+.msg.assistant p {
+  margin: 0 0 6px;
+}
+
+.msg.assistant p:last-child {
+  margin-bottom: 0;
+}
+
+.msg.assistant h4,
+.msg.assistant h5 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.msg.assistant ul,
+.msg.assistant ol {
+  margin: 4px 0 6px;
+  padding-left: 20px;
+}
+
+.msg.assistant li {
+  margin: 2px 0;
+}
+
+.msg.assistant code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: #f1f1f4;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}
+
+.msg.assistant pre {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f6f6f8;
+  overflow: auto;
+}
+
+.msg.assistant pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.msg.assistant blockquote {
+  margin: 6px 0;
+  padding: 2px 0 2px 9px;
+  border-left: 3px solid #e2e2e6;
+  color: var(--text-weak);
+}
+
+.msg.assistant a {
+  color: #2563eb;
+  text-decoration: underline;
+}

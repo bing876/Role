@@ -205,6 +205,15 @@ export interface ChatApi {
   /** 主进程报上来的最后几步摘要（可见度条要用尾巴那一条） */
   agentSteps: string[];
   setAgentSteps: Dispatch<SetStateAction<string[]>>;
+  /**
+   * 交互对齐片(2026-09-26):**执行轨迹**（完整,给「可点开、默认收起」的抽屉用）。
+   *
+   * 与 `agentSteps` 的分工：`agentSteps` 只有最近 6 条、给状态行/可见度条看「现在在干什么」；
+   * 这里是**完整轨迹**（步骤 + 过程提示 + 求助 + 收尾），只进抽屉，**绝不进主对话流**。
+   * 上限 200 条（防长任务把内存/渲染拖垮），超了从头丢。
+   */
+  runTrace: string[];
+  setRunTrace: Dispatch<SetStateAction<string[]>>;
   /** 结果文档的标题与大纲 */
   agentDoc: { title: string; outline: string[] } | null;
   setAgentDoc: Dispatch<SetStateAction<{ title: string; outline: string[] } | null>>;
@@ -233,7 +242,8 @@ export interface ChatApi {
   /** 发送：走 `/chat/stream` 读 SSE（落桶 / 打字机 / 发车 / 收尾） */
   sendChat: () => Promise<void>;
   /** 输入框回车与「发送」按钮都走它 */
-  onSend: () => void;
+  /** 发送输入框里的内容;带 text 则发送这句(「停止」按钮就走它发一句「停」) */
+  onSend: (text?: string) => void;
   /** 「继续 / 开始任务」那条路：把目标交给主进程的 AI 循环 */
   startAgentTask: (rawGoal?: string) => Promise<void>;
 }
@@ -303,6 +313,8 @@ export function useChat(options: UseChatOptions): ChatApi {
   const [streamText, setStreamText] = useState('');
   const [chatNote, setChatNote] = useState('');
   const [agentSteps, setAgentSteps] = useState<string[]>([]);
+  /** 交互对齐片：完整执行轨迹（只进抽屉，不进对话流）；上限 200 条 */
+  const [runTrace, setRunTrace] = useState<string[]>([]);
   const [agentDoc, setAgentDoc] = useState<{ title: string; outline: string[] } | null>(null);
   /**
    * 第 26 步：联网搜索的**过程提示**（一行小字，如「正在搜索：今天有什么新闻」）。
@@ -399,6 +411,7 @@ export function useChat(options: UseChatOptions): ChatApi {
     setChats({});
     historyLoadedRef.current = new Set();
     setAgentSteps([]);
+    setRunTrace([]); // 交互对齐片：新任务/重置时轨迹一并清空
     setAgentDoc(null);
     /** F5：这一轮的残留（见上面那段说明；顺序与 `sendChat` 的 finally 一致，便于对照） */
     setSearchHint('');
@@ -411,7 +424,7 @@ export function useChat(options: UseChatOptions): ChatApi {
    * 第 6 步：发送 = 走 /chat/stream（带 JWT，fetch 读 SSE；EventSource 加不了 Authorization 所以不用它）。
    * 第 4 步规矩保留：running 时先让主进程暂停（权威横幅由 'state' 广播改回「你正在控制」），聊天照发。
    */
-  const sendChat = async () => {
+  const sendChat = async (override?: string) => {
     /**
      * ★ 白名单改动 ①：`browser` 由注入的**最新值镜像**在调用时取出。
      *   为什么必须是镜像：`useBrowserWorkspace(...)` 排在 `useChat(...)` 之后
@@ -421,7 +434,8 @@ export function useChat(options: UseChatOptions): ChatApi {
     const browser = browserRef.current;
     if (!browser) return;
     if (!session) return;
-    const value = input.trim();
+    // 交互对齐片：允许调用方直接给文本(「停止」按钮发「停」,不必先塞进输入框 state)
+    const value = (override ?? input).trim();
     if (!value) return;
     // 普通聊天流式中（非运行中任务）阻止重复发送
     if (streaming && !runningLoopIdRef.current) return;
@@ -460,20 +474,35 @@ export function useChat(options: UseChatOptions): ChatApi {
       }
 
       // 分支 B：补充指令/追问（如"顺便看一下价格"、"现在什么情况了"）—— 动态注入当前 Loop 上下文
-      patchChat(myAgent, (c) => ({
-        ...c,
-        messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
-      }));
-      setInput('');
-      setChatNote(`已将补充指令注入当前任务上下文：「${value}」`);
-      void fetch(`${API_BASE()}/agent/loop/message`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${session.token}` },
-        body: JSON.stringify({ loopId, message: value }),
-      }).catch((e) => {
-        setChatNote(`补充指令递交失败：${(e as Error).message}`);
-      });
-      return;
+      /**
+       * ★ 建议清单第 1 条（2026-09-26 用户点名要修）：**明确的「打开 XX」优先于「补充指令」**。
+       *
+       * 原来只要循环在跑，用户说什么都被塞进 `/agent/loop/message` —— 于是「打开百度」
+       * 被当成对当前任务的补充要求吞掉，页不开、用户看到的是"我说了它没动"。
+       * 判定纯本地（`detectOpenUrl` 认内置站点表 / 裸域名 / 显式 URL，不联网不问模型），
+       * 命中就**跳出这个分支**，让它走下面正常的开页路径（该不该抢视线由 openUrl 那套决定）。
+       */
+      if (!detectOpenUrl(value)) {
+        patchChat(myAgent, (c) => ({
+          ...c,
+          messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
+        }));
+        setInput('');
+        /**
+         * ★ 交互对齐片（2026-09-26）：**删掉那条黄色横幅**。
+         * 原来这里 `setChatNote('已将补充指令注入当前任务上下文：「X」')` ——
+         * 用户那句话**已经作为正常用户气泡上屏**了，再弹一条黄条既重复又吵。
+         * 「静默注入」才是目标态：上屏就是全部反馈，过程信息进轨迹抽屉。
+         */
+        void fetch(`${API_BASE()}/agent/loop/message`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${session.token}` },
+          body: JSON.stringify({ loopId, message: value }),
+        }).catch((e) => {
+          setChatNote(`补充指令递交失败：${(e as Error).message}`);
+        });
+        return;
+      }
     }
     // 第 9 步本地闸：聊天里出现「密码/验证码：xxx」这类赋值就拦下——不发送、不落库、
     // 让敏感值只走浏览器输入框（服务端聊天与代填执行层各有自己的闸，这是第一道）。
@@ -499,7 +528,21 @@ export function useChat(options: UseChatOptions): ChatApi {
      */
     if (detectStopIntent(value)) {
       browser.stopDriving();
+      /**
+       * ★ 交互对齐片（2026-09-26）：**「停」= 一条正常消息，发了就生效**。
+       *   · 上屏：用户气泡照常出现（原来这里只弹一句提示、话本身不进流，看着像"没发出去"）；
+       *   · 生效：stopDriving 已经调了；
+       *   · **短路**：原来这个 `if` 后面**没有 return** ⇒ 「停」会继续往下走，
+       *     被当成 `browseGoal` 再派一次活（用一个叫「停」的目标去开车）—— 控制指令绝不能既是控制又是任务。
+       */
+      patchChat(myAgent, (c) => ({
+        ...c,
+        messages: c.messages.concat({ id: Date.now(), role: 'user', text: value }),
+      }));
+      setInput('');
+      setHasUnread(false);
       setChatNote('好，停手了——这一路不再动作。要它接着干，直接说下一步就行。');
+      return;
     }
     // 第 13 步：明确的开网页指令 → 不再要确认，中栏浏览器工作区直接开一张真实网页。
     // 判定纯本地（不联网、不问模型），所以后端/模型没起来时页面照样打开。
@@ -672,6 +715,7 @@ export function useChat(options: UseChatOptions): ChatApi {
       }
       drive = { wcId, goal, note, pageUrl };
       setAgentSteps([]);
+      setRunTrace([]); // 交互对齐片：新任务/重置时轨迹一并清空
       setAgentDoc(null);
       setChatNote(note);
     };
@@ -919,8 +963,8 @@ export function useChat(options: UseChatOptions): ChatApi {
     }
   };
 
-  const onSend = () => {
-    void sendChat();
+  const onSend = (text?: string) => {
+    void sendChat(text);
   };
 
   /**
@@ -999,6 +1043,8 @@ export function useChat(options: UseChatOptions): ChatApi {
     setChatNote,
     agentSteps,
     setAgentSteps,
+    runTrace,
+    setRunTrace,
     agentDoc,
     setAgentDoc,
     pushChatLine,

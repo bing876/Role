@@ -12,3 +12,8 @@ export type { AgentChat, ChatApi, Message, Role, UseChatOptions } from './useCha
 export { PersonaChips } from './PersonaChips';
 export type { PersonaChipsDraft, PersonaField } from './PersonaChips';
 export { CollabCard, isCollabMessage } from './CollabCard';
+/**
+ * 交互对齐片(2026-09-26):助手最终回答渲染成**干净 markdown**(极简、零依赖、零 innerHTML)。
+ * 气泡一直是纯文本,模型的 `**加粗**` 会原样露出 —— 这个组件就是补那一层。
+ */
+export { MarkdownText } from './MarkdownText';

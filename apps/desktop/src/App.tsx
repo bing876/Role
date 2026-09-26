@@ -72,7 +72,7 @@ import { useSidebarColumn } from './app/useSidebarColumn';
 import { useProjects } from './features/projects';
 import { AuthScreen, useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
-import { CollabCard, PersonaChips, isCollabMessage, useChat } from './features/chat';
+import { CollabCard, MarkdownText, PersonaChips, isCollabMessage, useChat } from './features/chat';
 import type { AgentChat, Message, Role, PersonaChipsDraft, PersonaField } from './features/chat';
 import type { CurrentTask } from './features/tasks';
 
@@ -628,6 +628,8 @@ export default function App() {
     setChatNote,
     agentSteps,
     setAgentSteps,
+    runTrace,
+    setRunTrace,
     agentDoc,
     setAgentDoc,
     pushChatLine,
@@ -1556,12 +1558,27 @@ export default function App() {
       const say = (text: string) => {
         if (ownerAgent !== null && ownerAgent !== undefined) pushChatLineFor(ownerAgent, text);
       };
+      /**
+       * 交互对齐片(2026-09-26):**过程轨迹只进抽屉,绝不进主对话流**。
+       *
+       * 用户定的目标态:执行中主对话流只有「用户气泡 + 一条轻量状态」,
+       * 完整轨迹放「可点开、默认收起」的抽屉。所以 `step` / `note` 一律走这里,
+       * 不再 `say(...)` 成聊天行 —— 那正是「步骤墙」,也是「同一段出现两次」的一半
+       * (另一半是服务端把这些也写进了聊天的 delta,已在 loop.ts 删掉)。
+       */
+      const trace = (line: string) => {
+        setRunTrace((prev) => prev.concat(line).slice(-200));
+      };
       const here = ownerAgent === curAgentRef.current;
       if (p.kind === 'step') {
-        setAgentSteps((prev) => prev.concat(`${p.summary}${p.ok ? '' : ' ❌'}`).slice(-6));
+        const line = `${p.summary}${p.ok ? '' : ' ❌'}`;
+        setAgentSteps((prev) => prev.concat(line).slice(-6));
+        trace(`· ${line}`);
       } else if (p.kind === 'ask') {
         setAgentSteps([]);
+        // 求助/等待是**要用户知道的**,保留一行;轨迹里也留一条
         say(`⚠️ ${p.question}`);
+        trace(`⚠️ ${p.question}`);
         const needInfo = p.reason === 'need_info';
         setAgentAwaitInfo(needInfo);
         // 第 15 步：记下「是哪个智能体在等这句话」，答复才不会串到别的智能体
@@ -1587,6 +1604,7 @@ export default function App() {
         void browser.refreshDriving();
       } else if (p.kind === 'sensitive') {
         say(`🔒 ${p.message}`);
+        trace(`🔒 ${p.message}`);
         void browser.refreshDriving();
       } else if (p.kind === 'help') {
         /**
@@ -1645,13 +1663,19 @@ export default function App() {
         setAwaitResumeAgent(null);
         setAwaitResumeWc(null);
         say(`✅ 任务完成：${p.summary}${p.docReady ? ` · ${p.unreadHint ?? '结果文档已生成'}` : '（文档未就绪：后端未配置模型或库未起，见后端日志）'}`);
+        trace(`✅ 任务完成：${p.summary}`);
         setAgentDoc({ title: p.documentTitle, outline: p.documentOutline });
         // 第 8 步：红点由服务端确认（finish 已置 unread=true），这里点亮并刷新卡片
         setHasUnread(true);
         void refreshTask();
         void browser.refreshDriving();
       } else if (p.kind === 'note') {
-        say(`${p.level === 'error' ? '⚠️' : 'ℹ️'} ${p.text}`);
+        /**
+         * ★ 交互对齐片(2026-09-26):**过程提示不再进主对话流**。
+         * 原来这里 `say('ℹ️ ...')` —— 与聊天的 delta 各渲染一遍 ⇒ 同一段出现两次(用户报的重复 bug)。
+         * 现在只进轨迹抽屉;但**状态清理照旧**(「继续/恢复驾驶」要清掉等待态)。
+         */
+        trace(`${p.level === 'error' ? '⚠️' : 'ℹ️'} ${p.text}`);
         if (/继续|恢复驾驶/.test(p.text)) {
           setAgentAwaitInfo(false);
           setAgentAwaitAgent(null);
@@ -2286,12 +2310,30 @@ export default function App() {
 
         <div className="chat">
           {/*
-            任务进行中明确状态指示：贯穿前后端状态机
+            交互对齐片(2026-09-26) · **执行中的轻量状态**(用户定稿的目标态):
+              · 主对话流里**不出现步骤墙** —— 只有一条状态:旋转图标 + 一句当前动作;
+              · 完整轨迹放**可点开、默认收起**的抽屉(`<details>`,零 JS、天然默认收起);
+              · 原来那条「🚀 AI 任务执行中…（可在下方输入补充指令…或输入「停」）」整条删掉 ——
+                它既占地方又教用户做事,而输入框本来就一直是正常输入框。
           */}
           {runningLoopId && streaming && (
-            <div className="taskState" style={{ background: '#e6f7ff', borderColor: '#91d5ff', color: '#0050b3' }}>
-              <span>🚀 <b>AI 任务执行中</b> · 正在自主操作浏览器</span>
-              <span className="small" style={{ marginLeft: 8 }}>（可在下方输入补充指令或问答注入上下文，或输入「停」暂停任务）</span>
+            <div className="runStatus" role="status" aria-live="polite">
+              <div className="runStatus__row">
+                <span className="runStatus__spin" aria-hidden="true" />
+                <span className="runStatus__text">
+                  {visLastStep ? `正在：${visLastStep}` : '正在操作浏览器…'}
+                </span>
+              </div>
+              {runTrace.length > 0 && (
+                <details className="runTrace">
+                  <summary className="runTrace__sum">执行轨迹 · {runTrace.length} 步（点开看）</summary>
+                  <ol className="runTrace__list">
+                    {runTrace.map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ol>
+                </details>
+              )}
             </div>
           )}
           {/*
@@ -2449,6 +2491,15 @@ export default function App() {
               */}
               {m.role === 'assistant' && isCollabMessage(m.text) ? (
                 <CollabCard text={m.text} />
+              ) : m.role === 'assistant' ? (
+                /*
+                 * 交互对齐片(2026-09-26):助手最终回答渲染成**干净 markdown**。
+                 * 原来这里是 `{m.text}` 纯文本 —— 模型的 `**加粗**`/`- 列表` 会原样露出(用户报的 raw **)。
+                 * 用户消息保持纯文本(用户写什么就显示什么,不替他解释)。
+                 */
+                <div className="msg assistant">
+                  <MarkdownText text={m.text} />
+                </div>
               ) : (
                 <div className={`msg ${m.role}`}>{m.text}</div>
               )}
@@ -2583,7 +2634,8 @@ export default function App() {
           {/* 第 15 步：只在「发起这轮流式的那个智能体」里显示打字气泡，切走就不显示 */}
           {streaming && streamingAgentId === curAgentId && (
             <div className="msg assistant">
-              {streamText || <span className="small">正在想…</span>}
+              {/* 交互对齐片：流式也走 markdown（半截的 `**` 不会抛错，见 MarkdownText 的注释） */}
+              {streamText ? <MarkdownText text={streamText} /> : <span className="small">正在想…</span>}
               <span className="caret" aria-hidden="true">
                 ▍
               </span>
@@ -2622,14 +2674,17 @@ export default function App() {
         >
           <input
             className="inputbar-field"
+            /**
+             * 交互对齐片(2026-09-26)：**输入框永远是正常输入框**。
+             * 原来执行中会把它换成「任务进行中：输入补充指令/追问注入上下文，或输入「停」暂停任务…」——
+             * 那是把「系统状态」塞进输入框、还教用户做事。现在只有两种特例：
+             *   · 等用户回答 AI 的提问（那是真的要他说话）；
+             *   · 其余一律就是正常那句。
+             */
             placeholder={
-              runningLoopId && streaming
-                ? '任务进行中：输入补充指令/追问注入上下文，或输入「停」暂停任务…'
-                : streaming
-                  ? '正在打字…'
-                  : awaitHere
-                    ? '回复小助的提问即可，发出后自动继续…'
-                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“创建小美”立刻建好,不挡你）`
+              awaitHere
+                ? '回复小助的提问即可，发出后自动继续…'
+                : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“创建小美”立刻建好,不挡你）`
             }
             value={input}
             onChange={(e) => {
@@ -2641,11 +2696,26 @@ export default function App() {
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
             disabled={streaming && !runningLoopId}
           />
-          {/* 真文案（不是基准的 sparkle 图标）：桌面没有真「停止」按钮
-               （停 = 输入「停」走 detectStopIntent），文字态永远要保留 */}
-          <button type="button" className="inputbar-btn send" onClick={onSend} disabled={streaming && !runningLoopId}>
-            {runningLoopId && streaming ? '发送补充' : streaming ? '打字中…' : '发送'}
-          </button>
+          {/*
+            交互对齐片(2026-09-26)：执行中**发送键变「停止」**（带旋转图标）。
+            它走的就是「发一句『停』」那条路（detectStopIntent → pauseTask/stopDriving），
+            不是第二套机制；想补充要求直接按回车（Enter 照旧 = 发送）。
+          */}
+          {runningLoopId && streaming ? (
+            <button
+              type="button"
+              className="inputbar-btn send inputbar-btn--stop"
+              onClick={() => onSend('停')}
+              title="停下这一路（等于发一句「停」；想补充要求直接按回车）"
+            >
+              <span className="inputbar__spin" aria-hidden="true" />
+              停止
+            </button>
+          ) : (
+            <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={streaming}>
+              {streaming ? '打字中…' : '发送'}
+            </button>
+          )}
           {/* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */}
           <button
             type="button"
