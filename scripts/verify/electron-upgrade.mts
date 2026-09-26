@@ -5,11 +5,12 @@
  * 连续零暴露面可 2–3 个 major 合一片;每片 `verify:shell` + 全量 verify 全绿才 push;
  * 交付报告含逐 major breaking 对照 + 装后版本核对。
  *
- * 当前片:TARGET_MAJOR = 40(第四片 39→40,**单 major 不合并**——Node 22.20→24.11.1 跨代点;
- * E40 官方 breaking 仅两条:renderer clipboard 弃用 / macOS dSYM 压缩改 tar.xz,
- * 另 Node 24 代际项(url.parse 弃用、createSecurePair 移除、spawn+shell:true 禁 args、
- * undici 7、require(esm) 默认)与 Chromium 143/144 移除项逐条 grep 全零暴露面;
- * 对照表见 docs/adr/0001-浏览器控制与Electron升级.md「分片记录」节)。
+ * 当前片:TARGET_MAJOR = 42(第五片 41–42 合并,两个 major 官方清单均核实零代码暴露面;
+ * 41:PDF 改 OOPIF 不再建独立 WebContents(我们不检测 PDF WebContents)/cookie changed 事件语义
+ *   (未订阅)/Linux showHiddenFiles 弃用(未用)/macOS ASAR Integrity digest(opt-in,未启用+未配签名=零影响);
+ * 42:macOS 通知迁 UNNotification 需签名(我们零 Notification 使用)/electron 改懒下载二进制(装后约定变更,非代码)/
+ *   OSR 默认 dsf=1.0(未用 OSR)/clearStorageData quotas 移除(未用)/ELECTRON_SKIP_BINARY_DOWNLOAD 移除(仅沙箱装约定);
+ * 逐 major 对照表见 docs/adr/0001-浏览器控制与Electron升级.md「分片记录」节)。
  *
  * 本脚本盖的(沙箱内,不拉 electron 二进制):
  *   ① 装后版本核对:node_modules/electron 实际 major = TARGET_MAJOR(不是只看声明)
@@ -26,8 +27,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/** 当前片目标 major(第四片:39→40 单 major,装后应为 40.x) */
-const TARGET_MAJOR = 40;
+/** 当前片目标 major(第五片:41–42 合并,装后应为 42.x) */
+const TARGET_MAJOR = 42;
 
 /** 脚本在 scripts/verify/ 下,仓库根 = 上两级 */
 const REPO = fileURLToPath(new URL('../..', import.meta.url));
