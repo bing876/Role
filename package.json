@@ -84,7 +84,7 @@
     "verify:chat-interaction:revert": "python3 scripts/verify/chat-interaction-revert.py"
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite": "0.5.8",
     "pg-mem": "^3.0.14"
   },
   "devDependencies": {

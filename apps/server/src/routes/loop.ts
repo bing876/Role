@@ -297,9 +297,13 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
             jobKind: decision.jobKind,
             etaMs: decision.etaMs,
           });
-          broadcastLoopEvent(loopId, 'note', { level: 'info', text: decision.question });
+          // ★ 用「⏳ 等待中」口径（不是 ⚠️ 求助）：把 park 原话带给用户，前端按 ask 事件的
+          //   jobId/etaMs 画倒计时。info 级 —— 这不是异常，是在等同事交活。
+          broadcastLoopEvent(loopId, 'note', { level: 'info', text: `⏳ ${decision.question}` });
         } else if (decision.kind === 'ask') {
+          // 真正的求助（need_user 等）：保留 ⚠️ 求助话术 —— 真卡住时还得报（别跟 job_pending 混）。
           broadcastLoopEvent(loopId, 'ask', { reason: decision.reason, question: decision.question, step: session.step });
+          broadcastLoopEvent(loopId, 'note', { level: 'warn', text: `⚠️ **需要协助**：${decision.question}` });
         } else if (decision.kind === 'stopped') {
         broadcastLoopEvent(loopId, 'stopped', { reason: decision.reason });
         endLoopSse(loopId, { stopped: true });

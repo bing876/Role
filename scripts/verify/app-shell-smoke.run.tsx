@@ -664,6 +664,9 @@ await check('⑧-4 「💬 对话」→ 隐藏形态:页宿主仍挂着（隐藏
   // ADR-0002 F3：隐藏≠卸载的宿主侧证据 —— 没发 close，且最后一次 rect 是 visible=false（藏起来，不是销毁）
   const c = viewCreateLog[0];
   assert.ok(!viewCloseLog.includes(c.tabKey), `隐藏形态却调了 view-close（tabKey=${c.tabKey}）—— 隐藏不该销毁宿主`);
+  // ★ 隐藏是异步的（层 class 变 → MutationObserver → rAF → 发 visible=false rect）：
+  //   等那张 visible=false 的 rect 真落地再断言（断言本身不变，只是给它跑完的时间）。
+  await waitFor('隐藏后 visible=false 的 rect', () => [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey)?.visible === false, 40);
   const lastRect = [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey);
   assert.ok(lastRect && lastRect.visible === false, '隐藏形态下当前页的最后一次 rect 不是 visible=false（视图该藏起来）');
   await act(async () => {
@@ -674,7 +677,9 @@ await check('⑧-4 「💬 对话」→ 隐藏形态:页宿主仍挂着（隐藏
   const clsOpen = (q('.browserLayer') as Element).getAttribute('class') ?? '';
   assert.ok(!clsOpen.includes('browserLayer--hidden'), `「🌐 启用」后列应打开：${clsOpen}`);
   // ADR-0002 F1：列回来 → 当前页露脸（visible=true 的 rect 必须跟上，视图不能一直藏着）
-  await waitFor('启用后 visible=true 的 rect', () => viewRectLog.some((r) => r.tabKey === c.tabKey && r.visible === true), 8);
+  // ★ 等「最后那张」rect 变成 visible=true（show 是异步：class 变 → MutationObserver → rAF）；
+  //   用 .some() 会命中隐藏前那张旧的 visible=true，断言却查最后那张 ⇒ 必须等最后那张。
+  await waitFor('启用后最后 visible=true 的 rect', () => [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey)?.visible === true, 40);
   const lastOpen = [...viewRectLog].reverse().find((r) => r.tabKey === c.tabKey);
   assert.ok(lastOpen && lastOpen.visible === true, '「🌐 启用」后当前页没有 visible=true 的 rect（视图没落位露脸）');
 });
@@ -1629,7 +1634,9 @@ await check('⑱ 资源：create 未回执就关页 → 回执落地必须当场
     });
     assert.ok(viewCloseLog.includes(tabKey), '前置：关页没有走到 view-close');
     // 等 create 回执落地（>90ms）后：必须**再**关一次（把晚到的原生视图销毁掉）
-    await flush(6);
+    // ★ 回执延迟 90ms，`flush(6)`（≈6ms）等不到 ⇒ 用 waitFor 等第二次 view-close（>90ms）。
+    //   断言（closes>=2）不变，只是给「回执落地→当场销毁」这条异步链跑完的时间。
+    await waitFor('回执落地后的第二次 view-close', () => viewCloseLog.filter((k) => k === tabKey).length >= 2, 60);
     const closes = viewCloseLog.filter((k) => k === tabKey).length;
     assert.ok(
       closes >= 2,

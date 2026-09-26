@@ -875,7 +875,8 @@ const projectToggle = (): Element | null => qa('aside.sidebar .btn').find((b) =>
 await check('★ B4：项目切换 = 原生 <select>，列出两个项目、当前那个标「使用中」', async () => {
   const sel = q('.projectBox__select') as HTMLSelectElement | null;
   assert.ok(sel, '项目下拉（<select>）不见了（B4：项目切换应为下拉）');
-  assert.equal(q('.projectBox__row') === null, true, '旧的「项目行」按钮还在（B4 该换成 <select> 了）');
+  // ★ R1 门禁：DOM 元素一律不进断言库（失败时 jsdom 环形图会 OOM）—— 用 sameNode 比「是不是 null」
+  sameNode(q('.projectBox__row'), null, '旧的「项目行」按钮还在（B4 该换成 <select> 了）');
   const opts = qa('.projectBox__select option');
   assert.equal(opts.length, 2, `项目选项数不对：${opts.length}`);
   const on = opts.filter((o) => (o.textContent ?? '').includes('使用中'));
@@ -2323,7 +2324,7 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     );
     const field = q('.inputbar-field') as HTMLInputElement | null;
     assert.ok(field && !field.disabled, '暂停后输入框被禁用了（用户没法打那句「继续」）');
-    assert.equal(q('.caret'), null, '暂停后还画着打字光标（那是"还在长"的意思）');
+    sameNode(q('.caret'), null, '暂停后还画着打字光标（那是"还在长"的意思）');
     // 「继续」→ 走既有的 resumeTask 链路，界面回执行中
     const rounds = streamBodies.length;
     await typeIntoInput('继续');
