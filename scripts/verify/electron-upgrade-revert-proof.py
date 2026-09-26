@@ -2,10 +2,10 @@
 """2026-09-26 阶段 3 · Electron 升级 · 反证(每片把回退目标改成上一片装后版本):
 把「升级真的发生了/声明真的改了」分别拆掉,验收必须当场红。
 
-当前片:第二片(34→37,35–37 合并),回退目标 = 第一片装后版本 34.5.8。
-  M1  装后版本回退(node_modules/electron 实际版本改回 34.x,声明仍是 ^37)
+当前片:第三片(37→39,38–39 合并),回退目标 = 第二片装后版本 37.10.3。
+  M1  装后版本回退(node_modules/electron 实际版本改回 37.x,声明仍是 ^39)
       → 红在「装后版本核对」—— 证明验收查的是**装上的版本**,不是声明。
-  M2  声明回退(apps/desktop/package.json 改回 ^34.5.8)
+  M2  声明回退(apps/desktop/package.json 改回 ^37.10.3)
       → 红在「声明核对」—— 证明验收查的是 package.json 声明,没被 lock/缓存绕过。
 
   (webview 红线本身的反证由既有 app-shell-smoke-revert.py R1–R4 承担,不重复造。)
@@ -26,16 +26,16 @@ DECLARED = REPO / 'apps' / 'desktop' / 'package.json'
 MUTATIONS = [
     {
         'id': 'M1',
-        'name': '装后版本回退(node_modules/electron 改回上一片 34.x,声明仍 ^37)',
+        'name': '装后版本回退(node_modules/electron 改回上一片 37.x,声明仍 ^39)',
         'target': INSTALLED,
-        'mutate': lambda pj: (pj.update(version='34.5.8'), pj)[1],
+        'mutate': lambda pj: (pj.update(version='37.10.3'), pj)[1],
         'expect': '装后版本核对',
     },
     {
         'id': 'M2',
-        'name': '声明回退(apps/desktop/package.json 改回 ^34.5.8)',
+        'name': '声明回退(apps/desktop/package.json 改回 ^37.10.3)',
         'target': DECLARED,
-        'mutate': lambda pj: (pj['devDependencies'].update(electron='^34.5.8'), pj)[1],
+        'mutate': lambda pj: (pj['devDependencies'].update(electron='^37.10.3'), pj)[1],
         'expect': '声明核对',
     },
 ]

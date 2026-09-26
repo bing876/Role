@@ -36,15 +36,15 @@
 | 35 | 2025-03-04 | 134.0.6998.44 / 22.14.0 / 13.4 | breaking:`console-message` 参数移进 event 对象、webRequest filter 空数组弃用、`getPreloads/setPreloads` 弃用(改 `registerPreloadScript`)、`isAeroGlassEnabled` 弃用 |
 | 36 | 2025-04-28 | 136.0.7103.48 / 22.14.0 / 13.6 | `NativeImage.getBitmap()` 弃用、Session extensions API 挪到 `Session.extensions`、`isAeroGlassEnabled` **移除**、PrinterInfo 字段删、`clearDataStorage({quota:'syncable'})` 移除、GTK 4 成 GNOME 默认(平台行为) |
 | 37 | 2025-06-24 | 138.0.7204.35 / 22.16.0 / 13.8 | Web Serial/WebUSB blocklist 支持(加性)、utilityProcess 两处崩溃修复、移除 `ProtocolResponse.session=null` |
-| 38 | 2025-09-02 | 140(同上)/ 22.x | 崩溃修复批次;官方通知 35.x EOL |
-| 39 | 2025 底 | 142(同上)/ 22.x | **ASAR Integrity 转正**(默认不影响我们:没启用就不会校验) |
+| 38 | 2025-09-02 | 140.0.7339.41 / 22.18.0 / 14.0 | **macOS 11 停止支持**;`ELECTRON_OZONE_PLATFORM_HINT` 移除(ozone 默认 auto,Linux Wayland 会话原生 Wayland);`plugin-crashed` 事件移除;`webFrame.routingId`/`findFrameByRoutingId` 弃用;35.x EOL |
+| 39 | 2025-10-27 | 142.0.7444.52 / 22.20.0 / 14.2 | **ASAR Integrity 转正**(未启用则无影响);`--host-rules` 弃用;`window.open` popup 恒可缩放;`desktopCapturer` 在 macOS≥14.2 需 `NSAudioCaptureUsageDescription`;共享纹理 OSR `paint` 数据结构变化;36.x EOL |
 | 40 | 2026-01-13 | 144.0.7559.60 / 24.11.1 / 14.4 | **Node 20→22→24 跨两代发生在 40** |
 | 41 | 2026-03-10 | 146.0.7680.65 / 24.14.0 / 14.6 | macOS ASAR Integrity digest;Wayland 改进;MSIX 自动更新;官方建议装 41.0.2+ |
 | 42 | 2026-05-07 | 148.0.7778.96 / 24.15.0 / 14.8 | — |
 | 43 | 2026-07-02 | 150.0.7871.46 / 24.17.0 / 15.0 | — |
 | **44(最新稳定)** | 2026-08-25(44.4.5 @ 09-22) | 152.0.7977.130 / 24.21.0 / 15.2 | 当前 stable |
 
-(34/35/36/37/38/40–44 的数字与要点均逐条取自官方 release notes/blog,2026-09-26 抓取;仅剩 38/39 的 Chromium/Node 为按「每 major +2 Chromium」规律的外推,该片动手前按纪律 #4 以官方 notes 复核。)
+(34–39 的 breaking 清单已逐条取自官方 release notes + 官方 blog(2026-09-26 抓取,数字全部核实);40–44 目前为官方 blog 级别摘要,各自动手那片前按纪律 #4 抓完整 release notes 复核。)
 
 ### 我们受 breaking 影响的 API 面(grep 实测)
 
@@ -132,12 +132,43 @@
 
 **结果**:装后版本 = **37.10.3**(34.5.8 → 37.10.3,lock 只动 electron 一项);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=37.10.3/声明 ^37/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 34.5.8→红在装后核对;M2 声明回退 ^34.5.8→红在声明核对);全量 verify **RC=0**(359 真实请求,logic 56/0)。前端/`browser/` 零改动,红线网(golden+R1–R4)原样在场。
 **盖不到的照旧**(失败模式表 #1/#4/#5):真机 webview 渲染(本片 Chromium 132→138,跨度比第一片大,真机复跑优先级提高)/ Windows 行为 / 真打包。
-**下一片**:37→38→(39)——38/39 的 Chromium/Node 数字待动手前以官方 notes 复核(表中已注明外推)。
+
+### 第三片:37.10.3 → 39.8.10,合并 38–39 两个 major(2026-09-26)
+
+**合并依据(同加速口径)**:38/39 官方 breaking 清单(含 Chromium 继承项,取自官方 release notes + 官方 blog)逐条核实**零代码暴露面** → 合一片。
+
+**38.0.0**(Chromium 140.0.7339.41 / Node 22.18.0 / V8 14.0)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| **macOS 11 停止支持**(E38+ 要求 macOS 12+) | 平台支持项,非代码 API——我们不声明最低 macOS 版本、代码零接触。**行为变化,已报告**:若用户群有 macOS 11,那部分用户需停留在 E37 版本线(分发策略事项,不触发拆片) |
+| `ELECTRON_OZONE_PLATFORM_HINT` 移除;ozone 默认 auto(Linux Wayland 会话**默认原生 Wayland**) | 我们不设该 env(grep 零命中)。行为项:Linux Wayland 用户窗口行为可能与 X11 不同(可用 `--ozone-platform=x11` 回退)——归真机观测 |
+| `plugin-crashed` 事件移除 | 零命中 |
+| `webFrame.routingId` 弃用 | 零命中 |
+| `webFrame.findFrameByRoutingId` 弃用 | 零命中 |
+
+→ **38 零代码暴露面**(两条平台行为项已单列报告)。
+
+**39.0.0**(Chromium 142.0.7444.52 / Node 22.20.0 / V8 14.2)— 逐条对照:
+
+| 官方 breaking | 我们的暴露面 |
+|---|---|
+| `--host-rules` 开关弃用(改 `--host-resolver-rules`) | 零:我们只 appendSwitch 三个后台节流开关(main.ts:49–51) |
+| `window.open` popup 恒可缩放 | **零**——两处 `setWindowOpenHandler`(webview guest main.ts:223 / 主窗口 main.ts:322)均 `action:'deny'`(新 tab 走渲染层 / 外链走系统浏览器),Electron 从不为我们创建 popup,行为变化无落点 |
+| `desktopCapturer` 在 macOS≥14.2 需 `NSAudioCaptureUsageDescription` | 零:`desktopCapturer` 零命中(无屏幕/音频捕获功能) |
+| 共享纹理 OSR `paint` 数据结构变化(`OffscreenSharedTexture` 统一 handle) | 零:offscreen/paint/SharedTexture 零命中 |
+| ASAR Integrity 转正(Notable,非 breaking) | 未启用该功能 → 无校验行为,零影响 |
+
+→ **39 零代码暴露面。**
+
+**结果**:装后版本 = **39.8.10**(37.10.3 → 39.8.10,lock 只动 electron 一项);双 tsconfig 类型绿;verify:shell **50/0**;verify:electron **5/0**(装后版本核对=39.8.10/声明 ^39/shell 真跑/类型/零原生依赖);反证 **2/2 红**(M1 装后版本回退 37.10.3→红在装后核对;M2 声明回退 ^37.10.3→红在声明核对);全量 verify **RC=0**(359 真实请求,logic 56/0)。前端/`browser/` 零改动。
+**盖不到的照旧 + 新增真机关注点**:真机 webview 渲染(Chromium 138→142)/ Windows 行为 / 真打包 / **macOS 11 用户停 E37** / **Linux Wayland 默认原生**(观测项)。
+**下一片**:39→40——**Node 22.20→24.11 跨代点**,40 那片单独细看 Node 24 变化(不合并);40–44 的 breaking 清单动手前抓完整 release notes 复核(目前为 blog 摘要)。
 
 ## 来源(纪律 #4,2026-09-26 抓取)
 
 - browser-use:https://github.com/browser-use/browser-use(README/AGENTS.md;LICENSE 原文=MIT;116k★,最后提交 2026-09-15)、https://docs.browser-use.com/open-source/browser-use-cli(CDP 连接:`BU_CDP_URL`/`cdp_url`)
 - Stagehand:https://github.com/browserbase/stagehand(LICENSE 原文=MIT;25.4k★,最后提交 2026-09-25)、https://docs.stagehand.dev/v4/configuration/browser(`localBrowser.connect({cdpUrl})` 需已暴露 DevTools endpoint)、PR #3018 / #2542(CDP 连接工程实践)
 - Nanobrowser:https://github.com/nanobrowser/nanobrowser(Chrome 扩展、Apache-2.0、13.8k★、仓库最后更新 2026-08-18、50 open issues)
-- Electron:https://releases.electronjs.org/(44.4.5/43.7.5/42.11.8 及 Chromium/Node 对应表)、v34.0.0/v35.0.0/v36.0.0/v37.0.0 release notes(breaking 清单,第二片于 2026-09-26 逐条复核)、v38.0.0 release notes(webview 修复记录、35 EOL 通知)、https://www.electronjs.org/blog(40/41/42/43/44 发布与 ASAR Integrity@39)、https://www.electronjs.org/docs/latest/api/webview-tag(webview 不推荐警告)、browser-view 文档(BrowserView deprecated)
+- Electron:https://releases.electronjs.org/(44.4.5/43.7.5/42.11.8 及 Chromium/Node 对应表)、v34.0.0/v35.0.0/v36.0.0/v37.0.0/v38.0.0/v39.0.0 release notes(breaking 清单,2026-09-26 逐条复核)、官方 blog electron-38-0 / electron-39-0(Chromium 继承 breaking:macOS 11 移除 / OZONE 默认 auto / plugin-crashed 移除 / routingId 弃用;--host-rules 弃用 / window.open 恒可缩放 / desktopCapturer plist / OSR paint 结构)、https://www.electronjs.org/blog(40/41/42/43/44 发布与 ASAR Integrity@39)、https://www.electronjs.org/docs/latest/api/webview-tag(webview 不推荐警告)、browser-view 文档(BrowserView deprecated)
 - 库内:`docs/智能体协同-总计划.md`(Electron 升级排阶段 3)、`apps/desktop/electron/driver.ts`(自建 CDP 驱动)、`apps/desktop/electron/main.ts:306`(`webviewTag: true`)、`apps/desktop/package.json`(electron `^33.2.1`、无原生依赖)
