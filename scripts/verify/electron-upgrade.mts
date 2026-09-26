@@ -5,9 +5,11 @@
  * 连续零暴露面可 2–3 个 major 合一片;每片 `verify:shell` + 全量 verify 全绿才 push;
  * 交付报告含逐 major breaking 对照 + 装后版本核对。
  *
- * 当前片:TARGET_MAJOR = 39(第三片 38–39 合并,两个 major 官方清单均核实零代码暴露面;
- * 38 有两条平台行为项——macOS 11 停止支持 / Wayland 默认——零代码影响,已报告;
- * 逐 major 对照表见 docs/adr/0001-浏览器控制与Electron升级.md「分片记录」节)。
+ * 当前片:TARGET_MAJOR = 40(第四片 39→40,**单 major 不合并**——Node 22.20→24.11.1 跨代点;
+ * E40 官方 breaking 仅两条:renderer clipboard 弃用 / macOS dSYM 压缩改 tar.xz,
+ * 另 Node 24 代际项(url.parse 弃用、createSecurePair 移除、spawn+shell:true 禁 args、
+ * undici 7、require(esm) 默认)与 Chromium 143/144 移除项逐条 grep 全零暴露面;
+ * 对照表见 docs/adr/0001-浏览器控制与Electron升级.md「分片记录」节)。
  *
  * 本脚本盖的(沙箱内,不拉 electron 二进制):
  *   ① 装后版本核对:node_modules/electron 实际 major = TARGET_MAJOR(不是只看声明)
@@ -24,8 +26,8 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/** 当前片目标 major(第三片:38–39 合并,装后应为 39.x) */
-const TARGET_MAJOR = 39;
+/** 当前片目标 major(第四片:39→40 单 major,装后应为 40.x) */
+const TARGET_MAJOR = 40;
 
 /** 脚本在 scripts/verify/ 下,仓库根 = 上两级 */
 const REPO = fileURLToPath(new URL('../..', import.meta.url));
