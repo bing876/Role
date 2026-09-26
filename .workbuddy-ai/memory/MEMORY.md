@@ -25,7 +25,10 @@
   桌面端 `main.ts` 的 **10 秒保活心跳**会自动从新 dist 重拉一个（实测第 10 秒接管、`/health` 立刻 `db=up`）。
   8787 上的服务端进程名是 **`electron.exe`**（桌面端的 utilityProcess child）⇒ **不用关桌面端、不用重跑 `npm run dev`**
 - 渲染层 `apps/desktop/src/**` vite 热更（直接从磁盘读，新增/删除文件都能跟上）；换装 `npm run build -w @ai-workbench/desktop`
-- 主进程 `apps/desktop/electron/**` **必须** `npm run build:electron`
+- 主进程 `apps/desktop/electron/**` **必须** `npm run build:electron`（2026-09-26 起 `view-host.ts` 是第四列的页宿主）
+- ★ 启动命令口径（2026-09-26 补）：`dev` = **Vite + Electron 真窗口**（**不是网页版**）；
+  新增 `dev:desktop`（同 `dev`，ADR-0001 一直这么引用但此前不存在）、`dev:web`（只起 vite）、`dev:server`
+- ★ Electron 已爬到 **44.5.8**，且 **`<webview>` 已退场**（ADR-0002：改主进程托管的 `WebContentsView`）
 - 判 8787 是不是新代码：看进程**启动时间**是否晚于 dist 构建时间 + 直接在 dist 上跑一段新逻辑（比看 `/health` 字段可靠）
 - 服务端**不在 asar 里**（桌面端从 `repoRoot/apps/server/dist/index.js` 拉起）⇒ 服务端改动与换装无关
 
@@ -70,6 +73,18 @@ start-dev.cmd 误删 `postmaster.pid`、`watchdog.cmd` 每 10s 反复删 pid + �
 - ★★★ **工作区根目录在会话存活期间无法重命名**（`WorkBuddyAI.exe` + 沙箱持有句柄）
 
 ## 四、★★ 验证方法论
+- ★★★ **`*:revert` 反证脚本跑到一半绝不能杀**（2026-09-26 血的教训）：`TaskStop` 掉正在跑的批次后，
+  源码被留在「已注入」状态 —— `toolLoop.ts` 少了 `executedToolIds: []`、`checkpoint.ts` 退回 `?? usedTools`、
+  `routineCreate.ts` 与 `14-browser-column.css` **整个文件被清空**。
+  ⇒ 跑完**必须** `git status --short apps/` 复核，有残留就 `git checkout --` 还原。
+- ★★★ **本机沙箱把同步 spawn 一律拦成 `EBUSY`**（`spawnSync` / `execFileSync` 都拦；**异步 `spawn` 正常**）
+  ⇒ 验收脚本起子进程一律用**异步 spawn + Promise**。
+- ★★★ **`npx` / `npm` 在 PATH 上只有 `.cmd`/`.ps1`**（CreateProcess 不解析）⇒
+  `spawn('npx')` ENOENT、`execFileSync('npx')` EBUSY、Python `subprocess.run(['npx',…])` FileNotFoundError。
+  统一改「`process.execPath` / `shutil.which('node')` + `node_modules/tsx/dist/cli.mjs`」。
+- ★★ **C 盘长期 100% 满**（200G 用 199G，可用 <1GB）⇒ 反证脚本报 `OSError: [Errno 28]`，
+  **验收结论会被污染**。已知大头：`C:\pagefile.sys` 15GB、`C:\$Recycle.Bin` 7.5GB、
+  `~/.workbuddy-ai/logs` 5.3GB、electron 下载缓存 1.3GB。**跑 `npm install` 前先看 `df -h /c`**。
 - ★★★ **`npm run verify` 用 `&&` 串 31 个子套件 ⇒ 第一个失败把后面全挡住**，「只红在第 3 步」是假象。
   查真实清单要**逐个单跑**（`verify:*` 全列表 + 逐套件 rc 的脚本见 `wb-backups/verify-suites.txt`）。
   2026-09-25 实测：单跑 25 通过 / 6 失败；其中 `verify:db`、`verify:db:mutate-nocipher` **不在链里**
