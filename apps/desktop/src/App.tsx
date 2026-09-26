@@ -224,7 +224,7 @@ function driveStateView(
     return { cls: 'agent', icon: '🤖', text: `AI 主动求助 · 等你处理 — ${state.detail}` };
   }
   if (state.pausedBy === 'user') {
-    return { cls: 'user', icon: '✋', text: `你主动接管 · 页面归你 — ${state.detail}` };
+    return { cls: 'user', icon: '✋', text: `你在操作 · AI 已暂停，页面归你 — ${state.detail}` };
   }
   return { cls: 'none', icon: '⏸', text: `已暂停（未记录发起方）— ${state.detail}` };
 }
@@ -2788,8 +2788,9 @@ export default function App() {
             disabled={streaming && !runningLoopId && !pausedHere}
           />
           {/*
-            交互对齐片(2026-09-26)：执行中**发送键变「停止」**（带旋转图标）。
+            形态① 真接管（2026-09-27）：执行中**发送键变「接管」**（带旋转图标）。
             它走的就是「发一句『停』」那条路（detectStopIntent → pauseTask/stopDriving），
+            AI 真的暂停这一路、页面归你（driveStateView 显示「你在操作 · AI 已暂停」）。
             不是第二套机制；想补充要求直接按回车（Enter 照旧 = 发送）。
           */}
           {runningLoopId && streaming ? (
@@ -2797,19 +2798,19 @@ export default function App() {
               type="button"
               className="inputbar-btn send inputbar-btn--stop"
               onClick={() => onSend('停')}
-              title="停下这一路（等于发一句「停」；想补充要求直接按回车）"
+              title="接管这一路（AI 暂停，页面归你；想补充要求直接按回车）"
             >
               <span className="inputbar__spin" aria-hidden="true" />
-              停止
+              接管
             </button>
           ) : pausedHere ? (
             /**
-             * ★ A①：暂停态（等「继续」）→ **输入框回正常发送键**。
+             * ★ 形态① 真接管：暂停态（等「交还」）→ **发送键变「交还」**（= 发一句「继续」）。
              *   为什么必须单列:挂起时 `streaming` 仍是 true（那条 SSE 还开着），
-             *   照原样会落进「打字中…」并**禁用** —— 用户根本打不出那句「继续」。
+             *   照原样会落进「打字中…」并**禁用** —— 用户根本点不了「交还」。
              */
-            <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={!input.trim()}>
-              发送
+            <button type="button" className="inputbar-btn send" onClick={() => onSend('继续')} title="交还：AI 恢复这一路">
+              交还
             </button>
           ) : (
             <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={streaming}>

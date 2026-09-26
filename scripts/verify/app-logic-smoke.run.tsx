@@ -1151,16 +1151,16 @@ await check('F3-A2：坏负载不许覆盖上一次的好状态（暂停横幅�
   bridgeMode.getTaskState = 'ok';
   const root = await mountApp(true);
   await ensure('App 起来（侧栏在）', () => !!q('aside.sidebar'));
-  assert.ok(!doc.body.textContent!.includes('你主动接管'), '前提不成立：一开始就有接管横幅');
-  // 好负载 → 横幅出现
+  assert.ok(!doc.body.textContent!.includes('你在操作'), '前提不成立：一开始就有接管横幅');
+  // 好负载 → 横幅出现（形态片·真接管：by=user 的暂停态文案 = 「你在操作」）
   emitBridge('state', JSON.stringify({ phase: 'paused', detail: '页面归你', step: 1, blocked: false, pausedBy: 'user' }));
   await flush(3);
-  assert.match(doc.body.textContent ?? '', /你主动接管/, '正常广播没生效（防白屏把正常路径也挡了）');
+  assert.match(doc.body.textContent ?? '', /你在操作/, '正常广播没生效（防白屏把正常路径也挡了）');
   // 坏负载（合法 JSON 但是 null / 缺字段）→ 横幅必须还在（状态没被清掉、也没崩）
   emitBridge('state', 'null');
   emitBridge('state', JSON.stringify({ detail: '没有 phase' }));
   await flush(3);
-  assert.match(doc.body.textContent ?? '', /你主动接管/, '坏负载把好状态覆盖掉了（应当忽略坏值，保持上一次的值）');
+  assert.match(doc.body.textContent ?? '', /你在操作/, '坏负载把好状态覆盖掉了（应当忽略坏值，保持上一次的值）');
   assert.ok(q('aside.sidebar'), '坏负载把整页搞崩了');
   await act(async () => root.unmount());
 });
@@ -1691,7 +1691,8 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
    *   不在门禁的值取值白名单里，所以这里先落到局部变量，别跟门禁绕。
    */
   const preBtnText = q('.inputbar button')?.textContent ?? '';
-  assert.equal(preBtnText, '停止', '前置不成立：执行中发送键应变「停止」');
+  // 形态片·真接管(2026-09-27)：执行中发送键从「停止」改名「接管」（同一暂停机制）
+  assert.equal(preBtnText, '接管', '前置不成立：执行中发送键应变「接管」');
 
   // 流还开着就登出（B1：退出登录在设置抽屉里，先开抽屉）
   await openSettings();
@@ -2139,10 +2140,10 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
       (field!.getAttribute('placeholder') ?? '').includes('聊聊'),
       `执行中 placeholder 不是正常那句：${field!.getAttribute('placeholder')}`,
     );
-    // 发送键变「停止」+ 带旋转
-    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('停止'));
-    assert.ok(stopBtn, '执行中发送键没有变「停止」');
-    assert.ok(stopBtn!.querySelector('.inputbar__spin') !== null, '「停止」键上没有旋转图标');
+    // 发送键变「接管」+ 带旋转（形态片·真接管：从「停止」改名「接管」）
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(stopBtn, '执行中发送键没有变「接管」');
+    assert.ok(stopBtn!.querySelector('.inputbar__spin') !== null, '「接管」键上没有旋转图标');
   });
 
   await check('⑲-2 步骤事件进「可点开、默认收起」的轨迹抽屉，且**不进**主对话流', async () => {
@@ -2224,10 +2225,12 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     bridgeCalls.length = 0;
     /** ★ 「停」是控制指令 ⇒ **不许再开一轮**（判据取"轮数有没有涨"，比 agentStart 更靠前） */
     const roundsBeforeStop = streamBodies.length;
-    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('停止'));
-    assert.ok(stopBtn, '找不到「停止」键');
+    // 形态片·真接管(2026-09-27)：执行中主按钮从「停止」改名「接管」（同一暂停机制，
+    //   语义 = 用户键鼠直接操作内嵌页、AI 当场暂停）。这里按新文案找按钮。
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(stopBtn, '找不到「接管」键');
     await act(async () => {
-      click(stopBtn!, '停止');
+      click(stopBtn!, '接管');
       await new Promise((r) => setTimeout(r, 0));
     });
     await flush(4);
@@ -2280,6 +2283,78 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     assert.ok(mine.includes('停'), `「停」没有作为正常用户气泡上屏：${JSON.stringify(mine)}`);
   });
 
+  /**
+   * 形态片·真接管（①，2026-09-27；规格 docs/产品交互规格.md）：
+   *   点「接管」→ 用户键鼠直接操作内嵌页、AI 当场暂停（状态条「你在操作」）；
+   *   点「交还」→ 恢复 AI，从你留下的位置接上（走既有 resumeTask）。
+   * 反证：scripts/verify/takeover-revert-proof.py（拆暂停闸必红）。
+   */
+  await check('①-a 执行中主按钮 = 「接管」，点了真的暂停这一路', async () => {
+    // ⑲-7 把上一轮流收尾了 → 这里先真正发一轮，把 /chat/stream 重新开起来（sseCtl 有值）
+    await typeIntoInput('把这一页整理一下');
+    const streamsBeforeTk = streamBodies.length;
+    clickSend();
+    await waitFor('①-a 发出 /chat/stream', () => streamBodies.length > streamsBeforeTk);
+    ssePush('meta', { conversationId: 4260, agentId: 97 });
+    ssePush('loop', { loopId: 'loop-tk1', wcId: 7777 });
+    await flush(4);
+    assert.ok(q('.runStatus') !== null, '前置不成立：这一轮没进执行态（点接管前必须真的在跑）');
+    const takeBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(takeBtn, '执行中找不到「接管」键（主按钮应该是它）');
+    bridgeCalls.length = 0;
+    await act(async () => {
+      click(takeBtn!, '接管');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(4);
+    const paused =
+      requestsTo('/agent/loop/pause').length > 0 || bridgeCalls.some((c) => c.startsWith('pauseTask('));
+    assert.ok(
+      paused,
+      `点「接管」没有真的暂停这一路（既没发 /agent/loop/pause，也没调 pauseTask）：${JSON.stringify(bridgeCalls)}`,
+    );
+  });
+
+  await check('①-b 接管后：状态条写「你在操作」（你接管的琥珀色）+ 出现「交还」键', async () => {
+    // 服务端把这一路挂成 by=user（暂停闸的产物）→ 桌面靠 state 广播把它画出来
+    assert.equal(
+      emitBridge('state', JSON.stringify({ phase: 'paused', pausedBy: 'user', detail: '你在操作这一页', step: 3, blocked: false })),
+      1,
+      'App 没订阅 state 广播（接管后的状态画不出来）',
+    );
+    await flush(4);
+    const driveState = q('.driveState');
+    assert.ok(driveState, '接管后没有那条「谁在等谁」状态条（.driveState）');
+    assert.match(driveState?.textContent ?? '', /你在操作/, `状态条没写「你在操作」：${driveState?.textContent}`);
+    assert.ok(
+      (driveState?.className ?? '').includes('driveState--user'),
+      `「你在操作」该走你接管的琥珀色（.driveState--user），实际：${driveState?.className}`,
+    );
+    const backBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('交还'));
+    assert.ok(backBtn, '接管（by=user）之后找不到「交还」键');
+  });
+
+  await check('①-c 点「交还」→ 恢复 AI（走既有 resumeTask）', async () => {
+    bridgeCalls.length = 0;
+    const backBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('交还'));
+    assert.ok(backBtn, '前置不成立：「交还」键不见了');
+    await act(async () => {
+      click(backBtn!, '交还');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(5);
+    assert.ok(
+      bridgeCalls.some((c) => c.startsWith('resumeTask(')),
+      `点「交还」没有恢复这一路（没调 resumeTask）：${JSON.stringify(bridgeCalls)}`,
+    );
+  });
+
+  // ★ 收尾：把 ① 这条流收尾 —— 别把「循环在跑 + 流还开着」的状态漏给后面的 ⑲-8/9/10
+  ssePush('done', { conversationId: 4260, messageId: 9200, contentLength: 2, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+  await flush(3);
+
   await check('⑲-8（A②）状态行钉在输入框正上方：同一个容器、排在输入框之前', async () => {
     await typeIntoInput('把刚才那个页面再看一遍');
     const streamsB = streamBodies.length;
@@ -2302,10 +2377,11 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
 
   await check('⑲-9（A①）发「停」→ 非执行态（已暂停 + 输入框回正常发送）；说「继续」→ 接回执行中', async () => {
     bridgeCalls.length = 0;
-    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('停止'));
-    assert.ok(stopBtn, '前置：执行中发送键应是「停止」');
+    // 形态片·真接管：执行中发送键 = 「接管」（从「停止」改名）
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(stopBtn, '前置：执行中发送键应是「接管」');
     await act(async () => {
-      click(stopBtn!, '停止');
+      click(stopBtn!, '接管');
       await new Promise((r) => setTimeout(r, 0));
     });
     await flush(4);
@@ -2315,12 +2391,12 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
       `暂停态文案不对：${q('.runStatus')?.textContent}`,
     );
     assert.ok(
-      !qa('.inputbar button').some((b) => (b.textContent ?? '').includes('停止')),
-      '暂停后发送键还是「停止」（目标态要回「发送」）',
+      !qa('.inputbar button').some((b) => (b.textContent ?? '').includes('接管')),
+      '暂停后发送键还是「接管」（目标态要回「交还」）',
     );
     assert.ok(
-      qa('.inputbar button').some((b) => (b.textContent ?? '').includes('发送')),
-      '暂停后找不到「发送」键',
+      qa('.inputbar button').some((b) => (b.textContent ?? '').includes('交还')),
+      '暂停后找不到「交还」键',
     );
     const field = q('.inputbar-field') as HTMLInputElement | null;
     assert.ok(field && !field.disabled, '暂停后输入框被禁用了（用户没法打那句「继续」）');

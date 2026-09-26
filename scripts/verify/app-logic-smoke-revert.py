@@ -506,6 +506,16 @@ MUTATIONS = [
         'replace': '            </select>\n            <button type="button" className="projectBox__row"></button>\n            <input\n              className="authInput projectBox__name"',
         'expect': '旧的「项目行」按钮还在',
     },
+    # ---- 形态片·真接管（①，2026-09-27）：拆掉「接管」键的暂停闸 → 点了不再真的暂停这一路 ----
+    {
+        'file': APP_TSX,
+        'id': 'TK1',
+        'visible': True,
+        'name': '「接管」键拆掉暂停闸：点了不再真的暂停这一路（形态① 反证：拆暂停闸必红）',
+        'anchor': "              className=\"inputbar-btn send inputbar-btn--stop\"\n              onClick={() => onSend('停')}\n",
+        'replace': "              className=\"inputbar-btn send inputbar-btn--stop\"\n              onClick={() => undefined} // 反证注入：拆掉暂停闸（点了不暂停）\n",
+        'expect': '点「接管」没有真的暂停这一路',
+    },
 ]
 
 
