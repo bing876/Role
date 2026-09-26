@@ -52,7 +52,9 @@ export type BrowserEvent =
   | 'settings'
   | 'resources'
   | 'opentab'
-  | 'pageinfo';
+  | 'pageinfo'
+  // 形态② 教一遍：主进程把 webview 键鼠操作录下来的动作喂给渲染层
+  | 'teachAction';
 
 /**
  * 第 23 步：「内嵌页想开新标签」的请求体。

@@ -163,6 +163,59 @@ export async function createSkill(
   return toSkillView(r.rows[0], cipher);
 }
 
+/** 教一遍：用户在页上操作一遍时，前端录下来的一条动作（录制产物） */
+export interface TeachAction {
+  /** 动作类型：click / input / navigate / keydown / ... */
+  type: string;
+  /** 动作描述（人话）：点击了「登录」按钮 / 在搜索框输入了 "天气" */
+  detail: string;
+}
+
+/**
+ * 形态② 教一遍（2026-09-27）：把「用户在页上操作一遍」的动作序列**录成一张技能卡**。
+ *
+ * ★ 这里的「录制」是整条链路的承重墙：动作序列 → 可回放的步骤（steps）。
+ *   拆掉它（动作序列不落成 steps）→ 技能卡没有步骤 → 之后一句话回放不出任何东西。
+ *   反证 scripts/verify/teach-revert-proof.py 拆这一步必红。
+ *
+ * 与 G4 的 recordTaskAsPendingSkill 区分：那条是**任务收尾**自动录 AI 的工具步（落 pending）；
+ * 这条是**用户主动**教一遍（键鼠操作录成 steps），落 **active**（用户明确要，直接生效）。
+ */
+export async function recordTeaching(
+  pool: Pool,
+  cipher: JsonCipher,
+  input: {
+    userId: number;
+    projectId: number | null;
+    agentId: number | null;
+    name: string;
+    triggerCondition: string;
+    /** 用户在页上操作一遍时录下来的动作序列（录制产物） */
+    actions: TeachAction[];
+  },
+): Promise<SkillView | null> {
+  if (!input.name.trim() || !input.triggerCondition.trim()) return null;
+  // ★ 录制闸：动作序列 → 步骤（人话）。这一步拆掉 = 技能卡没有步骤 = 回放不出东西。
+  const steps = (input.actions ?? [])
+    .map((a) => {
+      const detail = a && typeof a.detail === 'string' ? a.detail.trim() : '';
+      const type = a && typeof a.type === 'string' ? a.type.trim() : '';
+      if (!detail) return '';
+      return type ? `${type}：${detail}` : detail;
+    })
+    .filter(Boolean);
+  if (steps.length === 0) return null; // 没录到任何动作 → 不生成卡（别造假卡）
+  return createSkill(pool, cipher, {
+    userId: input.userId,
+    projectId: input.projectId,
+    agentId: input.agentId,
+    name: input.name,
+    triggerCondition: input.triggerCondition,
+    steps,
+    decisionRules: '由「教一遍」录制生成：严格按录制的动作顺序回放，不自由发挥。',
+  });
+}
+
 export async function reviseSkill(
   pool: Pool,
   cipher: JsonCipher,

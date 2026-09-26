@@ -427,6 +427,15 @@ export default function App() {
   const [awaitResume, setAwaitResume] = useState(false);
   const [awaitResumeAgent, setAwaitResumeAgent] = useState<number | null>(null);
   const [awaitResumeWc, setAwaitResumeWc] = useState<number | null>(null);
+  /**
+   * 形态② 教一遍（2026-09-27）：用户在页上操作一遍 → 录动作序列 → 生成技能卡 → 之后一句话回放。
+   * `teaching` = 正在录制（点了「教」还没点「完成」）；`teachActions` = 录下来的动作序列（录制产物）。
+   * 动作序列由主进程从 webview 的键鼠事件里抓出来、经 `teachAction` 桥事件喂进来（真人操作，非写死假数据）。
+   */
+  const [teaching, setTeaching] = useState(false);
+  const [teachActions, setTeachActions] = useState<Array<{ type: string; detail: string }>>([]);
+  const teachingRef = useRef(false);
+  teachingRef.current = teaching;
   /** 当前这个智能体在等驾驶员提问吗（切到别的智能体就不提示） */
   const awaitHere = agentAwaitInfo && agentAwaitAgent === curAgentId;
   /** 第 15 步：左栏智能体列表（服务端为准）。personaStatus==='pending' 时聊天里摆引导表 */
@@ -1188,6 +1197,35 @@ export default function App() {
   };
 
   /**
+   * 形态② 教一遍（2026-09-27）：点「完成」→ 把录下来的动作序列落库成技能卡（POST /skills/teach）。
+   * 名字/触发词从动作推导一个可回放的默认（真实产品会让用户命名，这里给个不挡回放的占位）。
+   */
+  const finishTeaching = async (): Promise<void> => {
+    const sess = sessionRef.current;
+    const agentId = curAgentRef.current;
+    const actions = teachActions;
+    setTeaching(false);
+    setTeachActions([]);
+    if (!sess) return;
+    if (actions.length === 0) {
+      setChatNote('没录到动作 —— 先在这一页操作一遍，再点「完成」。');
+      return;
+    }
+    const name = `教一遍 · ${actions[0].detail.slice(0, 40)}`.slice(0, 60);
+    const trigger = actions.slice(0, 4).map((a) => a.detail).join('，').slice(0, 500);
+    try {
+      const r = await authFetchJson<{ skill: { id: number; name: string }; recorded: number }>('/skills/teach', {
+        method: 'POST',
+        body: JSON.stringify({ agentId: agentId ?? undefined, name, triggerCondition: trigger, actions }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setChatNote(`技能卡「${r.skill.name}」已生成（录了 ${r.recorded} 个动作），之后一句话就能回放。`);
+    } catch (e) {
+      setChatNote(`技能卡没存上：${(e as Error).message}`);
+    }
+  };
+
+  /**
    * 记忆的 5 个写操作（忘掉 / 确认 / 拒绝 / 批量确认 / 批量拒绝）也搬进 `features/memory`，
    * 见上面的 useMemory 解构 —— 本文件只留调用点。
    */
@@ -1542,6 +1580,21 @@ export default function App() {
       }
     });
 
+    // 形态② 教一遍：主进程从 webview 键鼠事件里抓出的动作，经 `teachAction` 喂进来。
+    // 只在「正在录制」（teachingRef.current）时才收 —— 平时用户的操作不该被记进技能卡。
+    const offTeachAction = bridge.on('teachAction', (payload) => {
+      if (!teachingRef.current || !payload) return;
+      try {
+        const a: unknown = JSON.parse(payload);
+        const detail = a && typeof (a as { detail?: unknown }).detail === 'string' ? (a as { detail: string }).detail.trim() : '';
+        const type = a && typeof (a as { type?: unknown }).type === 'string' ? (a as { type: string }).type.trim() : '';
+        if (!detail) return;
+        setTeachActions((list) => (list.length >= 20 ? list : [...list, { type, detail }]));
+      } catch {
+        /* 坏负载忽略 */
+      }
+    });
+
     // 第 22 步：可调配置同样「初始拉一次 + 跟随广播」，主进程是权威
     bridge
       .getSettings()
@@ -1598,6 +1651,7 @@ export default function App() {
       offFocus();
       offState();
       offSettings();
+      offTeachAction();
     };
   }, []);
 
@@ -2762,6 +2816,12 @@ export default function App() {
           className="inputbar"
           data-state={streaming ? 'thinking' : input ? 'typing' : 'empty'}
         >
+          {/* 形态② 教一遍：录制中横幅（用户看得见「正在录」，操作完点「完成」） */}
+          {teaching && (
+            <div className="teachBanner" role="status">
+              正在录制你的操作（已录 {teachActions.length} 个动作），操作完点「完成」生成技能卡
+            </div>
+          )}
           <input
             className="inputbar-field"
             /**
@@ -2815,6 +2875,30 @@ export default function App() {
           ) : (
             <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={streaming}>
               {streaming ? '打字中…' : '发送'}
+            </button>
+          )}
+          {/*
+            形态② 教一遍（2026-09-27）：有活页时给「教」—— 你键鼠操作一遍，主进程把动作序列
+            经 teachAction 喂进来（teachActions）；点「完成」落库成技能卡，之后一句话就能回放。
+          */}
+          {browser.active && !teaching && (
+            <button
+              type="button"
+              className="inputbar-btn teach"
+              title="教一遍：你在这一页操作一遍，我录下动作，之后一句话就能回放"
+              onClick={() => { setTeachActions([]); setTeaching(true); }}
+            >
+              教
+            </button>
+          )}
+          {teaching && (
+            <button
+              type="button"
+              className="inputbar-btn teach inputbar-btn--finish"
+              title={`完成教学（已录 ${teachActions.length} 个动作）→ 生成技能卡`}
+              onClick={finishTeaching}
+            >
+              完成{teachActions.length > 0 ? `（${teachActions.length}）` : ''}
             </button>
           )}
           {/*

@@ -2355,6 +2355,47 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
   await waitRoundEnd();
   await flush(3);
 
+  /**
+   * 形态片·教一遍（②，2026-09-27；规格 docs/产品交互规格.md）：
+   *   有活页给「教」→ 点进录制态（横幅「正在录制你的操作」）→ 主进程把 webview 键鼠操作
+   *   经 teachAction 喂进来（真人操作，非写死假数据）→ 点「完成」带动作序列 POST /skills/teach。
+   * 反证：scripts/verify/teach-revert-proof.py（拆录制闸必红）。
+   */
+  await check('②-a 有活页时出现「教」键；点了进录制态（横幅「正在录制你的操作」）', async () => {
+    const teachBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').trim() === '教');
+    assert.ok(teachBtn, '有活页却找不到「教」键');
+    await act(async () => { click(teachBtn!, '教'); await new Promise((r) => setTimeout(r, 0)); });
+    await flush(3);
+    const banner = q('.teachBanner');
+    assert.ok(banner, '点了「教」没有录制横幅（.teachBanner）');
+    assert.match(banner?.textContent ?? '', /正在录制你的操作/, `横幅文案不对：${banner?.textContent}`);
+  });
+  await check('②-b 主进程喂进来的动作被录下（teachAction，真人操作非写死），「完成」显示条数', async () => {
+    emitBridge('teachAction', JSON.stringify({ type: 'click', detail: '点击登录按钮' }));
+    emitBridge('teachAction', JSON.stringify({ type: 'input', detail: '在搜索框输入咖啡店' }));
+    emitBridge('teachAction', JSON.stringify({ type: 'click', detail: '点击按价格排序' }));
+    await flush(3);
+    const banner = q('.teachBanner');
+    assert.match(banner?.textContent ?? '', /已录 3 个动作/, `没录下 3 个动作：${banner?.textContent}`);
+    const finishBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('完成'));
+    assert.ok(finishBtn, '录制中找不到「完成」键');
+    assert.match(finishBtn?.textContent ?? '', /完成（3）/, `「完成」键没显示条数：${finishBtn?.textContent}`);
+  });
+  await check('②-c 点「完成」→ POST /skills/teach 带上录下的动作序列 + 技能名', async () => {
+    const before = requestsTo('/skills/teach').length;
+    const finishBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('完成'));
+    assert.ok(finishBtn, '前置不成立：「完成」键不见了');
+    await act(async () => { click(finishBtn!, '完成'); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor('②-c /skills/teach 发出', () => requestsTo('/skills/teach').length > before);
+    const req = requestsTo('/skills/teach')[requestsTo('/skills/teach').length - 1];
+    const body = JSON.parse(String(req.body)) as { actions?: Array<{ type: string; detail: string }>; name?: string; triggerCondition?: string };
+    assert.ok(body.actions && body.actions.length === 3, `动作序列没带上（应是 3 条）：${JSON.stringify(body.actions)}`);
+    assert.ok(body.actions!.some((a) => a.detail.includes('点击登录按钮')), '第 1 个动作丢了');
+    assert.ok(body.actions!.some((a) => a.detail.includes('按价格排序')), '第 3 个动作丢了');
+    assert.ok(body.name, '技能卡没有名字');
+    assert.ok(body.triggerCondition, '技能卡没有触发条件（之后没法一句话命中回放）');
+  });
+
   await check('⑲-8（A②）状态行钉在输入框正上方：同一个容器、排在输入框之前', async () => {
     await typeIntoInput('把刚才那个页面再看一遍');
     const streamsB = streamBodies.length;

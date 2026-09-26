@@ -38,7 +38,7 @@ export interface ChatSession {
  *            标题/地址变化不再有 DOM 元素事件，由主进程推过来
  *            （payload 是 { wcId, title?, url? } 的 JSON；wcId 就是 create 回执那份）。
  */
-export type BrowserEvent = 'open' | 'show' | 'hide' | 'focus' | 'state' | 'agent' | 'settings' | 'resources' | 'opentab' | 'pageinfo';
+export type BrowserEvent = 'open' | 'show' | 'hide' | 'focus' | 'state' | 'agent' | 'settings' | 'resources' | 'opentab' | 'pageinfo' | 'teachAction';
 /**
  * 第 23 步：「内嵌页想开新标签」的请求体。
  *
