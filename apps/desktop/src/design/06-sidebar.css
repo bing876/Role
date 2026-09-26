@@ -221,6 +221,27 @@
   word-break: break-word;
 }
 
+/* B1 设置抽屉：账号 / 密码 / 浏览器参数 / 保活 收进可开合抽屉（默认收起 = 降噪）。
+   记忆 / 知识库不进抽屉（查阅 ≠ 设置），仍常显在侧栏。 */
+.settingsDrawer {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settingsDrawer__toggle {
+  width: 100%;
+}
+.settingsDrawer__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
 /* 第 16 步：「启动并保活」开关（左栏） */
 .keepalive {
   margin-top: 8px;

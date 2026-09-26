@@ -516,6 +516,19 @@ function click(el: Element | null, label: string): void {
   assert.ok(el, `找不到可点的元素：${label}`);
   el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
 }
+/**
+ * B1：设置抽屉默认收起 —— 账号 / 密码 / 浏览器参数 / 保活 / 退出登录 都收在抽屉里。
+ *   访问它们之前必须先点「设置」开关，等 `.settingsDrawer__panel`（含 `.account`）渲染出来。
+ */
+async function openSettings(): Promise<void> {
+  const toggle = qa('button.settingsDrawer__toggle')[0];
+  assert.ok(toggle, '找不到「设置」抽屉开关（button.settingsDrawer__toggle）');
+  await act(async () => {
+    toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await waitFor('设置抽屉面板出现', () => q('.settingsDrawer__panel') !== null);
+}
 const requestsTo = (path: string): Req[] => requests.filter((r) => r.path === path);
 
 log('');
@@ -602,8 +615,10 @@ await check('删掉一条：走 DELETE /knowledge/11，列表立刻少一条，�
 });
 
 await check('登出把这套状态清干净（列表清空 + 面板收起）', async () => {
-  // 先确保面板是开着的（上一条删完还开着）
+  // 先确保面板是开着的（上一条删完还开着）—— 知识库不进设置抽屉，仍常显
   assert.ok(q('.knowledgePanel'), '面板应该还开着');
+  // B1：退出登录收进设置抽屉（默认收起）→ 先开抽屉
+  await openSettings();
   // 找到登出按钮（左栏账号小块里的「退出登录」）
   const logout = qa('aside.sidebar button').find((b) => /退出登录|登出/.test(b.textContent ?? ''));
   assert.ok(logout, '找不到登出按钮');
@@ -1011,10 +1026,10 @@ await check('改密码：首次设置只送新密码，成功后页面上真的�
   const root = await mountApp(true);
   await waitFor('离开登录页', () => q('.authWrap') === null);
   /**
-   * ★ 「我的号」那一块在 `{curAgent && (…)}` 里（与记忆/资料同一个面板），
-   *   所以要等名单拉回来、有当前智能体之后，密码输入框才存在。
+   * ★ B1：「我的号」（含密码输入框）收进设置抽屉（默认收起）→ 先开抽屉，
+   *   等 `.settingsDrawer__panel`（含 `.account`）渲染出来。
    */
-  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  await openSettings();
   const setVal = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
   const newInput = qa('input[placeholder="新密码（≥8 位）"]')[0];
   assert.ok(newInput, '找不到新密码输入框');
@@ -1039,7 +1054,7 @@ await check('改密码：首次设置只送新密码，成功后页面上真的�
 await check('改密码（已设过）：必须带原密码 —— 不带就会被服务端挡下并显示原因', async () => {
   const root = await mountApp(true);
   await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
-  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  await openSettings(); // B1：密码输入框在设置抽屉里
   const setVal = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
   const oldInput = qa('input[placeholder="原密码"]')[0];
   const newInput = qa('input[placeholder="新密码（≥8 位）"]')[0];
@@ -1245,7 +1260,7 @@ await check('登出：退出登录 → 回登录页 + 清 token + 清主进程�
     }));
     throw e;
   }
-  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  await openSettings(); // B1：退出登录在设置抽屉里
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await waitFor('回到登录页', onLoginScreen);
   assert.ok(!dom.window.localStorage.getItem('workbench.token'), '登出后 token 还在本地');
@@ -1668,7 +1683,8 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
   const preBtnText = q('.inputbar button')?.textContent ?? '';
   assert.equal(preBtnText, '停止', '前置不成立：执行中发送键应变「停止」');
 
-  // 流还开着就登出
+  // 流还开着就登出（B1：退出登录在设置抽屉里，先开抽屉）
+  await openSettings();
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await flush(4);
   assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
@@ -1955,6 +1971,7 @@ await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.t
 await check('⑮-2 M8\' 行为：登录页搬走后 ⚡ 快捷登录照旧走真两跳（sms/send + login/sms）进工作台', async () => {
   const root = await mountApp(true);
   await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  await openSettings(); // B1：退出登录在设置抽屉里
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await flush(4);
   assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
@@ -2348,6 +2365,24 @@ log('--- ⑳ 降噪片：占位行不显示 / 结束键条件显示 / 首进引�
   } catch {
     /* ignore */
   }
+
+  await check('⑳-0（B1）设置抽屉：账号/密码/浏览器参数/保活 默认收起、点开才出；记忆/知识库不进抽屉', async () => {
+    const rootB1 = await mountApp(true);
+    await ensure('⑳-0 前置：侧栏在（名单拉回来）', () => qa('.contact-item').length > 0);
+    // ① 默认收起：抽屉面板与账号块都不在 DOM（降噪——侧栏不再恒显那一堆设置）
+    assert.ok(q('.settingsDrawer__toggle') !== null, '找不到「设置」抽屉开关（.settingsDrawer__toggle）');
+    assert.ok(q('.settingsDrawer__panel') === null, '设置抽屉默认就该收起（面板不该在 DOM 里）');
+    assert.ok(q('.account') === null, '账号块默认就该收起（.account 不该在 DOM 里）');
+    // ② 记忆 / 知识库不进抽屉：入口在侧栏常显（抽屉收起时也在）
+    assert.ok(qa('button').some((b) => (b.textContent ?? '').includes('知识库')), '知识库入口不该进抽屉（应常显在侧栏）');
+    assert.ok(qa('button').some((b) => (b.textContent ?? '').includes('用户记忆')), '用户记忆入口不该进抽屉（应常显在侧栏）');
+    // ③ 点开抽屉：账号块 + 保活 + 浏览器参数 一起出来
+    await openSettings();
+    assert.ok(q('.account') !== null, '点开抽屉后账号块该出现');
+    assert.ok(q('#setConcurrency') !== null && q('#setMaxPages') !== null, '浏览器参数（并发/开页）该在抽屉里');
+    assert.ok(q('.keepalive__btn') !== null, '保活开关该在抽屉里（当前智能体在场时）');
+    await act(async () => rootB1.unmount());
+  });
 
   await check('⑳-1（B5）占位名「新智能体」的智能体不显示在左栏', async () => {
     // 临时往名单里塞一个占位名的家伙（「＋ 添加」会先用占位名建出来）

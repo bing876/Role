@@ -484,6 +484,16 @@ MUTATIONS = [
         'replace': '    if (live >= 1000000) {  // 反证注入：活页上限推到天上\n      note(\n        `已经开了 ${live} 张页，到上限 ${cap} 张了（这个数可以在设置里调大）。要开新的，先关掉一张。`,\n      );\n      return null;\n    }\n',
         'expect': '⑱-1',
     },
+    # ---- B1：设置抽屉（账号/密码/浏览器参数/保活 默认收起 = 降噪）----
+    {
+        'file': APP_TSX,
+        'id': 'B1',
+        'visible': True,
+        'name': '把设置抽屉打回「恒开」：拆掉默认收起的闸门，账号块又恒显在侧栏（降噪被打回）',
+        'anchor': '            {settingsOpen && (\n              <div className="settingsDrawer__panel">',
+        'replace': '            {true && (  // 反证注入：设置抽屉恒开（拆掉默认收起闸门）\n              <div className="settingsDrawer__panel">',
+        'expect': '设置抽屉默认就该收起',
+    },
 ]
 
 

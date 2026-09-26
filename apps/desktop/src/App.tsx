@@ -1378,6 +1378,8 @@ export default function App() {
   const [agentQuery, setAgentQuery] = useState('');
   const [showAgentPopup, setShowAgentPopup] = useState(false);
   const [justAddedAgentId, setJustAddedAgentId] = useState<number | null>(null);
+  /** B1 设置抽屉：账号/密码/浏览器参数/保活 收进可开合抽屉（默认收起 = 降噪） */
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const justAddedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** 第四列触发 ①:点会话内链接/HTML 卡片 → 内嵌浏览器打开 + 列弹出 */
@@ -1640,7 +1642,7 @@ export default function App() {
       if (p.kind === 'step') {
         const line = `${p.summary}${p.ok ? '' : ' ❌'}`;
         setAgentSteps((prev) => prev.concat(line).slice(-6));
-        say(`· ${line}`);
+        // 交互对齐片：步骤**只**进轨迹抽屉，绝不 say() 成聊天行（那正是「步骤墙」）。
         trace(`· ${line}`);
       } else if (p.kind === 'ask') {
         setAgentSteps([]);
@@ -2109,12 +2111,20 @@ export default function App() {
           </div>
 
           {/*
-            第 16 步「启动并保活」最小闭环：
-            只把这个智能体的会话标成监听态（仍在这一个窗口里，不新开窗口、不起新进程）。
-            空闲时服务端一次模型都不调——有新消息才走 /chat/stream。
+            B1 设置抽屉：账号 / 密码 / 浏览器参数 / 保活 收进可开合抽屉（默认收起 = 降噪）。
+            记忆 / 知识库不在此抽屉（查阅 ≠ 设置），留在侧栏常显入口。
           */}
-          {curAgent && (
-            <div className="keepalive">
+          <div className="settingsDrawer">
+            <div className="buttons-row">
+              <button type="button" className="btn settingsDrawer__toggle" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
+                {settingsOpen ? '收起设置' : '设置'}
+              </button>
+            </div>
+            {settingsOpen && (
+              <div className="settingsDrawer__panel">
+                {/* 第 16 步「启动并保活」最小闭环：当前智能体的监听态开关（不新开窗口/进程） */}
+                {curAgent && (
+                  <div className="keepalive">
               <button type="button" className="btn keepalive__btn" disabled={keepaliveBusy} onClick={() => void toggleKeepalive()}>
                 {keepaliveBusy ? '切换中…' : curState?.keepalive ? '停止保活' : '启动并保活'}
               </button>
@@ -2183,9 +2193,13 @@ export default function App() {
               并发默认 20：调小可临时限流、调大即解锁更多并行（状态本就按页独立存储，改这个数不用动数据结构）。
               开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
             </div>
-            {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
-            {/* 规格 C4（2026-09-25）：待确认记忆不再走侧栏面板 —— 确认卡进对话流（见聊天区 <MemoryConfirmCard/>）。
-                这里只留两层记忆的**只读**查阅（用户记忆 / 项目记忆）。 */}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 第 15 步：两层记忆（只读查阅，留在侧栏常显 —— 查阅 ≠ 设置，不进抽屉） */}
+          {/* 规格 C4（2026-09-25）：待确认记忆确认卡进对话流（聊天区 <MemoryConfirmCard/>）。 */}
             <div className="buttons-row">
               <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
                 用户记忆（{userMem.length}）
@@ -2286,7 +2300,6 @@ export default function App() {
                 </div>
               </div>
             )}
-          </div>
 
           {/* 第 18 步：左栏这两个是纯演示 / 自检痕迹，用样式藏掉（.demoOnly，DOM 保留） */}
           <div className="buttons-row demoOnly">
