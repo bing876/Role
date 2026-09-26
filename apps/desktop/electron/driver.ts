@@ -14,12 +14,15 @@ import {
   type WatchHandle,
   type WatchSpec,
 } from './wait-watch';
+// ADR-0004 · 浏览器深度 第二片:稳健元素定位(语义定位层,纯 core,注入 JS 单一真源)
+import { semanticResolveExpr } from './semantic-locate';
 import type {
   BrowserAction,
   BrowserActionType,
   DriveActionLabel,
   DriveResult,
   PageSnapshot,
+  SemanticTarget,
   TaskPhase,
   TaskState,
 } from '@ai-workbench/shared';
@@ -147,6 +150,36 @@ export function validateBrowserAction(raw: unknown): ActionShapeCheck {
     return { ok: true, v };
   };
 
+  /**
+   * ADR-0004:归一化可选的 `semantic`(语义定位目标)。缺失 = undefined(走老 target 路径);
+   * 给了就必须是「字符串字段对象」且至少一个非空字段(F10 输入校验,复用形状闸)。
+   */
+  const semantic = (): { ok: true; v: SemanticTarget | undefined } | { ok: false; why: string } => {
+    const s = raw.semantic;
+    if (s === undefined) return { ok: true, v: undefined };
+    if (!isPlainObject(s)) {
+      return { ok: false, why: `「${name}」的 semantic 必须是对象（收到 ${typeOf(s)}）` };
+    }
+    const keys = ['id', 'testId', 'ariaLabel', 'name', 'text', 'tag', 'within'] as const;
+    const out: Record<string, string> = {};
+    for (const k of keys) {
+      const v = s[k];
+      if (v === undefined) continue;
+      if (typeof v !== 'string') {
+        return { ok: false, why: `「${name}」的 semantic.${k} 必须是字符串（收到 ${typeOf(v)}）` };
+      }
+      if (v.trim() === '') continue; // 空串/纯空白 = 没给这个字段(不让它「匹配一切」)
+      if (v.length > MAX_TARGET_LEN) {
+        return { ok: false, why: `「${name}」的 semantic.${k} 太长（${v.length} 字，上限 ${MAX_TARGET_LEN}）` };
+      }
+      out[k] = v.trim();
+    }
+    if (Object.keys(out).length === 0) {
+      return { ok: false, why: `「${name}」的 semantic 至少要给一个定位字段（id/testId/ariaLabel/name/text/tag/within）` };
+    }
+    return { ok: true, v: out as SemanticTarget };
+  };
+
   switch (name) {
     case 'open_url': {
       const r = str('url', MAX_URL_LEN);
@@ -154,7 +187,13 @@ export function validateBrowserAction(raw: unknown): ActionShapeCheck {
     }
     case 'click': {
       const r = str('target', MAX_TARGET_LEN);
-      return r.ok ? { ok: true, action: { action: 'click', target: r.v } } : bad(r.why);
+      if (!r.ok) return bad(r.why);
+      const sm = semantic();
+      if (!sm.ok) return bad(sm.why);
+      return {
+        ok: true,
+        action: sm.v ? { action: 'click', target: r.v, semantic: sm.v } : { action: 'click', target: r.v },
+      };
     }
     case 'type': {
       const t = str('target', MAX_TARGET_LEN);
@@ -165,7 +204,14 @@ export function validateBrowserAction(raw: unknown): ActionShapeCheck {
       if (submitRaw !== undefined && typeof submitRaw !== 'boolean') {
         return bad(`「type」的 submit 必须是布尔（收到 ${typeOf(submitRaw)}）`);
       }
-      return { ok: true, action: { action: 'type', target: t.v, text: x.v, submit: Boolean(submitRaw) } };
+      const sm = semantic();
+      if (!sm.ok) return bad(sm.why);
+      return {
+        ok: true,
+        action: sm.v
+          ? { action: 'type', target: t.v, text: x.v, submit: Boolean(submitRaw), semantic: sm.v }
+          : { action: 'type', target: t.v, text: x.v, submit: Boolean(submitRaw) },
+      };
     }
     case 'scroll': {
       const d = raw.direction;
@@ -877,7 +923,7 @@ export function browserWatch(
 // ---------------------------------------------------------------------------
 
 const PAGE_HELPERS = `(() => {
-  if (window.__wbHelper && window.__wbHelper.__v === 12) return;
+  if (window.__wbHelper && window.__wbHelper.__v === 13) return;
   /**
    * ★ 第 23 步：**穿透遍历**（这一版最重要的改动）。
    *
@@ -1091,6 +1137,14 @@ const PAGE_HELPERS = `(() => {
    */
   let pickKey = null;
   const pick = (target) => {
+    // ADR-0004:语义定位解析出的元素优先(先解析再操作,同一轮 type 的四个脚本全程盯同一颗)。
+    // 由 typeInto 在给了 semantic 时预解析后写入;没有则回落到老的 findInput 路径。
+    const sem = window.__wbSemanticTarget;
+    if (sem && sem.isConnected) {
+      pickKey = String(target);
+      window.__wbTypeTarget = sem;
+      return sem;
+    }
     const key = String(target);
     const stashed = window.__wbTypeTarget;
     if (pickKey === key && stashed && stashed.isConnected) return stashed;
@@ -1320,7 +1374,7 @@ const PAGE_HELPERS = `(() => {
    * （那只是相对自己那一帧的坐标，点下去会偏到别的元素上）。
    */
   window.__wbHelper = {
-    __v: 12, visible, text, find, findInput, findClickable, pick, fieldOf, sensitiveish, otpish,
+    __v: 13, visible, text, find, findInput, findClickable, pick, fieldOf, sensitiveish, otpish,
     loginish, overlayish, challengeish, pageKey, schemeOf, contentTexts, snapshot,
     absRect, queryDeep, ownerWindow,
   };
@@ -1449,7 +1503,16 @@ async function navigate(wc: Target, url: string): Promise<void> {
 type ClickOutcome =
   | { kind: 'notfound' }
   | { kind: 'applink'; scheme: string; label: string }
-  | { kind: 'done'; label: string; method: string; hittable: boolean; noChange: boolean };
+  | {
+      kind: 'done';
+      label: string;
+      method: string;
+      hittable: boolean;
+      noChange: boolean;
+      /** ADR-0004:语义定位命中方式(via)+ 描述;没走语义定位时缺省。 */
+      semanticVia?: string;
+      semanticDesc?: string;
+    };
 
 /**
  * click：优先用 CDP 发**真实鼠标事件**（先短距离移动再按下+抬起）点元素中心，最接近真人操作。
@@ -1472,6 +1535,8 @@ async function clickTarget(
   target: string,
   /** 第 4 步：任务循环传入的存活检查；每个鼠标动作发出前复查，暂停即中止本步 */
   shouldAbort?: () => boolean,
+  /** ADR-0004:语义定位目标。给了 = **先按语义解析出元素**再点(抗改版);没给 = 老 findClickable 路径。 */
+  semantic?: SemanticTarget,
 ): Promise<ClickOutcome> {
   const tick = (): void => {
     if (shouldAbort && !shouldAbort()) throw new TaskAborted();
@@ -1485,11 +1550,25 @@ async function clickTarget(
     blockedScheme: string;
     before: string;
     inFrame: boolean;
+    semVia: string | null;
+    semDesc: string | null;
   } | null>(
     wc,
     pageScript(`(() => {
       const H = window.__wbHelper;
-      const el = H.findClickable(${JSON.stringify(target)});
+      let el;
+      let semVia = null;
+      let semDesc = null;
+      ${
+        semantic
+          ? `// ADR-0004:语义定位(先解析)—— 稳定属性优先,文本+tag+结构兜底
+           const __sem = ${semanticResolveExpr(JSON.stringify(semantic))};
+           window.__wbSemanticTarget = __sem.el || null;
+           el = __sem.el;
+           semVia = __sem.via;
+           semDesc = __sem.description;`
+          : `el = H.findClickable(${JSON.stringify(target)});`
+      }
       if (!el) return null;
       const scheme = H.schemeOf(el);
       try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
@@ -1526,6 +1605,7 @@ async function clickTarget(
         blockedScheme: scheme,
         before: H.pageKey(),
         inFrame,
+        semVia, semDesc,
       };
     })()`),
   );
@@ -1567,6 +1647,7 @@ async function clickTarget(
       method: 'cdp-mouse',
       hittable: true,
       noChange: !moved,
+      ...(hit.semVia ? { semanticVia: hit.semVia, semanticDesc: hit.semDesc ?? undefined } : {}),
     };
   }
 
@@ -1575,7 +1656,10 @@ async function clickTarget(
   const done = await evaluate<boolean>(
     wc,
     pageScript(`(() => {
-      const el = window.__wbHelper.findClickable(${JSON.stringify(target)});
+      // ADR-0004:语义定位的兜底 click 也要盯**同一颗**(先解析再操作),不重新按脆 key 挑
+      const el = (window.__wbSemanticTarget && window.__wbSemanticTarget.isConnected)
+        ? window.__wbSemanticTarget
+        : window.__wbHelper.findClickable(${JSON.stringify(target)});
       if (!el) return false;
       el.click();
       return true;
@@ -1584,7 +1668,14 @@ async function clickTarget(
   await sleep(1200);
   if (!done) return { kind: 'notfound' };
   const moved = await changed();
-  return { kind: 'done', label: `${hit.tag}「${hit.label}」`, method: 'page-el.click', hittable: false, noChange: !moved };
+  return {
+    kind: 'done',
+    label: `${hit.tag}「${hit.label}」`,
+    method: 'page-el.click',
+    hittable: false,
+    noChange: !moved,
+    ...(hit.semVia ? { semanticVia: hit.semVia, semanticDesc: hit.semDesc ?? undefined } : {}),
+  };
 }
 
 /**
@@ -1605,10 +1696,27 @@ async function typeInto(
   submit: boolean,
   /** 第 4 步：任务循环传入的存活检查；每个键盘/写入动作发出前复查，暂停即中止本步 */
   shouldAbort?: () => boolean,
-): Promise<{ ok: true; label: string; method: string } | { ok: false; reason: string }> {
+  /** ADR-0004:语义定位目标。给了 = 先按语义解析出**输入框**并缓存,后续 pick 全程盯同一颗。 */
+  semantic?: SemanticTarget,
+): Promise<{ ok: true; label: string; method: string; semanticVia?: string } | { ok: false; reason: string }> {
   const tick = (): void => {
     if (shouldAbort && !shouldAbort()) throw new TaskAborted();
   };
+  // ADR-0004:先解析 —— 给了 semantic 就先按语义把输入框解析出来并写入 window.__wbSemanticTarget,
+  // 之后 pick(找框/读回/三写)优先认它,同一轮盯住同一颗(不再中途按脆 key 换目标)。
+  // 没解析到就写 null,回落老 pick(target) 路径(健壮:语义层失败不等于整条 type 失败)。
+  let semanticVia: string | undefined;
+  if (semantic) {
+    const r = await evaluate<{ found: boolean; via: string } | null>(
+      wc,
+      pageScript(`(() => {
+        const r = ${semanticResolveExpr(JSON.stringify(semantic))};
+        window.__wbSemanticTarget = r.el || null;
+        return { found: !!r.el, via: r.via };
+      })()`),
+    );
+    if (r && r.found && r.via !== 'none') semanticVia = r.via;
+  }
   const found = await evaluate<{ tag: string; label: string; x: number; y: number } | null>(
     wc,
     pageScript(`(() => {
@@ -1802,7 +1910,7 @@ async function typeInto(
     }
   }
 
-  return { ok: true, label: `${found.tag}「${found.label}」`, method };
+  return { ok: true, label: `${found.tag}「${found.label}」`, method, ...(semanticVia ? { semanticVia } : {}) };
 }
 
 /**
@@ -1996,7 +2104,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
             pageSnapshot: await readSnapshot(wc),
           };
         }
-        const hit = await clickTarget(wc, action.target);
+        const hit = await clickTarget(wc, action.target, undefined, action.semantic);
         if (hit.kind === 'notfound') {
           // 第 16 步：click 是最常见的失败，必须给「可能原因 + 一个下一步」，
           // 不能只甩一句「没找到」——那会让模型/用户都只能干瞪眼。
@@ -2025,6 +2133,9 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         detail = hit.hittable
           ? `已用真实鼠标点击 ${hit.label}`
           : `点击了 ${hit.label}（该元素不在视口内，真实鼠标点不到，改用页面侧 click()）`;
+        if (hit.kind === 'done' && hit.semanticVia) {
+          detail += `（语义定位：${hit.semanticVia}${hit.semanticDesc ? ` · ${hit.semanticDesc}` : ''}）`;
+        }
         if (hit.noChange) detail += '；页面暂时没有可见变化';
         break;
       }
@@ -2040,7 +2151,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
             pageSnapshot: await readSnapshot(wc),
           };
         }
-        const result = await typeInto(wc, action.target, action.text, Boolean(action.submit));
+        const result = await typeInto(wc, action.target, action.text, Boolean(action.submit), undefined, action.semantic);
         if (!result.ok) {
           const snap = await readSnapshot(wc);
           return {
@@ -2053,6 +2164,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         // R2（2026-09-22）：写入值只记长度、不记原文 —— detail 会拼进步骤摘要（落库/上屏），
         // 还会随回执进服务端消息历史（之后每轮都发给模型）。
         detail = `已向 ${result.label} 写入 ${[...action.text].length} 个字符（方式：${result.method}）`;
+        if (result.semanticVia) detail += `（语义定位：${result.semanticVia}）`;
         break;
       }
       case 'scroll': {
