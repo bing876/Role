@@ -1083,6 +1083,8 @@ export type LoopToolName =
   | 'read_page'
   | 'click'
   | 'type'
+  | 'click_semantic'
+  | 'type_semantic'
   | 'scroll'
   | 'stop'
   | 'web_search'
@@ -1843,6 +1845,7 @@ export interface McpAddServerInput {
 export interface McpTestView { ok: boolean; detail: string; count?: number }
 
 export * from './tools';
+export * from './semanticTools';
 
 /**
  * 批次 J（2026-09-24）：`@点名` 的确定性解析器。

@@ -40,28 +40,33 @@ const SEMANTIC_RESOLVE_BODY = `
     let s; try { s = getComputedStyle(el); } catch (e) { return false; }
     return !!s && s.visibility !== 'hidden' && s.display !== 'none' && Number(s.opacity) > 0;
   };
-  const esc = (v) => {
-    try { return (window.CSS && window.CSS.escape) ? window.CSS.escape(String(v)) : String(v); }
-    catch (e) { return String(v); }
-  };
-  const firstVis = (sel) => {
-    let list = null;
-    try { list = document.querySelectorAll(sel); } catch (e) { return null; }
-    for (let i = 0; i < list.length; i++) { if (isVis(list[i])) return list[i]; }
+  let scopes = [document];
+  if (T.within) {
+    // 指定祖先找不到/非法就 fail-closed；绝不扩大到全页后「误点另一个同名按钮」。
+    try { scopes = Array.prototype.slice.call(document.querySelectorAll(T.within)); }
+    catch (e) { scopes = []; }
+    if (!scopes.length) return { el: null, via: 'none', description: '' };
+  }
+  const firstVis = (attr, value) => {
+    // 按属性值精确比较（不拼 CSS 字面值）；引号/反斜杠等不会破坏选择器。
+    for (let si = 0; si < scopes.length; si++) {
+      let list; try { list = scopes[si].querySelectorAll('[' + attr + ']'); } catch (e) { continue; }
+      for (let i = 0; i < list.length; i++) {
+        if (list[i].getAttribute(attr) === value && isVis(list[i])) return list[i];
+      }
+    }
     return null;
   };
   // ---- ① 稳定属性(最抗改版;F4:优先于文本)----
-  if (T.id) { const el = firstVis('#' + esc(T.id)); if (el) return { el, via: 'id', description: 'id=' + T.id }; }
-  if (T.testId) { const el = firstVis('[data-testid="' + esc(T.testId) + '"]'); if (el) return { el, via: 'testid', description: 'data-testid=' + T.testId }; }
-  if (T.ariaLabel) { const el = firstVis('[aria-label="' + esc(T.ariaLabel) + '"]'); if (el) return { el, via: 'aria', description: 'aria-label="' + T.ariaLabel + '"' }; }
-  if (T.name) { const el = firstVis('[name="' + esc(T.name) + '"]'); if (el) return { el, via: 'name', description: 'name=' + T.name }; }
+  if (T.id) { const el = firstVis('id', T.id); if (el) return { el, via: 'id', description: 'id=' + T.id }; }
+  if (T.testId) { const el = firstVis('data-testid', T.testId); if (el) return { el, via: 'testid', description: 'data-testid=' + T.testId }; }
+  if (T.ariaLabel) { const el = firstVis('aria-label', T.ariaLabel); if (el) return { el, via: 'aria', description: 'aria-label="' + T.ariaLabel + '"' }; }
+  if (T.name) { const el = firstVis('name', T.name); if (el) return { el, via: 'name', description: 'name=' + T.name }; }
   // ---- ② 文本 + tag + 结构(兜底;F5)----
   const wantText = lower(T.text);
   const wantTag = T.tag ? norm(T.tag).toUpperCase() : '';
   // 完全空目标(text/tag/within 全空、且稳定属性也没给)→ notfound,绝不「匹配一切」(F12/F5 防御)
   if (!wantText && !wantTag && !T.within) return { el: null, via: 'none', description: '' };
-  let scopes = [document];
-  if (T.within) { try { const w = document.querySelectorAll(T.within); if (w.length) scopes = Array.prototype.slice.call(w); } catch (e) { scopes = [document]; } }
   const SELECTABLE = 'button, a, input, textarea, select, [role="button"], [role="link"], [role="textbox"], [contenteditable="true"]';
   const cands = [];
   for (let si = 0; si < scopes.length; si++) {

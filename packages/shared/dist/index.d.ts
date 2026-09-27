@@ -1013,7 +1013,7 @@ export interface ChatStateResult {
  *   加进来之后，桌面 `resolveBrowserAction` 查不到映射时**返回 null**（既有语义，
  *   不抛错），服务端则走 server 分支就地执行 —— 两侧都安全。
  */
-export type LoopToolName = 'open_url' | 'read_page' | 'click' | 'type' | 'scroll' | 'stop' | 'web_search' | 'spawn_workers' | 'delegate';
+export type LoopToolName = 'open_url' | 'read_page' | 'click' | 'type' | 'click_semantic' | 'type_semantic' | 'scroll' | 'stop' | 'web_search' | 'spawn_workers' | 'delegate';
 /** 模型选出来的一个工具调用 */
 export interface LoopToolCall {
     /** 上游给的调用 id（回执要用它对应） */
@@ -1726,6 +1726,7 @@ export interface McpTestView {
     count?: number;
 }
 export * from './tools';
+export * from './semanticTools';
 /**
  * 批次 J（2026-09-24）：`@点名` 的确定性解析器。
  *

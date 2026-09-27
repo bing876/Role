@@ -55,6 +55,8 @@ class Node {
   attr(k: string): string {
     return this.attrs[k] ?? '';
   }
+  // 生产语义定位按真实 DOM getAttribute 精确比对稳定属性（阻断 CSS 注入）。
+  getAttribute(k: string): string | null { return this.attrs[k] ?? null; }
   setAttr(k: string, v: string): this {
     this.attrs[k] = v;
     return this;

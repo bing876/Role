@@ -69,6 +69,7 @@ exports.DEFAULT_SETTINGS = {
     resourceSysMemFloorMB: 1536,
 };
 __exportStar(require("./tools"), exports);
+__exportStar(require("./semanticTools"), exports);
 /**
  * 批次 J（2026-09-24）：`@点名` 的确定性解析器。
  *

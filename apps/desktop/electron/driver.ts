@@ -1408,11 +1408,12 @@ async function readSnapshot(wc: Target): Promise<PageSnapshot> {
 }
 
 /** 第 9 步：type/fill_form 的敏感字段守卫——命中就拒填（不依赖模型自觉） */
-async function typeSensitiveGuard(wc: Target, target: string): Promise<string | null> {
+async function typeSensitiveGuard(wc: Target, target: string, semantic?: SemanticTarget): Promise<string | null> {
   const d = await evaluate<FieldDescriptor | null>(
     wc,
     pageScript(`(() => {
-      const el = window.__wbHelper.findInput(${JSON.stringify(target)});
+      // 语义动作必须按**实际将要输入的元素**判断敏感性；旧 target 描述不能代替硬闸。
+      const el = ${semantic ? `${semanticResolveExpr(JSON.stringify(semantic))}.el` : `window.__wbHelper.findInput(${JSON.stringify(target)})`};
       return el ? window.__wbHelper.fieldOf(el) : null;
     })()`),
   );
@@ -1442,11 +1443,12 @@ function failureHint(snap: PageSnapshot | undefined): string {
 }
 
 /** 第 9 步：click 的支付确认守卫——收银台最终确认永远由用户点 */
-async function payClickGuard(wc: Target, target: string): Promise<string | null> {
+async function payClickGuard(wc: Target, target: string, semantic?: SemanticTarget): Promise<string | null> {
   const hit = await evaluate<{ label: string } | null>(
     wc,
     pageScript(`(() => {
-      const el = window.__wbHelper.find(${JSON.stringify(target)});
+      // 语义动作以**真命中的按钮**做支付硬闸，不按旧 target 找另一颗来放行。
+      const el = ${semantic ? `${semanticResolveExpr(JSON.stringify(semantic))}.el` : `window.__wbHelper.find(${JSON.stringify(target)})`};
       return el ? { label: window.__wbHelper.text(el) } : null;
     })()`),
   );
@@ -1657,9 +1659,7 @@ async function clickTarget(
     wc,
     pageScript(`(() => {
       // ADR-0004:语义定位的兜底 click 也要盯**同一颗**(先解析再操作),不重新按脆 key 挑
-      const el = (window.__wbSemanticTarget && window.__wbSemanticTarget.isConnected)
-        ? window.__wbSemanticTarget
-        : window.__wbHelper.findClickable(${JSON.stringify(target)});
+      const el = ${semantic ? `(window.__wbSemanticTarget && window.__wbSemanticTarget.isConnected ? window.__wbSemanticTarget : null)` : `window.__wbHelper.findClickable(${JSON.stringify(target)})`};
       if (!el) return false;
       el.click();
       return true;
@@ -1704,18 +1704,24 @@ async function typeInto(
   };
   // ADR-0004:先解析 —— 给了 semantic 就先按语义把输入框解析出来并写入 window.__wbSemanticTarget,
   // 之后 pick(找框/读回/三写)优先认它,同一轮盯住同一颗(不再中途按脆 key 换目标)。
-  // 没解析到就写 null,回落老 pick(target) 路径(健壮:语义层失败不等于整条 type 失败)。
+  // 语义目标没解析到就停（不能回落脆 target 猜输入框）；老 type 无 semantic 仍走旧 pick。
   let semanticVia: string | undefined;
   if (semantic) {
     const r = await evaluate<{ found: boolean; via: string } | null>(
       wc,
       pageScript(`(() => {
         const r = ${semanticResolveExpr(JSON.stringify(semantic))};
-        window.__wbSemanticTarget = r.el || null;
-        return { found: !!r.el, via: r.via };
+        // type 只可命中真输入框：语义文本相同的按钮/链接不许被当作输入目标。
+        const el = r.el && r.el.matches && r.el.matches('input, textarea, [contenteditable="true"], [role="textbox"]') ? r.el : null;
+        window.__wbSemanticTarget = el;
+        return { found: !!el, via: el ? r.via : 'none' };
       })()`),
     );
-    if (r && r.found && r.via !== 'none') semanticVia = r.via;
+    if (!r?.found || r.via === 'none') return { ok: false, reason: '语义输入框没找到（未回落旧选择器，未输入）' };
+    semanticVia = r.via;
+  } else {
+    // 上一个语义动作的缓存不能污染后来未带 semantic 的旧 type。
+    await evaluate(wc, pageScript('(() => { window.__wbSemanticTarget = null; return true; })()'));
   }
   const found = await evaluate<{ tag: string; label: string; x: number; y: number } | null>(
     wc,
@@ -2093,7 +2099,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         break;
       }
       case 'click': {
-        const pay = await payClickGuard(wc, action.target); // 第 9 步：支付最终确认不代点
+        const pay = await payClickGuard(wc, action.target, action.semantic); // 第 9 步：按**实际语义命中的元素**守支付闸
         if (pay) {
           // 第 28 步：带 `risk` 标记 —— 驾驶循环见此标记**必定**停下来申报（不再靠模型自觉）
           return {
@@ -2140,7 +2146,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         break;
       }
       case 'type': {
-        const guard = await typeSensitiveGuard(wc, action.target); // 第 9 步：敏感字段不代填
+        const guard = await typeSensitiveGuard(wc, action.target, action.semantic); // 第 9 步：按**实际语义命中的框**守敏感闸
         if (guard) {
           // 第 28 步：`risk` 标记 ⇒ 驾驶循环必定停下来申报，不再只是"一次失败"
           return {

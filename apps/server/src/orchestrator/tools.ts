@@ -19,7 +19,7 @@ import type { Pool } from 'pg';
 import type { ServerEnv } from '../env';
 import type { JsonCipher } from '../crypto';
 import { deliverJobResult, onLoopStopped } from '../toolLoop';
-import { registerServerTool, type ServerExecutionContext } from '../toolRegistry';
+import { registerServerTool, registerSemanticBrowserTools, type ServerExecutionContext } from '../toolRegistry';
 import { detectSensitive, sensitiveLabel } from './redact';
 import {
   cancelJobsOfLoop,
@@ -323,6 +323,8 @@ export function initOrchestrator(next: OrchestratorDeps): void {
     return;
   }
 
+  // 抗改版片：旧工具表冻结，只有启用编排后才注册可供新版桌面调用的语义 v2 工具。
+  registerSemanticBrowserTools();
   // 能力与连接（2026-09-27）：web_search 走**按用户解析的供应商**（本地加密配置优先、env 兜底）
   registerServerTool(WEB_SEARCH_SERVER_TOOL, {
     execute: async (args, ctx) => {
