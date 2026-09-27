@@ -37,6 +37,8 @@ const SOURCES_MAX = 5;
 
 export interface RunWorkerPoolInput {
   env: ServerEnv;
+  /** 发起循环的账号；生产路径必传。旧独立 worker 单测不传时沿用 env。 */
+  userId?: number;
   jobId: string;
   tasks: WorkerTaskSpec[];
   /** false / 未配置 Tavily / 轮数为 0 → 自动降级成纯推理（不报错） */
@@ -179,6 +181,7 @@ async function runOneWorker(
       if (input.signal?.aborted) break;
       const r = await llmFetch(input.env, messages, {
         tag: `orc/worker#${id}#${rounds + 1}`,
+        userId: input.userId,
         temperature: 0.2,
         timeoutMs: Math.max(1_000, Math.min(budgetMs, 60_000)),
         tools: tools as unknown[],
@@ -234,6 +237,7 @@ async function runOneWorker(
     ];
     const fr = await llmFetch(input.env, finalMsgs, {
       tag: `orc/worker#${id}#report`,
+      userId: input.userId,
       temperature: 0.1,
       timeoutMs: Math.max(1_000, Math.min(budgetMs, 60_000)),
       toolChoice: 'none',

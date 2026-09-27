@@ -40,6 +40,8 @@ import { registerSkillsRoutes } from './routes/skills';
 import { registerComputerVisibilityRoutes } from './routes/computerVisibility';
 import { registerPluginRoutes } from './routes/plugins';
 import { registerMcpRoutes } from './routes/mcp';
+import { registerModelRoutes } from './routes/model';
+import { installModelLookup } from './modelSettings';
 import { initOrchestrator } from './orchestrator/tools';
 import { startRoutineSweeper } from './orchestrator/routines';
 import { setCheckpointDeps } from './toolLoop';
@@ -55,6 +57,8 @@ import { pageStateCount } from './pageState';
  * 走真实路由(不靠嘴说)。main 与 scripts/verify/routines-lifecycle.mts 共用这一份。
  */
 export async function buildApp(env: ServerEnv, pool: Pool, cipher: JsonCipher): Promise<FastifyInstance> {
+  // 真实模型唯一出口按 ctx.userId 查当前账号密文配置；不缓存任何用户的明文 key。
+  installModelLookup(pool, cipher);
   const app = Fastify({ logger: false });
 
   /**
@@ -159,6 +163,8 @@ export async function buildApp(env: ServerEnv, pool: Pool, cipher: JsonCipher): 
   registerPluginRoutes(app, { pool, env, cipher });
   // 片2 · MCP 通用桥：用户自挂 MCP server（加/列/删/测）
   registerMcpRoutes(app, { pool, env, cipher });
+  // 真模型接入层：本用户设置 DeepSeek/OpenAI/兼容端点（密文 key、不改主进程明文 settings）
+  registerModelRoutes(app, { pool, env, cipher });
   await app.ready();
   return app;
 }

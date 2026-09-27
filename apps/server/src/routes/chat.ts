@@ -59,6 +59,7 @@ import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
 import { mainLoopToolNamesWithMcp } from '../plugins/mcpLoop';
+import { modelAvailableForUser } from '../modelSettings';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
@@ -319,9 +320,9 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       agentId = n;
     }
 
-    if (!env.deepseekApiKey) {
-      // 明确拒绝，绝不用假回复冒充模型
-      return errJson(reply, 503, '未配置模型：在 apps/server/.env 填 DEEPSEEK_API_KEY 后重启 dev:server', {
+    if (!(await modelAvailableForUser(pool, cipher, claims.sub, env))) {
+      // 没有可用模型 / 密文损坏 → 明确拒绝，不用 env 或假回复冒充模型
+      return errJson(reply, 503, '未配置模型：在设置里填 DeepSeek API Key 后重试', {
         code: 'llm_not_configured',
       });
     }
@@ -1092,6 +1093,7 @@ ${
           ],
           {
             tag: 'chat/stream',
+            userId: claims.sub,
             signal: ac.signal,
             onUpstreamReady: openSse,
             onDelta: (d) => {

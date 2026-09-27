@@ -234,6 +234,7 @@ async function executeSpawnWorkers(
   // 后台跑：**不 await**
   void runWorkerPool({
     env,
+    userId: ctx.userId,
     jobId: job.id,
     tasks,
     allowSearch: args.allow_search !== false,

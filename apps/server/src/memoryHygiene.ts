@@ -83,6 +83,7 @@ async function fetchActiveMemories(
 async function callHygieneModel(
   env: ServerEnv,
   memories: { id: number; content: string }[],
+  ownerId: number,
 ): Promise<HygieneGroup[]> {
   if (memories.length < 2) return [];
   const payload = memories.map((m) => ({ id: m.id, content: m.content.slice(0, 200) }));
@@ -93,6 +94,7 @@ async function callHygieneModel(
   try {
     const resp = await llmFetch(env, messages as never, {
       tag: 'memories/hygiene',
+      userId: ownerId,
       json: true,
       temperature: 0.2,
     });
@@ -228,7 +230,7 @@ export async function runHygieneForScope(
     return { mergedGroups: 0, createdIds: [], mergedIds: [], beforeCount, afterCount: beforeCount };
   }
 
-  const groups = await callHygieneModel(env, all);
+  const groups = await callHygieneModel(env, all, scope.ownerId);
   if (groups.length === 0) {
     if (beforeCount > limit && all.length >= 2) {
       const oldest = all.slice(0, 2);

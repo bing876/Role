@@ -57,6 +57,7 @@ async function main(): Promise<void> {
   // 生产代码（与 apps/server 完全同一份）
   const { makePool, migrate } = await import('../../apps/server/src/db');
   const { makeCipher } = await import('../../apps/server/src/crypto');
+  const { installModelLookup } = await import('../../apps/server/src/modelSettings');
   const { loadEnv } = await import('../../apps/server/src/env');
   const { startLoop, advance, getLoop, restoreLoopFromCheckpoint, setCheckpointDeps } = await import(
     '../../apps/server/src/toolLoop'
@@ -67,6 +68,9 @@ async function main(): Promise<void> {
   await migrate(pool);
   const cipher = makeCipher('a'.repeat(64));
   setCheckpointDeps(pool, cipher);
+  // 真实服务 buildApp 同时安装按用户密文模型配置的查询器；此双进程脚本只启循环，必须重建该运行时依赖。
+  // 不得因为离线验收缺初始化就放宽 llmFetch 的 fail-closed 闸，崩溃后的新进程也要重新安装。
+  installModelLookup(pool, cipher);
   const env = loadEnv();
   /** 循环挂在 user 1 上（loop_checkpoints.user_id 有外键）—— 与 task-encryption-pglite 同一套前置数据 */
   await pool.query(`INSERT INTO users (id, xyz_id, phone_hash) VALUES (1,'x1','h1') ON CONFLICT (id) DO NOTHING`);

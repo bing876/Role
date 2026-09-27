@@ -1774,6 +1774,33 @@ export interface WhiteboardPostResult {
 //   · 配置**加密落本地**（服务端 AES-256-GCM，key 只在内存，读回一律打码）。
 // ---------------------------------------------------------------------------
 
+/** 真模型接入层：用户显式设置模型（默认 DeepSeek）；密钥只写本地密文，不进 WorkbenchSettings。 */
+export type ModelProviderName = 'deepseek' | 'openai' | 'custom';
+export interface ModelConfigView {
+  provider: ModelProviderName;
+  model: string;
+  baseUrl: string;
+  apiKeySet: boolean;
+  /** 只有两种值：**** 表示已有密钥，空串表示没有；不返回密钥正文。 */
+  apiKeyMasked: '****' | '';
+  /** local=本账号密文，env=存量 DEEPSEEK_API_KEY，none=未配置，invalid=密文损坏（不降级） */
+  source: 'local' | 'env' | 'none' | 'invalid';
+}
+export interface ModelConfigInput {
+  provider: ModelProviderName;
+  model?: string;
+  baseUrl?: string;
+  /** 新 key；留空只在当前用户、同供应商、同 baseUrl 的本地配置上保留旧值。 */
+  apiKey?: string;
+}
+export interface ModelTestResult { ok: boolean; detail: string }
+/** 设置表单默认值；旧 DEEPSEEK_MODEL 环境变量保持其既有默认，不受此表影响。 */
+export const MODEL_PROVIDER_DEFAULTS: Record<ModelProviderName, { model: string; baseUrl: string }> = {
+  deepseek: { model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com' },
+  openai: { model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1' },
+  custom: { model: '', baseUrl: '' },
+};
+
 export type PluginId = 'web_search' | 'image_gen' | 'github' | 'feishu' | `mcp_s${number}`;
 
 /** 当前登录用户对这个插件的配置状态：没配 / 配了 / 配了且测过 */

@@ -41,6 +41,7 @@ import { SETTINGS_FALLBACK } from './shared/settings';
 import { useKnowledge } from './features/knowledge';
 import { MemoryConfirmCard, useMemory } from './features/memory';
 import { PluginsPanel, usePlugins } from './features/plugins';
+import { ModelSettingsPanel, useModelSettings } from './features/model';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -1497,6 +1498,8 @@ export default function App() {
   const [justAddedAgentId, setJustAddedAgentId] = useState<number | null>(null);
   /** B1 设置抽屉：账号/密码/浏览器参数/保活 收进可开合抽屉（默认收起 = 降噪） */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 真模型接入层：只在设置展开且已登录时按账号读取打码视图；key 不进 Electron settings。 */
+  const modelSettings = useModelSettings(settingsOpen, session?.token ?? null);
   /** 能力与连接（2026-09-27）：外部能力卡片（搜索/生图/GitHub/飞书 + MCP）。只在抽屉打开时拉。 */
   const plugins = usePlugins(settingsOpen);
   const pluginsPanelProps = {
@@ -2334,6 +2337,8 @@ export default function App() {
             </div>
                 </div>
 
+          {/* 真模型：每账号密文配置与真连通测试，不额外加仪表盘或会话发送动作 */}
+          <ModelSettingsPanel key={session.user.id} {...modelSettings} />
           {/* 能力与连接（2026-09-27）：搜索/图片/GitHub/飞书 + MCP 连接，配置加密存本机 */}
           <PluginsPanel {...pluginsPanelProps} />
               </div>

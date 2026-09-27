@@ -22,6 +22,9 @@ export default defineConfig({
       '/agents': 'http://127.0.0.1:8787',
       '/memory': 'http://127.0.0.1:8787',
       '/knowledge': 'http://127.0.0.1:8787',
+      '/model': 'http://127.0.0.1:8787',
+      '/plugins': 'http://127.0.0.1:8787',
+      '/mcp': 'http://127.0.0.1:8787',
     },
   },
 

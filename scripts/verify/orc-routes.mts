@@ -32,6 +32,7 @@ const { makeCipher, signToken } = req('../../apps/server/src/crypto') as typeof 
 const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
 const { registerLoopRoutes } = req('../../apps/server/src/routes/loop') as typeof import('../../apps/server/src/routes/loop');
 const { registerChannelRoutes } = req('../../apps/server/src/routes/channels') as typeof import('../../apps/server/src/routes/channels');
+const { installModelLookup } = req('../../apps/server/src/modelSettings') as typeof import('../../apps/server/src/modelSettings');
 const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
 const { getLoop } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
 const { ensureChannel, addChannelMessage, insertDelegation } = req(
@@ -91,6 +92,10 @@ async function main(): Promise<void> {
        (301,30,'外人','custom',NULL)
      ON CONFLICT (id) DO NOTHING`,
   );
+
+  // 和生产 buildApp 一样，给独立的循环验收安装每用户密文模型查询（不关闭缺失查询器的安全闸）。
+
+  installModelLookup(pool, cipher);
 
   initOrchestrator({ pool, env: ENV, cipher });
 

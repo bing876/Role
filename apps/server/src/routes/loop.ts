@@ -54,6 +54,7 @@ import {
   type LoopStateBrief,
 } from '../toolLoop';
 import { mainLoopToolNamesWithMcp } from '../plugins/mcpLoop';
+import { modelAvailableForUser } from '../modelSettings';
 import { broadcastLoopEvent, endLoopSse } from '../loopSse';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { getJob, jobOfLoop } from '../orchestrator/registry';
@@ -121,8 +122,8 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
   app.post('/agent/loop/start', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期（工具循环需要第 5 步的 JWT）');
-    if (!env.deepseekApiKey) {
-      return errJson(reply, 503, '未配置模型：在 apps/server/.env 填 DEEPSEEK_API_KEY 后重启 npm run dev:server', {
+    if (!(await modelAvailableForUser(pool, cipher, claims.sub, env))) {
+      return errJson(reply, 503, '未配置模型：在设置里填 DeepSeek API Key 后重试', {
         code: 'llm_not_configured',
       });
     }

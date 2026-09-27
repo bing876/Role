@@ -25,7 +25,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
     for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(exports, p)) __createBinding(exports, m, p);
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_SETTINGS = exports.SETTINGS_RANGE = void 0;
+exports.MODEL_PROVIDER_DEFAULTS = exports.DEFAULT_SETTINGS = exports.SETTINGS_RANGE = void 0;
 /**
  * 配置的取值范围。主进程读写时一律夹到这个区间里 ——
  * 防止有人手改 JSON 改出负数或 0（那会让功能直接不可用）。
@@ -67,6 +67,12 @@ exports.DEFAULT_SETTINGS = {
     resourceCpuWarnPct: 35,
     resourceSysMemGuard: 0,
     resourceSysMemFloorMB: 1536,
+};
+/** 设置表单默认值；旧 DEEPSEEK_MODEL 环境变量保持其既有默认，不受此表影响。 */
+exports.MODEL_PROVIDER_DEFAULTS = {
+    deepseek: { model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com' },
+    openai: { model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1' },
+    custom: { model: '', baseUrl: '' },
 };
 __exportStar(require("./tools"), exports);
 __exportStar(require("./semanticTools"), exports);
