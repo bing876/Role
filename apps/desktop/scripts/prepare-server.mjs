@@ -21,9 +21,14 @@ if (JSON.stringify(Object.entries(declared).sort()) !== JSON.stringify(Object.en
 for (const asset of [path.join(root, 'apps/server/dist/index.js'), path.join(root, 'packages/shared/dist/index.js')]) {
   if (!existsSync(asset)) throw Error(`缺少构建产物：${asset}（先运行 npm run build）`);
 }
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-const installed = spawnSync(npm, ['ci', '--prefix', stage, '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'],
-  { cwd: root, stdio: 'inherit', windowsHide: true });
+// Windows Node 22 的 spawnSync(..., 'npm.cmd') 不会像交互式 shell 一样解析 .cmd，
+// 必须调用当前 npm CLI 的 JS 入口；stage 为独立锁文件，cwd 指向它而不是主 workspace。
+const cli = process.env.npm_execpath;
+const npmRunner = cli && existsSync(cli) ? process.execPath : process.platform === 'win32' ? 'cmd.exe' : 'npm';
+const ciArgs = ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'];
+const args = cli && existsSync(cli) ? [cli, ...ciArgs]
+  : process.platform === 'win32' ? ['/d', '/s', '/c', `npm ${ciArgs.join(' ')}`] : ciArgs;
+const installed = spawnSync(npmRunner, args, { cwd: stage, stdio: 'inherit', windowsHide: true });
 if (installed.error || installed.status !== 0) throw Error(`生产依赖 npm ci 失败：${installed.error?.message ?? installed.status}`);
 
 // 仅清理此脚本生成的 staging 内容；用户原有安装包/源码/数据库一个字节也不碰。

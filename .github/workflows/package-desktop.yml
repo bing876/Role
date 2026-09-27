@@ -40,15 +40,15 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
       - name: Build actual unpacked directory
-        run: npm run package:dir
+        run: node scripts/verify/annotate-packaging.mjs package:dir
       - name: Boot packaged Electron binary and embedded server
-        run: npm run verify:packaged-dir
+        run: node scripts/verify/annotate-packaging.mjs verify:packaged-dir
       - name: Build NSIS installer
         if: matrix.target == 'win'
-        run: npm run package:win
+        run: node scripts/verify/annotate-packaging.mjs package:win
       - name: Build DMG
         if: matrix.target == 'mac'
-        run: npm run package:mac
+        run: node scripts/verify/annotate-packaging.mjs package:mac
       - uses: actions/upload-artifact@v4
         with:
           name: ai-workbench-${{ matrix.target }}-unsigned
