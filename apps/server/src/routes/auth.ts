@@ -16,6 +16,7 @@
  * 明文/验证码一律不落库、不打日志；库里短信码只存 sha256(salt$code)，手机号存 HMAC 哈希 + AES 密文。
  */
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { timingSafeEqual } from 'node:crypto';
 import type { Pool } from 'pg';
 import type {
   AgentSummary,
@@ -215,6 +216,64 @@ async function buildSession(pool: Pool, env: ServerEnv, cipher: JsonCipher, user
 }
 
 export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: AuthDeps): void {
+  // 片⑤ · 新装本地库的一次性引导（不能用生产环境的 SMS_MOCK 假装真实短信）。
+  // 只有打包态注入的高熵 secret 可创建；渲染层拿不到这个值，只能经主进程 IPC。
+  const local = (req: FastifyRequest) => Boolean(env.localMode && env.localBootstrapSecret &&
+    ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip));
+  let onboardingBusy = false;
+  app.get('/auth/onboarding', async (req, reply) => {
+    if (!local(req)) return { available: false, local: false };
+    try {
+      const any = await pool.query('SELECT 1 FROM users LIMIT 1');
+      return { available: any.rowCount === 0, local: true };
+    } catch { return reply.code(503).send({ error: '本地数据库正在建表，请稍后重试' }); }
+  });
+  app.post('/auth/onboarding', async (req, reply) => {
+    if (!local(req)) return reply.code(404).send({ error: '本地引导未启用' });
+    if (ipRateLimited(req.ip)) return reply.code(429).send({ error: '操作太频繁，请稍后重试' });
+    const supplied = req.headers['x-workbench-bootstrap-secret'];
+    const expected = env.localBootstrapSecret!;
+    if (typeof supplied !== 'string' || !/^[0-9a-f]{64}$/.test(supplied) ||
+        !timingSafeEqual(Buffer.from(supplied, 'hex'), Buffer.from(expected, 'hex')))
+      return reply.code(403).send({ error: '本地引导无权限' });
+    const body = req.body as { password?: unknown } | null;
+    const password = body && !Array.isArray(body) && typeof body.password === 'string' ? body.password : '';
+    if (password.length < PASSWORD_MIN || password.length > 128)
+      return reply.code(400).send({ error: '本机密码须为 8–128 字符' });
+    if (onboardingBusy) return reply.code(409).send({ error: '本地账号正在创建，请稍后重试' });
+    onboardingBusy = true;
+    try {
+      const created = await withTx(pool, async (client) => {
+        // 与插入处于同一事务；进程锁让并发请求不能一起见到空用户表。
+        const any = await client.query('SELECT 1 FROM users LIMIT 1');
+        if (any.rowCount) return null;
+        const xyz = await allocateXyz(async (sql, params) => client.query(sql, params));
+        const u = await client.query<{ id: string }>(
+          'INSERT INTO users (xyz_id, password_hash) VALUES ($1, $2) RETURNING id',
+          [xyz, hashPassword(password)],
+        );
+        const p = await client.query<{ id: string; name: string }>(
+          "INSERT INTO projects (user_id, name, is_default) VALUES ($1, '默认项目', true) RETURNING id, name",
+          [u.rows[0].id],
+        );
+        const a = await client.query<{ id: string }>(
+          "INSERT INTO agents (project_id, name, kind, persona, persona_status, can_create_agents) VALUES ($1, '小助', 'assistant', $2, 'ready', true) RETURNING id",
+          [p.rows[0].id, JSON.stringify(XIAOZHU_PERSONA)],
+        );
+        return { userId: u.rows[0].id, projectId: p.rows[0].id, projectName: p.rows[0].name, agentId: a.rows[0].id };
+      });
+      if (!created) return reply.code(409).send({ error: '本地账号已存在，请用 XYZ 号登录' });
+      try {
+        const { seedColleagueProposal } = await import('../orchestrator/agentBuilder');
+        await seedColleagueProposal(pool, cipher, Number(created.userId), Number(created.projectId),
+          created.projectName, Number(created.agentId));
+      } catch { /* 建号成功后团队提议失败不能制造第二个账号；现有短信路径也允许这一项失败。 */ }
+      return await buildSession(pool, env, cipher, created.userId);
+    } catch {
+      return reply.code(503).send({ error: '本地账号创建失败，数据未确认；请检查本机数据库' });
+    } finally { onboardingBusy = false; }
+  });
+
   // ---------------------------------------------------------------- 短信
   app.post('/auth/sms/send', async (req: FastifyRequest, reply) => {
     const body = req.body as { phone?: unknown } | null;

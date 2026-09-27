@@ -356,8 +356,14 @@ export interface WorkbenchBridge {
    * 这个字段**必须存在** —— 缺失时 `!undefined` 为真，会被误判成 web 直测模式，桌面端将永远连不上后端。
    */
   isElectron: boolean;
+  /** 片⑤：仅 Electron 安装包为 true；可选字段，旧桥仍兼容。安装包不信任旧的自定义后端地址。 */
+  isPackaged?: boolean;
   /** 连通性自检：主进程返回 pong */
   ping: () => Promise<string>;
+  /** 片⑤：安装包后端守护状态；错误原因不含密钥、账号或请求正文。 */
+  serverStatus: () => Promise<{ reachable: boolean; ownedByUs: boolean; lastError: string | null }>;
+  /** 片⑤：仅安装包首次本地建号；renderer 只传密码，不会获得主进程的 bootstrap secret。 */
+  createLocalAccount: (password: string) => Promise<AuthSession>;
   /** 打开内嵌浏览器区域；url 省略时沿用当前地址 */
   openBrowser: (url?: string) => Promise<void>;
   /** 显示内嵌浏览器区域 */

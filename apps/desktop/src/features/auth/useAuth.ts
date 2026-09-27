@@ -52,8 +52,24 @@ export function useAuth(): AuthApi {
     const saved = localStorage.getItem(TOKEN_KEY);
     if (!saved) return;
     let off = false; // 卸载标志：慢回来的响应不再 setState
-    authFetchJson<AuthProfile>('/auth/me', { headers: { authorization: `Bearer ${saved}` } })
+    const restore = async () => {
+      if (window.workbench?.isPackaged) {
+        // 安装包的子进程/库在异步首启；不能在它起来前把旧 token 发给占位端口，
+        // 也不能因尚未就绪就清除本地已保存的登录态。
+        const deadline = Date.now() + 60_000;
+        while (!off) {
+          const s = await window.workbench.serverStatus();
+          if (s.reachable && s.ownedByUs) break;
+          if (Date.now() >= deadline) throw new Error('安装包本地服务尚未就绪');
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        if (off) return null;
+      }
+      return authFetchJson<AuthProfile>('/auth/me', { headers: { authorization: `Bearer ${saved}` } });
+    };
+    void restore()
       .then((p) => {
+        if (!p) return;
         if (off) return;
         /**
          * ★ F5 后的静默恢复 —— **必须**同步给主进程。
@@ -65,10 +81,12 @@ export function useAuth(): AuthApi {
         setSession({ ...p, token: saved });
       })
       .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        // 登录态失效 → 顺手把主进程那份也清掉，别留着一份过期的还能发请求
+        if (off) return;
+        // 包内服务启动失败/被占端口时先保留旧 token；不能因“尚未连接”误删可恢复的会话。
+        // 用户重新登录时会覆盖旧值。开发环境维持原来的失败清除口径。
+        if (!window.workbench?.isPackaged) localStorage.removeItem(TOKEN_KEY);
         void window.workbench?.syncSession?.(API_BASE(), '');
-        if (!off) setSession(null);
+        setSession(null);
       })
       .finally(() => { if (!off) setCheckingAuth(false); });
     return () => { off = true; };

@@ -1,0 +1,59 @@
+# 片⑤：只在本会话分支构建目标系统包，不提交/发布/部署、不读取仓库 secret。
+# CI 的目录包测试用 Electron-as-Node 二进制 + 包内资源；GUI 安装、签名/公证仍需真机。
+name: Desktop packaging (Windows / macOS)
+on:
+  push:
+    branches: [arena/01a0d0a8-role]
+    paths:
+      - '.github/workflows/package-desktop.yml'
+      - 'apps/desktop/**'
+      - 'apps/server/**'
+      - 'packages/shared/**'
+      - 'scripts/verify/packaged-dir.mts'
+      - 'scripts/verify/release-*'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    name: ${{ matrix.target }} installer and unpacked runtime
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: win
+            os: windows-latest
+          - target: mac
+            os: macos-15-intel
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false' # 无代码签名凭据；产物只能做安装前测试
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Build actual unpacked directory
+        run: npm run package:dir
+      - name: Boot packaged Electron binary and embedded server
+        run: npm run verify:packaged-dir
+      - name: Build NSIS installer
+        if: matrix.target == 'win'
+        run: npm run package:win
+      - name: Build DMG
+        if: matrix.target == 'mac'
+        run: npm run package:mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ai-workbench-${{ matrix.target }}-unsigned
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+          if-no-files-found: error
+          retention-days: 7

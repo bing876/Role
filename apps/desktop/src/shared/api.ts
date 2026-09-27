@@ -11,6 +11,8 @@
 
 /** 后端地址：默认 127.0.0.1:8787；浏览器直测模式下自动使用相对路径走 Vite 代理 */
 export const API_BASE = () => {
+  // 安装包只连本机自带的 server；旧版 localStorage 自定义地址不能把新账号/token 发往外部。
+  if (typeof window !== 'undefined' && window.workbench?.isPackaged === true) return 'http://127.0.0.1:8787';
   const custom = localStorage.getItem('workbench.apiBase');
   if (custom) return custom;
   if (typeof window !== 'undefined' && !(window as any).workbench?.isElectron) {
@@ -22,6 +24,11 @@ export const API_BASE = () => {
 export const TOKEN_KEY = 'workbench.token';
 
 export async function authFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  // 安装包绝不把凭证交给占用 8787 的另一份服务，即使它伪造 /health 的 service 标记。
+  if (typeof window !== 'undefined' && window.workbench?.isPackaged === true) {
+    const status = await window.workbench.serverStatus();
+    if (!status.reachable || !status.ownedByUs) throw new Error('本机后端尚未就绪或端口被占用；不会连接其他服务');
+  }
   let res: Response;
   try {
     res = await fetch(`${API_BASE()}${path}`, {

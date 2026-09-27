@@ -31,6 +31,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // monorepo 的 @ai-workbench/shared 是 symlink；Rollup 看到真实路径在 packages/ 而非
+    // node_modules/，默认 CommonJS 转换会跳过它，生产包才报 MODEL_PROVIDER_DEFAULTS 未导出。
+    commonjsOptions: { include: [/node_modules/, /packages[/\\]shared[/\\]dist/] },
   },
 });
 

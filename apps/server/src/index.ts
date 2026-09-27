@@ -229,9 +229,11 @@ async function main(): Promise<void> {
    */
   void migrateTaskEncryptionWithRetry(pool, cipher);
 
-  await app.listen({ port: env.port, host: '0.0.0.0' });
+  // 安装包本地引导端点/库只允许本机进程访问；旧开发/远程部署不改监听口径。
+  const host = env.localMode ? '127.0.0.1' : '0.0.0.0';
+  await app.listen({ port: env.port, host });
   console.log(
-    `[server] http://0.0.0.0:${env.port} —— GET /health；短信模式：${env.smsMock ? 'mock（验证码只进本日志）' : 'http 网关'}` +
+    `[server] http://${host}:${env.port} —— GET /health；短信模式：${env.smsMock ? 'mock（验证码只进本日志）' : 'http 网关'}` +
       `；模型：${env.deepseekApiKey ? `已配置（${env.deepseekModel} @ ${env.deepseekBaseUrl}）` : '未配置（/chat/stream 与 /agent/next-action 会明确拒绝并提示填 DEEPSEEK_API_KEY）'}`,
   );
 }
