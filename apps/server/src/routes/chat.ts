@@ -58,6 +58,7 @@ import { buildAgentContext, buildUserMemoryBlock, ensureAgentConversation, toAge
 import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
+import { mainLoopToolNamesWithMcp } from '../plugins/mcpLoop';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
@@ -834,6 +835,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           // R-C：交给循环的目标是剥掉 @名字 之后的正文（@名字 只是点名，不是任务内容）
           goal: mentionText,
           pageUrl: pageUrl || openedUrl,
+          // 片2 · MCP 通用桥：当前用户挂的 MCP server 工具拼进这轮工具表（没挂 → undefined，走老路逐字节不变）
+          toolNames: await mainLoopToolNamesWithMcp(pool, cipher, claims.sub, env),
           // 多智能体编排：同项目同事名单（与 /agent/loop/start 走同一个拼装函数，
           // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
           // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。

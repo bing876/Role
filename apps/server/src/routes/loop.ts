@@ -53,6 +53,7 @@ import {
   injectUserMessage,
   type LoopStateBrief,
 } from '../toolLoop';
+import { mainLoopToolNamesWithMcp } from '../plugins/mcpLoop';
 import { broadcastLoopEvent, endLoopSse } from '../loopSse';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { getJob, jobOfLoop } from '../orchestrator/registry';
@@ -169,6 +170,8 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
       console.warn('[loop] 记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
     }
 
+    // 片2 · MCP 通用桥：当前用户挂的 MCP server 工具拼进这轮工具表（没挂 → undefined，走老路逐字节不变）
+    const mcpToolNames = await mainLoopToolNamesWithMcp(pool, cipher, claims.sub, env);
     const session = startLoop(env, {
       userId: claims.sub,
       agentId,
@@ -176,6 +179,7 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
       wcId,
       goal,
       pageUrl: typeof b?.pageUrl === 'string' ? b.pageUrl.trim().slice(0, 500) : '',
+      toolNames: mcpToolNames,
       state,
       // 多智能体编排：同项目同事名单 + 编排规矩（追加到第一条 user 消息）。
       // ★ 名单必须在这里查、在这里传：它是**按项目按当下**变的，进不了工具 description。

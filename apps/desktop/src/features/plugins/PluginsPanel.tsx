@@ -11,6 +11,7 @@
 import { useState } from 'react';
 import type { PluginInfo } from '@ai-workbench/shared';
 import type { FieldView, TestResult } from './usePlugins';
+import { McpServersPanel } from './McpServersPanel';
 
 interface PanelProps {
   plugins: PluginInfo[];
@@ -31,10 +32,11 @@ export function PluginsPanel(props: PanelProps) {
       {!loaded && <div className="small">加载中…</div>}
       {loaded && err && <div className="small pluginsPanel__err">没读到能力列表：{err}</div>}
       <div className="pluginsPanel__list">
-        {plugins.map((p) => (
+        {plugins.filter((p) => !p.id.startsWith('mcp_s')).map((p) => (
           <PluginCard key={p.id} plugin={p} {...props} />
         ))}
       </div>
+      <McpServersPanel />
     </div>
   );
 }

@@ -545,6 +545,22 @@ CREATE TABLE IF NOT EXISTS plugin_configs (
 );
 CREATE INDEX IF NOT EXISTS idx_plugin_configs_user ON plugin_configs (user_id);
 
+-- 能力与连接 · 片2 · MCP 通用桥：用户自建的 MCP server 列表（一个账号可挂多个）。
+--   · url 非密（明文）；auth（Bearer token / 自定义头）走 auth_enc 加密（复用 JsonCipher）。
+--   · tools_json = 加 server 时从 tools/list 拉回的 {name, description, inputSchema}[]
+--     （存下来给循环拼工具表，免得每次循环都重连握手）。
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  url         TEXT NOT NULL,
+  auth_enc    TEXT,
+  tools_json  TEXT NOT NULL DEFAULT '[]',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_user ON mcp_servers (user_id);
+
 `;
 
 

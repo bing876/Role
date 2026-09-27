@@ -39,6 +39,7 @@ import { registerWhiteboardRoutes } from './routes/whiteboard';
 import { registerSkillsRoutes } from './routes/skills';
 import { registerComputerVisibilityRoutes } from './routes/computerVisibility';
 import { registerPluginRoutes } from './routes/plugins';
+import { registerMcpRoutes } from './routes/mcp';
 import { initOrchestrator } from './orchestrator/tools';
 import { startRoutineSweeper } from './orchestrator/routines';
 import { setCheckpointDeps } from './toolLoop';
@@ -156,6 +157,8 @@ export async function buildApp(env: ServerEnv, pool: Pool, cipher: JsonCipher): 
   registerComputerVisibilityRoutes(app, { pool, env, cipher });
   // 能力与连接（2026-09-27）：插件注册表 + 加密配置 + 测试 + 项目图片
   registerPluginRoutes(app, { pool, env, cipher });
+  // 片2 · MCP 通用桥：用户自挂 MCP server（加/列/删/测）
+  registerMcpRoutes(app, { pool, env, cipher });
   await app.ready();
   return app;
 }

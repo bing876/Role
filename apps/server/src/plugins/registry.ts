@@ -16,6 +16,7 @@ import type { JsonCipher } from '../crypto';
 import type { PluginConfigField, PluginId, PluginInfo, PluginStatus } from '@ai-workbench/shared';
 import { isConfigComplete, loadPluginConfig, type PluginConfig, type WebSearchPluginConfig } from './config';
 import { imageProviderFor, searchProviderFor, type ImageConfig, type ImageProvider, type SearchProvider } from './providers';
+import { loadUserMcpServers, mcpToolNameFor } from './mcpRegistry';
 
 export interface NativePluginMeta {
   id: PluginId;
@@ -121,6 +122,19 @@ export async function listPluginsWithStatus(
       configFields: meta.configFields,
       status,
       enabled: complete,
+    });
+  }
+  // 片2：每个已连接的 MCP server 也是一个「插件」，元数据进注册表。
+  // auth 不在此暴露；UI 通过 MCP 连接卡操作（不是 /plugins/:id/config）。
+  for (const s of await loadUserMcpServers(pool, cipher, userId)) {
+    out.push({
+      id: `mcp_s${s.id}`,
+      name: s.name,
+      description: `MCP 连接「${s.name}」提供 ${s.tools.length} 个外部工具；仅用于你明确需要该连接中的能力时。`,
+      tools: s.tools.map((t) => mcpToolNameFor(s.id, t.name)),
+      configFields: [],
+      status: 'configured',
+      enabled: true,
     });
   }
   return out;

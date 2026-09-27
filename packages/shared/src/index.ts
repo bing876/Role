@@ -1772,7 +1772,7 @@ export interface WhiteboardPostResult {
 //   · 配置**加密落本地**（服务端 AES-256-GCM，key 只在内存，读回一律打码）。
 // ---------------------------------------------------------------------------
 
-export type PluginId = 'web_search' | 'image_gen';
+export type PluginId = 'web_search' | 'image_gen' | `mcp_s${number}`;
 
 /** 当前登录用户对这个插件的配置状态：没配 / 配了 / 配了且测过 */
 export type PluginStatus = 'unconfigured' | 'configured' | 'tested';
@@ -1825,6 +1825,22 @@ export interface PluginInfo {
   /** 是否已配齐可用（决定卡片绿/灰） */
   enabled: boolean;
 }
+
+/** 片2 · MCP 通用桥。GET /mcp/servers 只回工具元数据/是否设过 token，绝不回 token。 */
+export interface McpToolView { name: string; description?: string }
+export interface McpServerView {
+  id: number;
+  name: string;
+  url: string;
+  hasAuth: boolean;
+  tools: McpToolView[];
+}
+export interface McpAddServerInput {
+  name: string;
+  url: string;
+  auth?: { bearerToken?: string; headers?: Record<string, string> };
+}
+export interface McpTestView { ok: boolean; detail: string; count?: number }
 
 export * from './tools';
 

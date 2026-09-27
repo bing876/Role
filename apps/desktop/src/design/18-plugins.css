@@ -111,3 +111,12 @@
 .pluginCard__clear {
   opacity: 0.75;
 }
+.mcpPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.mcpPanel__add { align-self: flex-start; }
+.mcpPanel .pluginCard__body { margin-top: 0; }
