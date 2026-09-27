@@ -10,6 +10,13 @@ NODE = shutil.which('node') or 'node'
 TSX = str(ROOT / 'node_modules/tsx/dist/cli.mjs')
 CASES = [
     (
+        'electron-builder 丢弃包内 node_modules',
+        ROOT / 'apps/desktop/package.json',
+        '"from": "packaging/node_modules",',
+        '"from": "packaging/not-the-dependencies",',
+        'scripts/verify/release-runtime.mts', 'electron-builder 真实过滤器未纳入',
+    ),
+    (
         '缺钥匙却重新生成',
         ROOT / 'apps/desktop/electron/packaged-runtime.ts',
         "if (existsSync(databaseDir) && !existsSync(path.join(privateDir, 'local-runtime.json')))\n",
@@ -60,11 +67,11 @@ def run(script):
 
 
 def main():
-    for script, expected in [('scripts/verify/release-runtime.mts', 'PASS 8 / FAIL 0'),
+    for script, expected in [('scripts/verify/release-runtime.mts', 'PASS 9 / FAIL 0'),
                              ('scripts/verify/release-ui-smoke.mts', 'PASS 5 / FAIL 0')]:
         code, trace = run(script)
         assert code == 0 and expected in trace, f'反证基线不绿 {script}：{trace[-1400:]}'
-    print('上线反证基线：真 staging/HTTP/持久库 8/0 + React 首跑 UI 5/0')
+    print('上线反证基线：真 staging/HTTP/持久库 9/0 + React 首跑 UI 5/0')
     for idx, (name, target, anchor, replacement, script, expected) in enumerate(CASES, 1):
         original = target.read_bytes()
         assert original.count(anchor.encode()) == 1, f'反证 {idx} 生产锚点漂移/不唯一：{anchor}'

@@ -3,9 +3,10 @@
  */
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { mkdtempSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { preparePackagedRuntime } from '../../apps/desktop/electron/packaged-runtime';
@@ -21,21 +22,39 @@ assert.equal(build.win.target[0], 'nsis'); assert.equal(build.mac.target[0], 'dm
 assert.equal(build.extraResources?.[0]?.from, 'packaging'); assert.equal(build.extraResources?.[0]?.to, 'server');
 assert.ok(existsSync(join(stage, 'node_modules/@electric-sql/pglite/dist/pglite.wasm')));
 assert.ok(!existsSync(join(stage, '.env')));
+// electron-builder v26 的过滤器会在 `from=packaging` 时**无条件跳过**其根下 node_modules
+// （即便写了 node_modules/**/*）！用它自己的真实 FileMatcher + copyFiles 装配隔离包内资源。
+// 之前只 cpSync(stage) 的独立副本为绿，但 Win/mac 真实 --dir 目录都缺 pglite。
+const builderRequire = createRequire(import.meta.url);
+const { getFileMatchers, copyFiles } = builderRequire('app-builder-lib/out/fileMatcher') as {
+  getFileMatchers: (config: unknown, name: string, to: string, options: unknown) => Array<{
+    from: string; to: string; createFilter: () => (file: string, stat: ReturnType<typeof statSync>) => boolean;
+  }>;
+  copyFiles: (matchers: unknown) => Promise<void>;
+};
+const desktopDir = join(root, 'apps/desktop');
+const matcherOptions = { defaultSrc: desktopDir, macroExpander: (v: string) => v,
+  customBuildOptions: {}, globalOutDir: join(desktopDir, 'release') };
+const targetResources = join(root, 'apps/desktop/release/probe/resources');
+const matchers = getFileMatchers(build, 'extraResources', targetResources, matcherOptions);
+for (const asset of [
+  'node_modules/@electric-sql/pglite/package.json',
+  'node_modules/@electric-sql/pglite/dist/pglite.wasm',
+  'node_modules/@electric-sql/pglite/dist/initdb.wasm',
+  'node_modules/@electric-sql/pglite/dist/pglite.data',
+  'node_modules/@ai-workbench/shared/dist/index.js',
+]) {
+  const file = join(stage, asset);
+  assert.ok(matchers.some((m) => m.from === join(stage, 'node_modules') &&
+    m.to === join(targetResources, 'server/node_modules') && m.createFilter()(file, statSync(file))),
+  `electron-builder 真实过滤器未纳入 ${asset}，安装目录缺后端依赖`);
+}
 
 let passed = 0;
 const check = (message: string) => { console.log(`  ✓ ${message}`); passed++; };
 const scratch = mkdtempSync(join(tmpdir(), 'ai-workbench-release-'));
 const resources = join(scratch, 'resources');
-const server = join(resources, 'server');
 const userData = join(scratch, 'userData');
-mkdirSync(resources, { recursive: true });
-// 与 electron-builder extraResources 的白名单对应，落在 /tmp（不许借仓库 hoisted node_modules 补缺包）。
-cpSync(stage, server, { recursive: true, filter: (src) => {
-  const r = relative(stage, src).replaceAll('\\', '/');
-  if (!r) return true;
-  if (r.startsWith('node_modules/.bin/') || r.endsWith('.map') || r.includes('/.env')) return false;
-  return r === 'package.json' || r === 'dist' || r.startsWith('dist/') || r === 'node_modules' || r.startsWith('node_modules/');
-} });
 function getPort(): Promise<number> {
   return new Promise((ok, fail) => { const s = createServer(); s.on('error', fail);
     s.listen(0, '127.0.0.1', () => { const port = (s.address() as { port: number }).port; s.close(() => ok(port)); }); });
@@ -70,6 +89,17 @@ let logs = '';
 const relay = (s: string) => { logs += s.slice(-300); if (logs.length > 4000) logs = logs.slice(-4000); };
 let active = false;
 try {
+  // 真调用 electron-builder 自己的复制实现，而非手写 cpSync 放宽过滤条件。
+  await copyFiles(getFileMatchers(build, 'extraResources', resources, matcherOptions));
+  for (const asset of [
+    'package.json', 'dist/index.js', 'node_modules/@electric-sql/pglite/package.json',
+    'node_modules/@electric-sql/pglite/dist/pglite.wasm',
+    'node_modules/@electric-sql/pglite/dist/pglite.data',
+    'node_modules/@ai-workbench/shared/dist/index.js',
+  ]) assert.ok(existsSync(join(resources, 'server', asset)), `builder 真复制后仍缺 ${asset}`);
+  assert.ok(!existsSync(join(resources, 'server/.env')));
+  check('electron-builder 原生过滤器 + copyFiles 真复制后，PGlite/data/WASM/shared 都在包内');
+
   // 包资源缺失时优先失败，不创建任何 userData 密钥。
   assert.throws(() => preparePackagedRuntime(join(scratch, 'uncreated'), join(scratch, 'missing')),
     /安装包缺少后端资源/);

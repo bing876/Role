@@ -38,15 +38,12 @@
       {
         "from": "packaging",
         "to": "server",
-        "filter": [
-          "package.json",
-          "dist/**/*",
-          "node_modules/**/*",
-          "!**/*.map",
-          "!**/.env",
-          "!**/.env.*",
-          "!node_modules/.bin/**"
-        ]
+        "filter": ["package.json", "dist/**/*", "!**/*.map", "!**/.env", "!**/.env.*"]
+      },
+      {
+        "from": "packaging/node_modules",
+        "to": "server/node_modules",
+        "filter": ["**/*", "!**/*.map", "!**/.env", "!**/.env.*", "!.bin/**"]
       }
     ],
     "asar": true,

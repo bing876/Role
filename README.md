@@ -143,7 +143,7 @@ npm run dev                               # 桌面端（Vite + Electron）
 | `npm run verify:batches` | 交接、白板、路由升级、重启恢复、前端引导、五项自查、Skills、电脑可见度、模型路由 | — |
 | `npm run verify:db` | **连真库**：checkpoint 加密（直接 SELECT + 漏传 cipher 变异）、board 落库锁（多进程 + kill -9 重启）、**收尾6 goal 加密**（真服务端 + 真登录 + 直连 SELECT `tasks`/`task_pauses` + 真重启验启动回填 + 幂等）、pglite 自检 | 真 PostgreSQL，`VERIFY_DATABASE_URL=postgres://…`（可写的测试库） |
 | `npm run verify:db:pglite` | 收尾6 goal 加密的快速自检：跑的是**生产代码本体**（`db.ts` / `routes/agent.ts` / `routes/loop.ts` + Fastify `inject()`），不是脚本里的副本 | PGlite（无需外部库） |
-| `npm run verify:release` | 片⑤：重新 stage 后端 → 隔离副本中真子进程+真持久化 PGlite/HTTP（首跑/重启/拒假 secret/密钥损坏/端口占用）→ React 真首跑组件 jsdom（故障/旧自定义地址/已有登录）→ 负向代码变异 | Node、PGlite；**不**验证安装目录 Electron GUI / Win/mac 产物 |
+| `npm run verify:release` | 片⑤：重新 stage 后端 → 用 electron-builder 自身 FileMatcher + copyFiles 真装配独立资源副本 → 子进程+持久 PGlite/HTTP（首跑/重启/拒假 secret/密钥损坏/端口占用）→ React 真首跑组件 jsdom → 负向代码变异 | Node、PGlite；**不**验证安装目录 Electron GUI / Win/mac 产物 |
 
 > 很多脚本是「读源码做结构检查」，只能证明代码长什么样，证明不了行为；涉及安全和并发的结论以 `verify:db` 这类真库 / 真进程的测试为准。
 > `scripts/verify/` 里还有大量 `.py` 与探针脚本是历史上在 Windows 真机上跑的 E2E / 性能取证，依赖本机环境，不在 `npm run verify` 里。
