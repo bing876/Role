@@ -33,6 +33,7 @@ import { resolveLoop } from './subLoops';
 import { WEB_SEARCH_SERVER_TOOL, executeWebSearchViaProvider } from './search';
 import { resolveSearchProviderForUser } from '../plugins/resolve';
 import { GENERATE_IMAGE_TOOL, executeGenerateImageTool } from './imageTool';
+import { registerConnectorTools } from './connectorTools';
 import { runWorkerPool } from './workers';
 import { registerDelegationTool } from './delegation';
 import { registerSkillTools } from './skillTools';
@@ -332,6 +333,8 @@ export function initOrchestrator(next: OrchestratorDeps): void {
   registerServerTool(GENERATE_IMAGE_TOOL, {
     execute: async (args, ctx) => executeGenerateImageTool(next, ctx, args),
   });
+  // 片3 · GitHub + 飞书原生只读连接器：按用户密文配置执行（缺配置即 not_configured）
+  registerConnectorTools(next.pool, next.cipher);
   registerServerTool(SPAWN_WORKERS_TOOL, { execute: executeSpawnWorkers });
   registerDelegationTool();
   registerSkillTools();

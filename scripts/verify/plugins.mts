@@ -2,7 +2,7 @@
  * 能力与连接（2026-09-27）· 验收（**无 key 版**，进主 verify 链）
  *
  * 覆盖（真库 pglite + 真 app + 真加密，全程不连外部 API / 不烧钱）：
- *   ① 注册表：GET /plugins 两个原生插件（web_search / image_gen），元数据 / tools / configFields 对。
+ *   ① 注册表：GET /plugins 四个原生插件（web_search / image_gen / github / feishu），元数据 / tools / configFields 对。
  *   ② 配置加密落本地：POST 存 key → 读回**打码**（****），库里 config_enc **不含明文 key**（真加密，往返可解）。
  *   ③ 状态翻转：存后 GET /plugins 该插件 绿(configured/enabled)。
  *   ④ 接进循环引擎：generate_image 注册进服务端工具表；用 **stub 供应商**走一遍注册表执行器
@@ -94,11 +94,17 @@ async function main(): Promise<void> {
   const projectId = (JSON.parse(projRes.body) as { currentProjectId: number }).currentProjectId;
 
   // ---------------------------------------------------------------------------
-  await check('① GET /plugins 返回两个原生插件，元数据 / tools / configFields 齐', async () => {
+  await check('① GET /plugins 返回四个原生插件（旧两项 + GitHub/飞书），元数据 / tools / configFields 齐', async () => {
     const res = await app.inject({ method: 'GET', url: '/plugins', headers: auth });
     assert.equal(res.statusCode, 200, `GET /plugins ${res.statusCode} ${res.body}`);
     const list = (JSON.parse(res.body) as { plugins: Plugin[] }).plugins;
-    assert.equal(list.length, 2, `应有 2 个插件，实际 ${list.length}`);
+    assert.equal(list.length, 4, `应有 4 个插件，实际 ${list.length}`);
+    const gh = list.find((p) => p.id === 'github');
+    const fs = list.find((p) => p.id === 'feishu');
+    assert.deepEqual(gh?.tools, ['github_list_issues', 'github_read_issue'], '新 GitHub 工具清单不完整');
+    assert.deepEqual(fs?.tools, ['feishu_list_files', 'feishu_read_doc'], '新飞书工具清单不完整');
+    assert.ok(gh?.configFields.some((f) => f.key === 'apiToken' && f.type === 'secret'), 'GitHub Token 应为 secret');
+    assert.ok(fs?.configFields.some((f) => f.key === 'appSecret' && f.type === 'secret'), '飞书 App Secret 应为 secret');
     const ws = list.find((p) => p.id === 'web_search');
     const img = list.find((p) => p.id === 'image_gen');
     assert.ok(ws && img, '缺 web_search 或 image_gen');

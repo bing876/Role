@@ -1652,7 +1652,7 @@ export interface WhiteboardPostResult {
     ok: boolean;
     whiteboard: WhiteboardView;
 }
-export type PluginId = 'web_search' | 'image_gen' | `mcp_s${number}`;
+export type PluginId = 'web_search' | 'image_gen' | 'github' | 'feishu' | `mcp_s${number}`;
 /** 当前登录用户对这个插件的配置状态：没配 / 配了 / 配了且测过 */
 export type PluginStatus = 'unconfigured' | 'configured' | 'tested';
 export interface PluginConfigField {

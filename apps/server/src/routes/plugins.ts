@@ -29,6 +29,9 @@ import {
   WEB_SEARCH_PLUGIN,
 } from '../plugins/registry';
 import { getProjectImageDir } from '../plugins/paths';
+import { githubConnector, feishuConnector } from '../plugins/connectors';
+import { isConfigComplete } from '../plugins/config';
+import { validateMcpEndpoint, McpError } from '../plugins/mcp';
 
 export interface PluginDeps {
   pool: Pool;
@@ -118,6 +121,10 @@ export function registerPluginRoutes(app: FastifyInstance, { pool, env, cipher }
       // 供应商默认值：没显式选时给个可用默认
       if (meta.id === 'web_search' && !merged.provider) merged.provider = 'tavily';
       if (meta.id === 'image_gen' && !merged.provider) merged.provider = 'dashscope';
+      if ((meta.id === 'github' || meta.id === 'feishu') && merged.baseUrl?.trim()) {
+        try { validateMcpEndpoint(merged.baseUrl); }
+        catch (e) { return errJson(reply, 400, (e as McpError).message); }
+      }
 
       await savePluginConfig(pool, cipher, claims.sub, meta.id, merged);
       const fields = maskConfigForView(meta, merged);
@@ -157,6 +164,8 @@ export function registerPluginRoutes(app: FastifyInstance, { pool, env, cipher }
       let provider: { test(): Promise<{ ok: boolean; detail: string; error?: string }> } | null = null;
       if (meta.id === 'web_search') provider = searchProviderFromConfig(cfg);
       else if (meta.id === 'image_gen') provider = imageProviderFromConfig(cfg);
+      else if (meta.id === 'github' && isConfigComplete(cfg, ['apiToken'])) provider = githubConnector(cfg!);
+      else if (meta.id === 'feishu' && isConfigComplete(cfg, ['appId', 'appSecret'])) provider = feishuConnector(cfg!);
       if (!provider) {
         return errJson(reply, 400, '还没配好密钥，测试不了。先填 key 再测。', { code: 'not_configured' });
       }

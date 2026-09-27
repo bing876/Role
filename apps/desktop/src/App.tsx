@@ -1497,7 +1497,7 @@ export default function App() {
   const [justAddedAgentId, setJustAddedAgentId] = useState<number | null>(null);
   /** B1 设置抽屉：账号/密码/浏览器参数/保活 收进可开合抽屉（默认收起 = 降噪） */
   const [settingsOpen, setSettingsOpen] = useState(false);
-  /** 能力与连接（2026-09-27）：外部能力卡片（网页搜索 / 生成图片）的数据。只在抽屉打开时拉。 */
+  /** 能力与连接（2026-09-27）：外部能力卡片（搜索/生图/GitHub/飞书 + MCP）。只在抽屉打开时拉。 */
   const plugins = usePlugins(settingsOpen);
   const pluginsPanelProps = {
     plugins: plugins.plugins,
@@ -2334,7 +2334,7 @@ export default function App() {
             </div>
                 </div>
 
-          {/* 能力与连接（2026-09-27）：外部能力卡片（网页搜索 / 生成图片）—— 填 key 即开，配置加密存本机 */}
+          {/* 能力与连接（2026-09-27）：搜索/图片/GitHub/飞书 + MCP 连接，配置加密存本机 */}
           <PluginsPanel {...pluginsPanelProps} />
               </div>
             )}

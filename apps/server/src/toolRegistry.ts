@@ -92,7 +92,8 @@ export function browserToolNamesFor(
   if (orch.agentLoopWebSearch && serverToolRegistry.get('web_search')) extra.push('web_search');
   // 编排两件套：总开关（能力与连接 2026-09-27：generate_image 一并挂进主循环）
   if (orch.enabled) {
-    for (const n of ['spawn_workers', 'delegate', 'teach_skill', 'revise_skill', 'generate_image']) {
+    for (const n of ['spawn_workers', 'delegate', 'teach_skill', 'revise_skill', 'generate_image',
+      'github_list_issues', 'github_read_issue', 'feishu_list_files', 'feishu_read_doc']) {
       if (serverToolRegistry.get(n)) extra.push(n);
     }
   }

@@ -1,9 +1,11 @@
 /**
  * 能力与连接 · **插件注册表**（2026-09-27）。
  *
- * 一个「插件」= 一个可开关的外部能力。当前两个**原生**插件：
+ * 一个「插件」= 一个可开关的外部能力。四个**原生**插件 + 动态 MCP：
  *   · web_search  网页搜索（供应商 Tavily，复用既有 search/tavily.ts）
  *   · image_gen   生成图片（供应商 通义万相/DALL-E，见 providers.ts）
+ *   · github      GitHub issue 只读连接器（见 connectors.ts）
+ *   · feishu      飞书云文档只读连接器（见 connectors.ts）
  *
  * 每个插件的口径（前后端共用 @ai-workbench/shared 的 PluginInfo 类型）：
  *   id / name / description(给 AI 判断何时用) / tools(接进循环引擎) / configFields(填 key)。
@@ -66,8 +68,33 @@ export const IMAGE_GEN_PLUGIN: NativePluginMeta = {
   requiredFields: ['apiKey'],
 };
 
+/** GitHub 原生连接器：只读 issues，不自动创建 issue/PR/评论。 */
+export const GITHUB_PLUGIN: NativePluginMeta = {
+  id: 'github', name: 'GitHub',
+  description: '读取指定仓库的 issue 列表/详情，用于用户问某个仓库的问题进度；不自动写 issue、PR 或评论。',
+  tools: ['github_list_issues', 'github_read_issue'],
+  configFields: [
+    { key: 'apiToken', type: 'secret', required: true, label: 'GitHub Token', help: '建议细粒度 PAT，仅给目标仓库 Issues:read。不会使用本机 gh 登录态。' },
+    { key: 'baseUrl', type: 'text', label: 'API 地址（可选）', placeholder: 'https://api.github.com', help: 'GitHub Enterprise 可改；公网必须 HTTPS。' },
+  ],
+  requiredFields: ['apiToken'],
+};
+
+/** 飞书企业自建应用：只读云盘文件列表/已授权 docx 正文。 */
+export const FEISHU_PLUGIN: NativePluginMeta = {
+  id: 'feishu', name: '飞书',
+  description: '列应用有权查看的云盘文件、读取已授权的飞书 docx 内容；不自动发消息或修改文档。',
+  tools: ['feishu_list_files', 'feishu_read_doc'],
+  configFields: [
+    { key: 'appId', type: 'text', required: true, label: 'App ID', placeholder: 'cli_…' },
+    { key: 'appSecret', type: 'secret', required: true, label: 'App Secret', help: '自建应用凭据；只访问给应用授权的文档。' },
+    { key: 'baseUrl', type: 'text', label: 'API 地址（可选）', placeholder: 'https://open.feishu.cn', help: '海外飞书可填 https://open.larksuite.com；公网必须 HTTPS。' },
+  ],
+  requiredFields: ['appId', 'appSecret'],
+};
+
 /** 全量原生插件（顺序 = 设置抽屉里的展示顺序） */
-export const NATIVE_PLUGINS: NativePluginMeta[] = [WEB_SEARCH_PLUGIN, IMAGE_GEN_PLUGIN];
+export const NATIVE_PLUGINS: NativePluginMeta[] = [WEB_SEARCH_PLUGIN, IMAGE_GEN_PLUGIN, GITHUB_PLUGIN, FEISHU_PLUGIN];
 
 export function pluginMeta(id: string): NativePluginMeta | undefined {
   return NATIVE_PLUGINS.find((p) => p.id === id);
