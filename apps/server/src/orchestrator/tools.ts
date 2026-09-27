@@ -30,7 +30,9 @@ import {
   markResultReady,
 } from './registry';
 import { resolveLoop } from './subLoops';
-import { WEB_SEARCH_SERVER_TOOL, executeWebSearchTool } from './search';
+import { WEB_SEARCH_SERVER_TOOL, executeWebSearchViaProvider } from './search';
+import { resolveSearchProviderForUser } from '../plugins/resolve';
+import { GENERATE_IMAGE_TOOL, executeGenerateImageTool } from './imageTool';
 import { runWorkerPool } from './workers';
 import { registerDelegationTool } from './delegation';
 import { registerSkillTools } from './skillTools';
@@ -320,15 +322,22 @@ export function initOrchestrator(next: OrchestratorDeps): void {
     return;
   }
 
+  // 能力与连接（2026-09-27）：web_search 走**按用户解析的供应商**（本地加密配置优先、env 兜底）
   registerServerTool(WEB_SEARCH_SERVER_TOOL, {
-    execute: async (args) => executeWebSearchTool(next.env, args),
+    execute: async (args, ctx) => {
+      const provider = await resolveSearchProviderForUser(next.pool, next.cipher, ctx.userId, next.env);
+      return executeWebSearchViaProvider(provider, args);
+    },
+  });
+  registerServerTool(GENERATE_IMAGE_TOOL, {
+    execute: async (args, ctx) => executeGenerateImageTool(next, ctx, args),
   });
   registerServerTool(SPAWN_WORKERS_TOOL, { execute: executeSpawnWorkers });
   registerDelegationTool();
   registerSkillTools();
 
   console.log(
-    `[orc] 已注册 web_search / spawn_workers / delegate —— ` +
+    `[orc] 已注册 web_search / generate_image / spawn_workers / delegate —— ` +
       `委派超时 ${Math.round(next.env.orch.delegateTimeoutMs / 1000)}s，` +
       `临时工并发 ${next.env.orch.workerConcurrency}（单次 ≤${next.env.orch.workerMaxPerCall}），` +
       `主循环搜索=${next.env.orch.agentLoopWebSearch ? '开' : '关'}`,

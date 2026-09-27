@@ -1652,6 +1652,54 @@ export interface WhiteboardPostResult {
     ok: boolean;
     whiteboard: WhiteboardView;
 }
+export type PluginId = 'web_search' | 'image_gen';
+/** 当前登录用户对这个插件的配置状态：没配 / 配了 / 配了且测过 */
+export type PluginStatus = 'unconfigured' | 'configured' | 'tested';
+export interface PluginConfigField {
+    /** 配置字段名（进 config JSON 的 key） */
+    key: string;
+    /** 显示名 */
+    label: string;
+    /** 输入形态：文本 / 密文（打码） / 下拉 */
+    type: 'text' | 'secret' | 'select';
+    /** 是否必填 */
+    required?: boolean;
+    placeholder?: string;
+    /** select 的候选值 */
+    options?: string[];
+    /** 帮助文案 */
+    help?: string;
+}
+/** 一个字段读回后的展示状态（secret 字段 value 是打码后的，masked=true） */
+export interface PluginFieldView {
+    /** 有值（secret 也只看「设没设」，不看值） */
+    set: boolean;
+    /** 打码后的展示值（secret = ****；非 secret = 原值） */
+    masked: boolean;
+    value: string;
+}
+/** GET /plugins/:id/config 的读回（**绝不**含明文密钥） */
+export interface PluginConfigView {
+    pluginId: string;
+    configured: boolean;
+    /** key → 打码后的字段值 */
+    fields: Record<string, PluginFieldView>;
+}
+/** GET /plugins 的列表项（含当前登录用户的配置状态） */
+export interface PluginInfo {
+    id: PluginId;
+    name: string;
+    /** 给 AI 判断「何时用」的描述（也进循环引擎工具表的 description） */
+    description: string;
+    /** 这个能力提供的工具名（接进循环引擎当可调用工具） */
+    tools: string[];
+    /** 需要的配置字段（前端「填 key」表单依据） */
+    configFields: PluginConfigField[];
+    /** 当前登录用户的配置状态：灰(unconfigured) / 绿(configured) / 测过(tested) */
+    status: PluginStatus;
+    /** 是否已配齐可用（决定卡片绿/灰） */
+    enabled: boolean;
+}
 export * from './tools';
 /**
  * 批次 J（2026-09-24）：`@点名` 的确定性解析器。

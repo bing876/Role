@@ -146,3 +146,60 @@ export async function executeWebSearchTool(env: ServerEnv, args: Record<string, 
     },
   };
 }
+
+// ---------------------------------------------------------------------------
+// 能力与连接（2026-09-27）：按**用户本地加密配置**解析出的供应商跑搜索。
+// 主循环的 web_search 工具走这条路（本地配置优先、env 兜底）；临时工仍走上面的
+// env 版（runWebSearch），两条路行为一致（同一家 Tavily、同一套敏感闸）。
+// ---------------------------------------------------------------------------
+
+/** 用「已解析的供应商」跑一次搜索（返回与 WebSearchRunResult 同形状） */
+export async function runWebSearchViaProvider(
+  provider: import('../plugins/providers').SearchProvider,
+  input: WebSearchRunInput,
+): Promise<WebSearchRunResult> {
+  const query = String(input.query ?? '').trim().slice(0, 300);
+  if (!query) return { ok: false, detail: '搜索词为空', error: 'bad_query', sources: [], count: 0, tookMs: 0, items: [] };
+  // 纵深防御：validate 已拦过一遍，这里再拦（临时工那条路不经过 validate）
+  if (SENSITIVE_TARGET_RE.test(query)) {
+    return { ok: false, detail: '敏感查询已拦截（未外发）', error: 'blocked_sensitive', sources: [], count: 0, tookMs: 0, items: [] };
+  }
+  const r = await provider.search(query, {
+    topic: input.topic === 'news' ? 'news' : 'general',
+    days: input.days,
+    maxResults: input.maxResults ?? 5,
+  });
+  return { ok: r.ok, detail: r.detail, error: r.error, count: r.count, tookMs: r.tookMs, sources: r.sources, items: r.items };
+}
+
+/** 服务端工具执行器（**按用户解析的供应商**）：没配 → not_configured（不发注定失败的请求） */
+export async function executeWebSearchViaProvider(
+  provider: import('../plugins/providers').SearchProvider | null,
+  args: Record<string, unknown>,
+): Promise<LoopToolResult> {
+  if (!provider) {
+    return {
+      ok: false,
+      detail: '未配置联网搜索（在「设置 → 能力与连接」里填 Tavily key），这一格按「没有搜索结果」处理',
+      error: 'not_configured',
+      data: { sources: [], count: 0 },
+    };
+  }
+  const r = await runWebSearchViaProvider(provider, {
+    query: String(args.query ?? ''),
+    topic: args.topic === 'news' ? 'news' : 'general',
+    days: typeof args.days === 'number' ? args.days : undefined,
+    maxResults: typeof args.max_results === 'number' ? args.max_results : 5,
+  });
+  if (!r.ok) return { ok: false, detail: r.detail, error: r.error, data: { sources: [], count: 0 } };
+  return {
+    ok: true,
+    detail: r.detail,
+    data: {
+      count: r.count,
+      tookMs: r.tookMs,
+      sources: r.sources,
+      items: r.items.map((it) => ({ title: it.title, url: it.url, content: it.content })),
+    },
+  };
+}

@@ -1,0 +1,113 @@
+/* 能力与连接（2026-09-27）· 设置抽屉里的「能力与连接」卡片列表。
+   复用既有 .btn / .small / .authInput / .buttons-row（02-base / 06-sidebar），
+   这里只补卡片自身的布局与灰/绿状态色。 */
+
+.pluginsPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.pluginsPanel__title {
+  font-weight: 600;
+}
+.pluginsPanel__hint {
+  opacity: 0.72;
+  line-height: 1.5;
+}
+.pluginsPanel__err {
+  color: #c0392b;
+}
+.pluginsPanel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pluginCard {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.4);
+}
+.pluginCard[data-status='on'] {
+  border-color: rgba(48, 161, 78, 0.35);
+  background: rgba(48, 161, 78, 0.06);
+}
+.pluginCard__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pluginCard__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #b0b4bb; /* 灰：未配置 */
+  flex: none;
+}
+.pluginCard[data-status='on'] .pluginCard__dot {
+  background: #30a14e; /* 绿：已配置可用 */
+}
+.pluginCard__name {
+  font-weight: 600;
+}
+.pluginCard__badge {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.06);
+  opacity: 0.8;
+}
+.pluginCard[data-status='on'] .pluginCard__badge {
+  background: rgba(48, 161, 78, 0.16);
+  color: #1e7a3a;
+}
+.pluginCard__toggle {
+  margin-left: auto;
+  font-size: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 7px;
+  padding: 2px 9px;
+  background: transparent;
+  cursor: pointer;
+}
+.pluginCard__toggle:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+.pluginCard__desc {
+  margin-top: 6px;
+  opacity: 0.72;
+  line-height: 1.5;
+}
+.pluginCard__body {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pluginCard__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.pluginCard__field .authInput {
+  width: 100%;
+}
+.pluginCard__help {
+  opacity: 0.6;
+}
+.pluginCard__note {
+  opacity: 0.8;
+}
+.pluginCard__test.ok {
+  color: #1e7a3a;
+}
+.pluginCard__test.err {
+  color: #c0392b;
+}
+.pluginCard__clear {
+  opacity: 0.75;
+}

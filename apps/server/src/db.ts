@@ -522,13 +522,28 @@ CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_id, status);
 CREATE INDEX IF NOT EXISTS idx_skills_trigger ON skills (user_id, trigger_condition);
 -- 幂等补列：老库已有 skills 时补新字段
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS trigger_enc TEXT;
-ALTER TABLE skills ADD COLUMN IF NOT EXISTS steps_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS decision_rules_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS output_requirements_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS approval_boundary_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+-- 能力与连接（2026-09-27）：插件配置（网页搜索 / 生成图片的供应商 key）。
+--   · 配置整份 JSON 走 AES-256-GCM 密文（config_enc，复用 messages/memories 同一套 cipher），
+--     **明文 key 绝不留第二份**；读回一律打码（见 routes/plugins.ts）。
+--   · 按 (user_id, plugin_id) 唯一：配置属于当前登录的人，与账号隔离（绝不串号）。
+--   · ON DELETE CASCADE：账号删了配置跟着删，不泄漏给任何孤儿行。
+CREATE TABLE IF NOT EXISTS plugin_configs (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plugin_id  TEXT NOT NULL,
+  config_enc TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, plugin_id)
+);
+CREATE INDEX IF NOT EXISTS idx_plugin_configs_user ON plugin_configs (user_id);
 
 `;
 

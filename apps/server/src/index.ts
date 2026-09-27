@@ -38,6 +38,7 @@ import { registerHandoffRoutes } from './routes/handoffs';
 import { registerWhiteboardRoutes } from './routes/whiteboard';
 import { registerSkillsRoutes } from './routes/skills';
 import { registerComputerVisibilityRoutes } from './routes/computerVisibility';
+import { registerPluginRoutes } from './routes/plugins';
 import { initOrchestrator } from './orchestrator/tools';
 import { startRoutineSweeper } from './orchestrator/routines';
 import { setCheckpointDeps } from './toolLoop';
@@ -153,6 +154,8 @@ export async function buildApp(env: ServerEnv, pool: Pool, cipher: JsonCipher): 
   registerSkillsRoutes(app, { pool, env, cipher });
   // 批次 H | 电脑三级可见度 — Status/Preview/Takeover，默认收起
   registerComputerVisibilityRoutes(app, { pool, env, cipher });
+  // 能力与连接（2026-09-27）：插件注册表 + 加密配置 + 测试 + 项目图片
+  registerPluginRoutes(app, { pool, env, cipher });
   await app.ready();
   return app;
 }

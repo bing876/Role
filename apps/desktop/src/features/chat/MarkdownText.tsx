@@ -1,4 +1,5 @@
 import React from 'react';
+import { API_BASE } from '../../shared/api';
 
 /**
  * 交互对齐片(2026-09-26) · **极简 markdown 渲染**(零依赖、零 `dangerouslySetInnerHTML`)。
@@ -13,6 +14,19 @@ import React from 'react';
  *
  * 刻意**不做**的事:表格、HTML 透传、脚注、嵌套列表缩进层级(模型极少用,做了反而容易出样式事故)。
  */
+
+/**
+ * 图片 src 解析(能力与连接 2026-09-27):
+ *   · http(s)  → 原样用;
+ *   · `/projects/…`(本项目生成图片,服务端 GET 取回)→ 前缀 API_BASE()(Electron 与 web 直测都通);
+ *   · 其它(含 data: / javascript:)→ 不渲染(返回 null,退化成纯文字,绝不内联危险源)。
+ */
+function resolveImgSrc(url: string): string | null {
+  const u = String(url ?? '').trim();
+  if (/^https?:\/\//i.test(u)) return u;
+  if (u.startsWith('/projects/') && (u.endsWith('.png') || u.endsWith('.jpg') || u.endsWith('.jpeg'))) return `${API_BASE()}${u}`;
+  return null;
+}
 
 /** 行内:`**粗**` / `*斜*` / `` `码` `` / `[文字](url)` —— 按顺序切,不递归嵌套 */
 function renderInline(text: string, keyPrefix: string): React.ReactNode[] {
@@ -107,6 +121,25 @@ export function MarkdownText({ text }: { text: string }): React.ReactElement {
     }
     if (!line.trim()) {
       flushAll();
+      continue;
+    }
+    // 块级图片(能力与连接 2026-09-27):一行一个 `![alt](url)` → 渲染成 <img>
+    const img = /^\s*!\[([^\]]*)\]\(([^)\s]+)\)\s*$/.exec(line);
+    if (img) {
+      flushAll();
+      const src = resolveImgSrc(img[2]);
+      if (src) {
+        const key = `img${blocks.length}`;
+        blocks.push(
+          <img
+            key={key}
+            className="chatImage"
+            src={src}
+            alt={img[1] || '图片'}
+            style={{ maxWidth: '100%', maxHeight: 340, borderRadius: 8, display: 'block', margin: '6px 0' }}
+          />,
+        );
+      }
       continue;
     }
     const h = /^(#{1,4})\s+(.*)$/.exec(line);

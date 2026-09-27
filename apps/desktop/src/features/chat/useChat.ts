@@ -876,6 +876,8 @@ export function useChat(options: UseChatOptions): ChatApi {
             mention?: ChatMentionMeta;
             /** 规格 C1：对话式建智能体时，服务端在 meta 帧带回新建的智能体（左栏数据源） */
             newAgent?: AgentView;
+            /** 能力与连接(2026-09-27)：生成图片事件（服务端已落项目目录 + 写进对话流） */
+            image?: { url: string; caption?: string };
           };
           try {
             j = JSON.parse(dl.slice(5).trim());
@@ -928,6 +930,16 @@ export function useChat(options: UseChatOptions): ChatApi {
           else if (ev === 'done') {
             sawDone = true;
             sawSources = Array.isArray(j.sources) ? j.sources : [];
+          }
+          else if (ev === 'image' && typeof j.image?.url === 'string') {
+            /**
+             * 能力与连接(2026-09-27)：生成图片 → 即时拼进当前助手气泡（markdown 图片，
+             * MarkdownText 会把它渲染成 <img>）。服务端同时已落项目目录 + 写了一条
+             * 图片消息进会话（刷新/切会话后走 /chat/history 也能看到）。
+             */
+            const md = `![${j.image.caption ?? '图片'}](${j.image.url})`;
+            acc += (acc ? '\n\n' : '') + md;
+            setStreamText(acc);
           }
           else if (j.delta) {
             acc += j.delta;

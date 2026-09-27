@@ -40,6 +40,7 @@ import { API_BASE, TOKEN_KEY, authFetchJson } from './shared/api';
 import { SETTINGS_FALLBACK } from './shared/settings';
 import { useKnowledge } from './features/knowledge';
 import { MemoryConfirmCard, useMemory } from './features/memory';
+import { PluginsPanel, usePlugins } from './features/plugins';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -1496,6 +1497,17 @@ export default function App() {
   const [justAddedAgentId, setJustAddedAgentId] = useState<number | null>(null);
   /** B1 设置抽屉：账号/密码/浏览器参数/保活 收进可开合抽屉（默认收起 = 降噪） */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 能力与连接（2026-09-27）：外部能力卡片（网页搜索 / 生成图片）的数据。只在抽屉打开时拉。 */
+  const plugins = usePlugins(settingsOpen);
+  const pluginsPanelProps = {
+    plugins: plugins.plugins,
+    loaded: plugins.loaded,
+    err: plugins.err,
+    getConfig: plugins.getConfig,
+    saveConfig: plugins.saveConfig,
+    clearConfig: plugins.clearConfig,
+    testConfig: plugins.testConfig,
+  };
   const justAddedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** 第四列触发 ①:点会话内链接/HTML 卡片 → 内嵌浏览器打开 + 列弹出 */
@@ -2321,6 +2333,9 @@ export default function App() {
               开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
             </div>
                 </div>
+
+          {/* 能力与连接（2026-09-27）：外部能力卡片（网页搜索 / 生成图片）—— 填 key 即开，配置加密存本机 */}
+          <PluginsPanel {...pluginsPanelProps} />
               </div>
             )}
           </div>
