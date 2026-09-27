@@ -15,7 +15,7 @@
  *
  * 本脚本盖的(沙箱内,不拉 electron 二进制):
  *   ① 装后版本核对:node_modules/electron 实际 major = TARGET_MAJOR(不是只看声明)
- *   ② 声明核对:apps/desktop/package.json 声明 ^TARGET_MAJOR
+ *   ② 声明核对:上线包声明精确版本并与实际安装的版本和 electron-builder 目标一致
  *   ③ verify:shell 真跑全绿(webview 祖先链 golden + display:none/归零红线网在新版上成立)
  *   ④ 桌面 + electron 双 tsconfig 类型绿(新版类型兼容)
  *   ⑤ 无原生模块(升级零 rebuild 暴露面)
@@ -77,7 +77,7 @@ const check = async (name: string, fn: () => void | Promise<void>): Promise<void
 };
 
 async function main(): Promise<void> {
-  log('=== 阶段 3 · Electron 33→34 第一片 · 验收 ===');
+  log('=== 阶段 3 · Electron 33→44 第六片 · 验收 ===');
 
   await check(`装后版本核对:node_modules/electron 实际 major = ${TARGET_MAJOR}(防「声明改了没装上」)`, () => {
     const pj = JSON.parse(readFileSync(`${REPO}node_modules/electron/package.json`, 'utf8')) as { version: string };
@@ -86,10 +86,14 @@ async function main(): Promise<void> {
     log(`      装后版本 = ${pj.version}`);
   });
 
-  await check(`声明核对:apps/desktop/package.json 的 electron 声明 = ^${TARGET_MAJOR}`, () => {
-    const pj = JSON.parse(readFileSync(`${REPO}apps/desktop/package.json`, 'utf8')) as { devDependencies: Record<string, string> };
-    const decl = pj.devDependencies.electron ?? '';
-    assert.ok(decl.startsWith(`^${TARGET_MAJOR}`), `声明应为 ^${TARGET_MAJOR},实际 ${decl}`);
+  await check('声明核对:Electron 精确版本 = 已安装版本 = electron-builder 目标', () => {
+    const pj = JSON.parse(readFileSync(`${REPO}apps/desktop/package.json`, 'utf8')) as {
+      devDependencies: Record<string, string>; build: { electronVersion: string };
+    };
+    const installed = JSON.parse(readFileSync(`${REPO}node_modules/electron/package.json`, 'utf8')) as { version: string };
+    // 片⑤上线包不能用 ^44 滚动后仍让 builder 下载另一版（旧 33.4.11 已经造成过错配）。
+    assert.equal(pj.devDependencies.electron, installed.version, '声明须精确锁到已安装的 Electron 版本');
+    assert.equal(pj.build.electronVersion, installed.version, 'electron-builder 目标须与安装版本一致');
   });
 
   await check("verify:shell 全绿(webview 祖先链 golden + 红线网在新版 Electron 上成立)", async () => {

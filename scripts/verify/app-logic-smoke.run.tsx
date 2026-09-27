@@ -101,6 +101,8 @@ const emitAgent = (p: Record<string, unknown>): void => {
 const bridge = new Proxy(
   {
     isElectron: false,
+    // 新桥属性是布尔常量：Proxy 的方法兜底不能误判成安装包。
+    isPackaged: false,
     apiBase: () => '',
     token: () => null,
     getSettings: async () => ({
@@ -294,6 +296,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/auth/sms/send') {
     return json({ ok: true });
   }
+  if (path === '/auth/onboarding') return json({ available: false, local: false }); // web 直测无本机首跑
   if (path === '/auth/me') {
     if (authMeFails) return new Response(JSON.stringify({ error: 'token 过期' }), { status: 401, headers: { 'content-type': 'application/json' } });
     const meBody = { user: { id: 1, phone: '13800000000', xyz: '', has_password: hasPassword }, project: PROJECT, agents: [{ id: 97, name: '小助' }] };

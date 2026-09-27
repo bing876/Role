@@ -127,6 +127,8 @@ let viewCreateDelayMs = 0;
 const bridge = new Proxy(
   {
     isElectron: false,
+    // 新桥属性是布尔常量：不能让 Proxy 的方法兜底伪造成 truthy 的打包标记。
+    isPackaged: false,
     apiBase: () => '',
     token: () => null,
     /**
@@ -232,6 +234,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   const path = raw.replace(/^https?:\/\/[^/]+/, '').split('?')[0];
   requestedPaths.push(path);
   if (path === '/auth/me') return json({ user: { id: 1, phone: '13800000000', xyz: '' }, project: PROJECT, agents: [{ id: 97, name: '小助' }] });
+  if (path === '/auth/onboarding') return json({ available: false, local: false }); // 开发/web 垫片不是生产安装包
   if (path === '/projects') return json({ projects: [PROJECT], currentProjectId: 7 });
   if (path === '/agents' && init?.method === 'POST') {
     agentCreateCount += 1;
