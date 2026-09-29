@@ -1,5 +1,6 @@
 import { webContents } from 'electron';
 import { viewHostRegistry } from './view-host';
+import { userInputRemainingMs } from './user-input';
 import { classifyField, FIELD_REASON_CN, isPaymentConfirmAction, type FieldDescriptor } from './fieldClass';
 // ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语的纯 core(不 import electron,可单测);
 // 这里只做「wcId → 真实 debugger」的薄包装。
@@ -485,6 +486,24 @@ class TaskAborted extends Error {
     super('任务步骤被中止（用户已接管）');
     this.name = 'TaskAborted';
   }
+}
+
+/** 真人在异步定位中开始操作；若之前已发过清空/字段写入，必须如实标部分执行。 */
+class UserInputYielded extends Error {
+  constructor(readonly partial = '') { super('用户正在操作，尚未派发后续动作'); }
+}
+
+function blockedByUser(action: BrowserActionType, attemptedFields = 0, partial = ''): DriveResult {
+  return {
+    ok: false,
+    action,
+    outcome: 'blocked',
+    detail: partial
+      ? `你在操作，我停下了：因你正在操作，${attemptedFields ? `已尝试填写前 ${attemptedFields} 项；` : ''}${partial}；后续操作未派发。稍后先读当前页面，不直接重试。`
+      : attemptedFields
+        ? `你在操作，我停下了：已尝试填写 ${attemptedFields} 项；其余字段因你正在操作而未派发。稍后先读当前页面，不直接重试。`
+        : `你在操作，我停下了：因你刚在这张页操作，「${action}」未派发。等你停下 3 秒，我会先读当前页面。`,
+  };
 }
 
 const trunc = (s: string, n = 28): string => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -1597,9 +1616,12 @@ async function clickTarget(
   shouldAbort?: () => boolean,
   /** ADR-0004:语义定位目标。给了 = **先按语义解析出元素**再点(抗改版);没给 = 老 findClickable 路径。 */
   semantic?: SemanticTarget,
+  /** 异步定位后、任何 CDP 鼠标按下或页面 click 前复查同页真人输入。 */
+  shouldYield?: () => boolean,
 ): Promise<ClickOutcome> {
   const tick = (): void => {
     if (shouldAbort && !shouldAbort()) throw new TaskAborted();
+    if (shouldYield?.()) throw new UserInputYielded();
   };
   const hit = await evaluate<{
     x: number;
@@ -1670,6 +1692,7 @@ async function clickTarget(
     })()`),
   );
 
+  tick(); // 目标定位是异步的；在任何点击（包括页面侧兜底）前再次验接管
   if (!hit) return { kind: 'notfound' };
   if (hit.blockedScheme) return { kind: 'applink', scheme: hit.blockedScheme, label: hit.label };
 
@@ -1693,6 +1716,7 @@ async function clickTarget(
     await dbg.sendCommand('Input.dispatchMouseEvent', {
       type: 'mouseMoved', x: hit.x, y: hit.y, button: 'none', clickCount: 0,
     });
+    tick(); // 移动期间若真人接管，按钮还没按下，可以安全收手
     await dbg.sendCommand('Input.dispatchMouseEvent', {
       type: 'mousePressed', x: hit.x, y: hit.y, button: 'left', buttons: 1, clickCount: 1,
     });
@@ -1756,6 +1780,8 @@ async function typeInto(
   shouldAbort?: () => boolean,
   /** ADR-0004:语义定位目标。给了 = 先按语义解析出**输入框**并缓存,后续 pick 全程盯同一颗。 */
   semantic?: SemanticTarget,
+  /** 定位可等待 CDP；清空或写入用户框之前必须复查用户是否开始操作。 */
+  shouldYield?: () => boolean,
 ): Promise<{ ok: true; label: string; method: string; semanticVia?: string } | { ok: false; reason: string }> {
   const tick = (): void => {
     if (shouldAbort && !shouldAbort()) throw new TaskAborted();
@@ -1775,6 +1801,7 @@ async function typeInto(
         return { found: !!el, via: el ? r.via : 'none' };
       })()`),
     );
+    if (shouldYield?.()) throw new UserInputYielded();
     if (!r?.found || r.via === 'none') return { ok: false, reason: '语义输入框没找到（未回落旧选择器，未输入）' };
     semanticVia = r.via;
   } else {
@@ -1787,17 +1814,7 @@ async function typeInto(
       const el = window.__wbHelper.pick(${JSON.stringify(target)});
       if (!el) return null;
       try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
-      el.focus();
-      if ('value' in el) {
-        const proto = el instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : HTMLInputElement.prototype;
-        const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-        if (desc && desc.set) desc.set.call(el, ''); else el.value = '';
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-      } else if (el.isContentEditable) {
-        el.textContent = '';
-      }
+      // 此时只定位/量尺寸；不能在主进程复查用户输入前清空正在写的值。
       // 第 23 步：用 absRect（跨 frame 时 CDP 需要最顶层视口坐标）
       const r = window.__wbHelper.absRect(el);
       if (!r) return null;
@@ -1810,13 +1827,42 @@ async function typeInto(
     })()`),
   );
 
+  tick();
+  if (shouldYield?.()) throw new UserInputYielded();
   if (!found) return { ok: false, reason: `没找到可输入的输入框：${target}` };
 
+  // 清空是第一道**有副作用**的输入命令，必须在主进程判定真人未接管后另行派发。
+  const cleared = await evaluate<boolean>(wc, pageScript(`(() => {
+    const el = window.__wbHelper.pick(${JSON.stringify(target)});
+    if (!el) return false;
+    el.focus();
+    if ('value' in el) {
+      const proto = el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) desc.set.call(el, ''); else el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    } else if (el.isContentEditable) {
+      el.textContent = '';
+    }
+    return true;
+  })()`));
+  // 清空命令已经发出：若真人此时接管，只挡剩余写入，回执不能说整步都没动。
+  let textStarted = false;
+  const yieldBeforeMore = (): void => {
+    if (shouldYield?.()) throw new UserInputYielded(textStarted
+      ? '本步可能已写入部分文字'
+      : '输入框可能已聚焦/清空，但文字尚未派发');
+  };
+  yieldBeforeMore();
+  if (!cleared) return { ok: false, reason: `输入框已离开页面：${target}` };
   const dbg = ensureAttached(wc);
 
   /** 先补一次真实鼠标点击：不少站点（含百度的新版搜索框）靠 mousedown/focus 处理器才真正激活输入框 */
   if (found.x > 0 && found.y > 0) {
     tick();
+    yieldBeforeMore();
     await dbg.sendCommand('Input.dispatchMouseEvent', {
       type: 'mousePressed', x: found.x, y: found.y, button: 'left', clickCount: 1,
     });
@@ -1842,6 +1888,8 @@ async function typeInto(
 
   // 1) CDP 真实输入：正常桌面环境下最接近真人操作
   tick();
+  yieldBeforeMore();
+  textStarted = true;
   await dbg.sendCommand('Input.insertText', { text: value });
   await sleep(250);
   if (await written()) method = 'cdp-insertText';
@@ -1851,6 +1899,7 @@ async function typeInto(
   //    短文本走这条路最像真人打字（长文本太慢，跳过）。
   if (method === 'none' && value.length > 0 && value.length <= 30) {
     tick();
+    yieldBeforeMore();
     await evaluate(
       wc,
       pageScript(`(() => {
@@ -1860,6 +1909,7 @@ async function typeInto(
       })()`),
     );
     for (const ch of Array.from(value)) {
+      yieldBeforeMore(); // 一枚键作一组：已按下的必须抬起，真人接管从下枚开始停手
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, text: ch });
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'char', key: ch, text: ch });
       await dbg.sendCommand('Input.dispatchKeyEvent', { type: 'keyUp', key: ch });
@@ -1872,6 +1922,7 @@ async function typeInto(
   // 3) 页面侧 execCommand：仍走 Chromium 编辑管线，beforeinput / input 事件都正常
   if (method === 'none') {
     tick();
+    yieldBeforeMore();
     await evaluate(
       wc,
       pageScript(`(() => {
@@ -1888,6 +1939,7 @@ async function typeInto(
   // 4) 原生 setter + InputEvent：对 React 受控组件最稳的兜底
   if (method === 'none') {
     tick();
+    yieldBeforeMore();
     await evaluate(
       wc,
       pageScript(`(() => {
@@ -1923,6 +1975,7 @@ async function typeInto(
   if (submit) {
     const beforeUrl = wc.getURL();
     tick();
+    yieldBeforeMore();
 
     // 1) CDP 真实回车键（正常桌面环境下有效；本机键盘注入会静默失效）
     await dbg.sendCommand('Input.dispatchKeyEvent', {
@@ -1941,6 +1994,7 @@ async function typeInto(
 
     // 2) 页面侧合成 Enter 键事件（React 的 onKeyDown 认这个）
     if (wc.getURL() === beforeUrl) {
+      yieldBeforeMore();
       await evaluate(
         wc,
         pageScript(`(() => {
@@ -1961,6 +2015,7 @@ async function typeInto(
 
     // 3) 最后兜底：直接提交所属表单
     if (wc.getURL() === beforeUrl) {
+      yieldBeforeMore();
       await evaluate(
         wc,
         pageScript(`(() => {
@@ -2163,11 +2218,20 @@ export async function drive(
     };
   }
 
+  // P1：和手动暂停门相邻、同一个三动作集合。只阻止**尚未派发**的操作。
+  // 已经通过 CDP 发出的点击无法收回；这道闸绝不声称撤销了先前的点击。
+  // 同页同类键盘事件的 Electron 来源位缺失，边界详见 user-input.ts / 同类验收。
+  if (userInputRemainingMs(wcId) > 0 && PAUSED_BLOCKED.has(actionName)) {
+    return blockedByUser(actionName);
+  }
+
+  let attemptedFields = 0;
   try {
     // P1-2 补刀：**派发前最后一道闸**。到这里目标已解析、暂停门已过，
     // 再往下就是真正会产生页面副作用的动作了。取消请求必须在这里生效。
     const preAbort = abortIfRequested(signal, actionName);
     if (preAbort) return preAbort;
+    const shouldYield = (): boolean => userInputRemainingMs(wcId) > 0;
 
     /** 补充说明（例如 type 实际用了哪种写入方式），会一路带到调试区 */
     let detail: string | undefined;
@@ -2192,7 +2256,7 @@ export async function drive(
             pageSnapshot: await readSnapshot(wc),
           };
         }
-        const hit = await clickTarget(wc, action.target, undefined, action.semantic);
+        const hit = await clickTarget(wc, action.target, undefined, action.semantic, shouldYield);
         if (hit.kind === 'notfound') {
           // 第 16 步：click 是最常见的失败，必须给「可能原因 + 一个下一步」，
           // 不能只甩一句「没找到」——那会让模型/用户都只能干瞪眼。
@@ -2239,7 +2303,7 @@ export async function drive(
             pageSnapshot: await readSnapshot(wc),
           };
         }
-        const result = await typeInto(wc, action.target, action.text, Boolean(action.submit), undefined, action.semantic);
+        const result = await typeInto(wc, action.target, action.text, Boolean(action.submit), undefined, action.semantic, shouldYield);
         if (!result.ok) {
           const snap = await readSnapshot(wc);
           return {
@@ -2312,12 +2376,15 @@ export async function drive(
         const missed: string[] = [];
         for (const f of (Array.isArray(action.fields) ? action.fields : []).slice(0, 12)) {
           if (pausedOf(wcId)) throw new TaskAborted();
+          if (shouldYield()) throw new UserInputYielded();
           const g = await typeSensitiveGuard(wc, f.target);
+          if (shouldYield()) throw new UserInputYielded();
           if (g) {
             refused.push(String(f.target));
             continue;
           }
-          const r = await typeInto(wc, f.target, String(f.text ?? ''), false);
+          const r = await typeInto(wc, f.target, String(f.text ?? ''), false, undefined, undefined, shouldYield);
+          attemptedFields += 1;
           (r.ok ? filled : missed).push(String(f.target) + (r.ok ? '' : `（${r.reason}）`));
         }
         const detail = `填了 ${filled.length} 项` +
@@ -2380,6 +2447,7 @@ export async function drive(
 
     return { ok: true, action: actionName, detail, pageSnapshot: await readSnapshot(wc), ...(noChange ? { noChange: true } : {}) };
   } catch (err) {
+    if (err instanceof UserInputYielded) return blockedByUser(actionName, attemptedFields, err.partial);
     return { ok: false, action: actionName, error: (err as Error).message };
   }
 }

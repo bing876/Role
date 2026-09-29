@@ -26,6 +26,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createUserInputTracker } from '../../apps/desktop/electron/user-input';
+// P1 分片期实际运行新增验收，避免脚本在主链独立接线前成为无人执行的孤儿。
+import './p1-user-input-yield.mts';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const read = (p: string): string => readFileSync(path.join(ROOT, p), 'utf8');

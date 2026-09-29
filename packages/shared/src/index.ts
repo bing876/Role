@@ -296,16 +296,18 @@ export interface DriveResult {
    * hooks.exec() 仍在后台跑，那一下点击照样发出去）。
    * 模型看到「失败」就去重试，于是点两次 = 下两单 / 发两条 / 提交两次。
    *
-   * 三态口径：
+   * 结果口径：
    *   'done'    确定执行完了（ok:true 的缺省值）
    *   'failed'  确定**没**执行（ok:false 且原因是执行前的校验/定位失败）
    *   'unknown' **不知道**（超时 / 被打断）。此时绝不许直接重试，
    *            必须先 read_page 看当前页面再决定。
+   *   'blocked' 用户正在操作：本页后续动作未派发（fill_form 可已尝试前几项），
+   *             不算失败或 unknown；继续前先读当前页。
    *
    * 可选字段（不破坏旧代码）：驾驶循环用 res.outcome ?? (res.ok?'done':'failed')
    * 推导，所以没填的旧路径行为不变。
    */
-  outcome?: 'done' | 'failed' | 'unknown';
+  outcome?: 'done' | 'failed' | 'unknown' | 'blocked';
   /** screenshot 动作的产物：data URL，只放内存，不落库 */
   screenshot?: string;
 }
@@ -1148,10 +1150,11 @@ export interface LoopToolResult {
    *   'done'    确定执行完了
    *   'failed'  确定**没**执行
    *   'unknown' **不知道**（超时/被打断）—— 此时必须先读页面确认，不许直接重试
+   *   'blocked' 用户操作导致后续动作未派发（fill_form 可已尝试前几项），不计失败
    *
    * 可选字段：没填时按 ok 推导（ok:true -> done，ok:false -> failed），旧行为不变。
    */
-  outcome?: 'done' | 'failed' | 'unknown';
+  outcome?: 'done' | 'failed' | 'unknown' | 'blocked';
   /** 用户在循环跑着的时候补的一句答复（只进上下文，不落库） */
   userAnswer?: string;
   /**
