@@ -8,7 +8,7 @@
  *   `@ai-workbench/shared` 这个包。本文件只允许 `import type`，任何运行时
  *   import（哪怕只是 tools.ts）都会让打包产物在用户机器上启动即崩。
  *   所以这份表是 deliberately duplicate（刻意重复）：它与 shared 内建定义的
- *   `toBrowserAction` 逐项等价，由 `scripts/verify/tool-registry-parity.mjs`
+ *   `toBrowserAction` 逐项等价，由 `scripts/verify/tool-registry-parity.mts`
  *   强制断言一致 —— 改了任何一侧的映射而不改另一侧，对照测试会红。
  *
  * 职责边界：
@@ -19,7 +19,7 @@
  *     default 分支语义一致，别改成抛错 —— 服务端版本新、桌面版本旧时，
  *     新工具名会先到这里，抛错会把整个循环炸掉，返回 null 只是跳过这一步）。
  */
-import type { BrowserAction, LoopToolCall } from '@ai-workbench/shared';
+import type { BrowserAction, LoopToolCall, SemanticTarget } from '@ai-workbench/shared';
 
 type BrowserMapper = (args: Record<string, unknown>) => BrowserAction | null;
 
@@ -37,9 +37,15 @@ const BROWSER_EXECUTORS = new Map<string, BrowserMapper>([
     }),
   ],
   ['scroll', (a) => ({ action: 'scroll', direction: a.direction === 'up' ? 'up' : 'down' })],
+  // 抗改版片：版本化新名，旧 click/type 映射与旧 5 工具顺序不改。
+  ['click_semantic', (a) => a.semantic && typeof a.semantic === 'object' && !Array.isArray(a.semantic)
+    ? { action: 'click', target: String(a.target ?? ''), semantic: a.semantic as SemanticTarget } : null],
+  ['type_semantic', (a) => a.semantic && typeof a.semantic === 'object' && !Array.isArray(a.semantic)
+    ? { action: 'type', target: String(a.target ?? ''), text: String(a.text ?? ''),
+      submit: Boolean(a.submit), semantic: a.semantic as SemanticTarget } : null],
 ]);
 
-/** 桌面认识的浏览器工具名（诊断用；与 shared 的 BROWSER_TOOL_NAMES 去掉 stop 后一致） */
+/** 桌面认识的浏览器工具名（诊断用；旧 5 名顺序不变，末尾追加两个语义工具） */
 export function desktopBrowserToolNames(): string[] {
   return [...BROWSER_EXECUTORS.keys()];
 }

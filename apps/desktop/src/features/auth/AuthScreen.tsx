@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AuthSession } from '@ai-workbench/shared';
 import { API_BASE, TOKEN_KEY, authFetchJson } from '../../shared/api';
+import { LocalFirstRun } from './LocalFirstRun';
 
 /**
  * 批次 M-8' · 逻辑收尾：登录页整块从 App.tsx **逐字搬入** features/auth。
@@ -13,7 +14,7 @@ import { API_BASE, TOKEN_KEY, authFetchJson } from '../../shared/api';
 type AuthTab = 'sms' | 'xyz' | 'wechat';
 
 export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void }) {
-  const [tab, setTab] = useState<AuthTab>('sms');
+  const [tab, setTab] = useState<AuthTab>(window.workbench?.isPackaged ? 'xyz' : 'sms');
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [xyz, setXyz] = useState('');
@@ -31,6 +32,10 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
   const [probeKey, setProbeKey] = useState(0);
   /** mock 模式下的验证码（应用自己拉起的服务端，用户看不到任何窗口 —— 由主进程转过来） */
   const [mockCode, setMockCode] = useState<{ masked: string; code: string } | null>(null);
+  /** 只有安装包本地空库才展示密码首跑卡；开发/已有账号仍是原有登录页。 */
+  const [localFirstRun, setLocalFirstRun] = useState(false);
+  const [localRuntime, setLocalRuntime] = useState(false);
+  const [startupError, setStartupError] = useState('');
 
   useEffect(() => {
     if (cooldown <= 0) return;
@@ -55,10 +60,14 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
     let timer: number | undefined;
     const tick = async () => {
       try {
+        if (window.workbench?.isPackaged) {
+          const s = await window.workbench.serverStatus();
+          if (!s.ownedByUs || !s.reachable) throw new Error('等待安装包自带的服务端');
+        }
         const r = await fetch(`${API_BASE()}/health`, { signal: AbortSignal.timeout(2500) });
-        const j = (await r.json()) as { service?: string };
+        const j = (await r.json()) as { service?: string; db?: string };
         if (off) return;
-        if (j?.service === 'ai-workbench-server') {
+        if (j?.service === 'ai-workbench-server' && j.db !== 'down') {
           setBackend('ready');
           setErr('');   // ★ 后端自己好了 → 必须把之前那句红字撤掉，否则用户以为还坏着
           setWaited(0);
@@ -75,6 +84,39 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
     void tick();
     return () => { off = true; if (timer) window.clearTimeout(timer); };
   }, [probeKey]);
+
+  useEffect(() => {
+    if (backend !== 'ready') return;
+    let off = false;
+    let retry: number | undefined;
+    const check = async () => {
+      try {
+        const view = await authFetchJson<{ available: boolean; local?: boolean }>('/auth/onboarding');
+        if (!off) {
+          setLocalFirstRun(view.available);
+          setLocalRuntime(view.local === true);
+          if (view.local) setTab('xyz'); // 再次打开安装包：直接显示已设好的 XYZ + 密码入口
+          setStartupError('');
+        }
+      } catch (err) {
+        if (off) return;
+        // 冷启动端口可能已开、PGlite 正在建表：继续等，不误判成已有账号。
+        if ((err as Error).message.includes('正在建表')) retry = window.setTimeout(() => void check(), 1500);
+        else setLocalFirstRun(false); // 旧后端 / 开发环境不可用时保持原登录口径
+      }
+    };
+    void check();
+    return () => { off = true; if (retry) window.clearTimeout(retry); };
+  }, [backend]);
+
+  // 本地密钥/包资源损坏不能无限显示“正在准备”；20 秒后读取主进程真实失败原因。
+  useEffect(() => {
+    if (backend === 'ready') { setStartupError(''); return; }
+    if (waited < 20) return;
+    void window.workbench?.serverStatus?.().then((s) => {
+      if (s.lastError) setStartupError(s.lastError);
+    }).catch(() => undefined);
+  }, [backend, waited]);
 
   /** 主进程转来的 mock 验证码（只有应用自己拉起服务端时才会有） */
   useEffect(() => {
@@ -140,13 +182,15 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
     </button>
   );
 
+  if (localFirstRun) return <LocalFirstRun onSession={onSession} />;
+
   return (
     // F4：真登录页带 --login 修饰类
     <div className="authWrap authWrap--login">
       <div className="authCard">
         <h3>登录 AI 工作台</h3>
         <div className="authTabs">
-          {tabBtn('sms', '手机验证码')}
+          {!window.workbench?.isPackaged && tabBtn('sms', '手机验证码')}
           {tabBtn('xyz', 'XYZ号+密码')}
           {tabBtn('wechat', '微信')}
         </div>
@@ -163,8 +207,10 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
           </div>
         )}
 
+        {startupError && <div role="alert" className="authError">启动失败：{startupError}。请检查本机 userData / 安装包资源，修复后重启；不会覆盖旧数据。</div>}
+
         {/* ★ mock 模式下直接把验证码摆出来：服务端是应用自己起的，用户看不到任何窗口 */}
-        {mockCode && (
+        {!window.workbench?.isPackaged && mockCode && (
           <div className="small" style={{ padding: '6px 0' }}>
             本次验证码：<b style={{ fontSize: 16, letterSpacing: 2 }}>{mockCode.code}</b>
             <span style={{ opacity: 0.65 }}>（开发模式 · {mockCode.masked}）</span>
@@ -187,7 +233,7 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
               登录 / 注册
             </button>
             <div className="small">未注册的手机号会自动建号，并分配对外号 XYZ+数字（不能自选）。</div>
-            <div style={{ marginTop: 12, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }}>
+            {!window.workbench?.isPackaged && !localRuntime && <div style={{ marginTop: 12, borderTop: '1px dashed #e0e0e0', paddingTop: 10 }}>
               <button
                 type="button"
                 className="btn"
@@ -214,7 +260,7 @@ export function AuthScreen({ onSession }: { onSession: (s: AuthSession) => void 
               >
                 ⚡ 快捷登录：一键演示账号进入
               </button>
-            </div>
+            </div>}
           </>
         )}
 

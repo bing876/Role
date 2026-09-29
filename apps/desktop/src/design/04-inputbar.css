@@ -67,3 +67,24 @@
 }
 .inputbar-btn.end:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
 .inputbar-btn.end:active { transform: scale(0.94); }
+
+/* 形态② 教一遍：「教」钮（有活页时出现，用户键鼠操作一遍录成技能卡）。 */
+.inputbar-btn.teach {
+  flex: 0 0 auto; margin-left: 6px;
+  padding: 5px 12px; border: 0; border-radius: 14px;
+  background: rgba(255, 255, 255, 0.14); cursor: pointer;
+  color: #fff; font-family: inherit; font-size: 12px;
+  transition: background .15s ease, transform .12s ease;
+}
+.inputbar-btn.teach:hover { background: rgba(255, 255, 255, 0.26); }
+.inputbar-btn.teach:active { transform: scale(0.94); }
+.inputbar-btn.teach.inputbar-btn--finish { background: rgba(255, 180, 80, 0.85); color: #2a1c00; }
+.inputbar-btn.teach.inputbar-btn--finish:hover { background: rgba(255, 180, 80, 1); }
+
+/* 形态② 教一遍：录制中横幅（输入框上方一行，用户看得见「正在录 + 录了几条」）。 */
+.teachBanner {
+  width: 100%; margin-bottom: 8px;
+  padding: 6px 10px; border-radius: 10px;
+  background: rgba(255, 180, 80, 0.18); color: #ffd9a0;
+  font-family: inherit; font-size: 12px;
+}

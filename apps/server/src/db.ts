@@ -125,6 +125,18 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
+-- 怀疑 3 + #7（2026-09-29）：复合索引 (conversation_id, id)。
+--   它的左前缀就是 idx_messages_conversation，所以任何按 conversation_id 过滤的
+--   查询都能改用它；同时它让「按 conversation_id 取最近 N 条」
+--   （读历史 / 整理记忆各有一处，SQL 形如 WHERE conversation_id=$1 ORDER BY id DESC LIMIT n）
+--   从「索引扫描 + 排序」变成**纯反向索引扫描，去掉排序节点**，
+--   也让闲置调度里按 conversation_id 分组求 MAX(id) 能走索引。
+--   注：加了它之后 idx_messages_conversation 变成冗余索引（写放大 + 占盘）。
+--   **故意不删**：删索引是生产库操作，要和一次真实迁移 + 实测一起做，
+--   不该塞在这个改动里（用户规矩：接口/结构只增不破）。
+--   ★ 本段在 DDL 模板字符串里，注释也不能出现反引号 —— 会把模板截断
+--     （2026-09-29 真踩过一次：注释里写了两个反引号，tsc 直接报 Expected ";" but found "WHERE"）。
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages (conversation_id, id);
 
 -- 收尾 6（安全）：任务目标 goal 只以密文存 goal_enc 列。
 --   · payload 里不再有明文 goal（历史行由 migrateTaskGoalEncryption 摘掉）；
@@ -522,13 +534,44 @@ CREATE INDEX IF NOT EXISTS idx_skills_agent ON skills (agent_id, status);
 CREATE INDEX IF NOT EXISTS idx_skills_trigger ON skills (user_id, trigger_condition);
 -- 幂等补列：老库已有 skills 时补新字段
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS trigger_enc TEXT;
-ALTER TABLE skills ADD COLUMN IF NOT EXISTS steps_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS decision_rules_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS output_requirements_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS approval_boundary_enc TEXT;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS usage_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
 ALTER TABLE skills ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1;
+
+-- 能力与连接（2026-09-27）：插件配置（网页搜索 / 生成图片的供应商 key）。
+--   · 配置整份 JSON 走 AES-256-GCM 密文（config_enc，复用 messages/memories 同一套 cipher），
+--     **明文 key 绝不留第二份**；读回一律打码（见 routes/plugins.ts）。
+--   · 按 (user_id, plugin_id) 唯一：配置属于当前登录的人，与账号隔离（绝不串号）。
+--   · ON DELETE CASCADE：账号删了配置跟着删，不泄漏给任何孤儿行。
+CREATE TABLE IF NOT EXISTS plugin_configs (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  plugin_id  TEXT NOT NULL,
+  config_enc TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, plugin_id)
+);
+CREATE INDEX IF NOT EXISTS idx_plugin_configs_user ON plugin_configs (user_id);
+
+-- 能力与连接 · 片2 · MCP 通用桥：用户自建的 MCP server 列表（一个账号可挂多个）。
+--   · url 非密（明文）；auth（Bearer token / 自定义头）走 auth_enc 加密（复用 JsonCipher）。
+--   · tools_json = 加 server 时从 tools/list 拉回的 {name, description, inputSchema}[]
+--     （存下来给循环拼工具表，免得每次循环都重连握手）。
+CREATE TABLE IF NOT EXISTS mcp_servers (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  url         TEXT NOT NULL,
+  auth_enc    TEXT,
+  tools_json  TEXT NOT NULL DEFAULT '[]',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_user ON mcp_servers (user_id);
 
 `;
 

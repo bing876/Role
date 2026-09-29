@@ -58,6 +58,8 @@ import { buildAgentContext, buildUserMemoryBlock, ensureAgentConversation, toAge
 import { latestPageStateOfAgent } from '../pageState';
 import { currentProjectId } from '../projectScope';
 import { startLoop } from '../toolLoop';
+import { mainLoopToolNamesWithMcp } from '../plugins/mcpLoop';
+import { modelAvailableForUser } from '../modelSettings';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { routeTask, logRouteDecision } from '../orchestrator/chiefOfStaff';
 import { triggerByEvent } from '../orchestrator/routines';
@@ -265,6 +267,31 @@ async function currentSpeakerOf(
 export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: ChatDeps): void {
   // ------------------------------------------------------------------ 聊天流
   app.post('/chat/stream', async (req: FastifyRequest, reply: FastifyReply) => {
+  /**
+   * 怀疑 4 修复（2026-09-29）· **hijack 之后绝不碰 `reply`**。
+   *
+   * 原状：本 handler 有 6 处 `reply.hijack()`（mention 提示 / 三段不同收尾 /
+   * 页面任务开场 / `openSse()`），而**外层 catch 无条件** `return dbErr(reply, err)`。
+   * 一旦异常抛在 hijack 之后、内层 try/catch 之外（例如 SSE 建流阶段），
+   * `dbErr` 会执行 `reply.code(503).send(...)` —— 而此时响应已被 hijack
+   * 并被手写 SSE 接管 → Fastify 抛 "Reply was already sent"，
+   * **真实错误被框架报错盖掉**。排查时看到的是框架噪音，不是真因。
+   *
+   * 修法（照 `docs/待办清单-P2P3重排-20260920.md` §1.2 的定案）：
+   * 把外层 catch 分成两段 ——
+   *   hijack 之前 → `dbErr`（正常 HTTP 错误响应）
+   *   hijack 之后 → 写进已经建立的 SSE 流 + `res.end()`，并把真因打进日志
+   *
+   * 用一个**带标志的 helper** 而不是在 6 处各写一遍 `hijacked = true`：
+   * 那样以后加第 7 处 hijack 时极易忘记置位，防线又漏了。
+   */
+  let hijacked = false;
+  const hijackOnce = (): void => {
+    if (hijacked) return; // 幂等：同一轮里多处 hijack 不重复调用
+    hijacked = true;
+    reply.hijack();
+  };
+
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期（聊天需要第 5 步的 JWT）');
 
@@ -318,9 +345,9 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
       agentId = n;
     }
 
-    if (!env.deepseekApiKey) {
-      // 明确拒绝，绝不用假回复冒充模型
-      return errJson(reply, 503, '未配置模型：在 apps/server/.env 填 DEEPSEEK_API_KEY 后重启 dev:server', {
+    if (!(await modelAvailableForUser(pool, cipher, claims.sub, env))) {
+      // 没有可用模型 / 密文损坏 → 明确拒绝，不用 env 或假回复冒充模型
+      return errJson(reply, 503, '未配置模型：在设置里填 DeepSeek API Key 后重试', {
         code: 'llm_not_configured',
       });
     }
@@ -443,7 +470,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
           [convId, cipher.encryptText(mentionNotice), noticeSpeakerId],
         );
-        reply.hijack();
+        hijackOnce();
         const res = reply.raw;
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -538,7 +565,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
                 "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
                 [convId, cipher.encryptText(builtMsg), turnSpeakerId],
               );
-              reply.hijack();
+              hijackOnce();
               const res = reply.raw;
               res.writeHead(200, {
                 'content-type': 'text/event-stream; charset=utf-8',
@@ -595,7 +622,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
               "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
               [convId, cipher.encryptText(replyMsg), turnSpeakerId],
             );
-            reply.hijack();
+            hijackOnce();
             const res = reply.raw;
             res.writeHead(200, {
               'content-type': 'text/event-stream; charset=utf-8',
@@ -655,7 +682,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
               "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
               [convId, cipher.encryptText(rc.reply), turnSpeakerId],
             );
-            reply.hijack();
+            hijackOnce();
             const res = reply.raw;
             res.writeHead(200, {
               'content-type': 'text/event-stream; charset=utf-8',
@@ -834,6 +861,8 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           // R-C：交给循环的目标是剥掉 @名字 之后的正文（@名字 只是点名，不是任务内容）
           goal: mentionText,
           pageUrl: pageUrl || openedUrl,
+          // 片2 · MCP 通用桥：当前用户挂的 MCP server 工具拼进这轮工具表（没挂 → undefined，走老路逐字节不变）
+          toolNames: await mainLoopToolNamesWithMcp(pool, cipher, claims.sub, env),
           // 多智能体编排：同项目同事名单（与 /agent/loop/start 走同一个拼装函数，
           // 两条入口给的名单必须一模一样 —— 否则「聊天里能委派、任务里不能」就成了玄学）。
           // 出错/没开编排 → undefined，startLoop 那边走「不加这一段」的老路。
@@ -861,7 +890,7 @@ export function registerChatRoutes(app: FastifyInstance, { pool, env, cipher }: 
           "INSERT INTO messages (conversation_id, role, content_enc, speaker_agent_id) VALUES ($1, 'assistant', $2, $3) RETURNING id",
           [convId, cipher.encryptText(opening), loop.agentId ?? null],
         );
-        reply.hijack();
+        hijackOnce();
         const res = reply.raw;
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -1057,7 +1086,7 @@ ${
       /** 上游第一次确认可用时劫持连接、写 SSE 头与 meta（只做一次） */
       const openSse = (): void => {
         if (sseResRef) return;
-        reply.hijack();
+        hijackOnce();
         sseResRef = reply.raw;
         const r = sseResRef;
         r.writeHead(200, {
@@ -1089,6 +1118,7 @@ ${
           ],
           {
             tag: 'chat/stream',
+            userId: claims.sub,
             signal: ac.signal,
             onUpstreamReady: openSse,
             onDelta: (d) => {
@@ -1190,6 +1220,26 @@ ${
         streamRes.end();
       }
     } catch (err) {
+      // 怀疑 4 修复（2026-09-29）：**hijack 之后绝不碰 reply**。
+      // 原状无条件 dbErr(reply, err)，而 hijack 之后响应已被手写 SSE 接管，
+      // errJson 的 reply.code(503).send() 会触发 Fastify
+      // "Reply was already sent"，把真因盖成框架噪音。
+      const msg = (err as Error)?.message ?? String(err);
+      console.error('[chat] /chat/stream 失败：', msg); // 真因先落日志，无论如何
+      if (hijacked) {
+        // 已经 hijack：只能写进那条 SSE 流（若还开着）并结束它，不能再走 HTTP 响应
+        try {
+          sse(reply.raw, 'error', { error: `服务端错误：${msg}` });
+        } catch {
+          /* 流已经断了：写不进去不是错，忽略 */
+        }
+        try {
+          reply.raw.end();
+        } catch {
+          /* 已经结束过了：忽略 */
+        }
+        return reply;
+      }
       return dbErr(reply, err);
     }
   });

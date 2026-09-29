@@ -969,10 +969,27 @@ export function useBrowserWorkspace(options: BrowserWorkspaceOptions): BrowserWo
     const created = window.workbench?.browserViewCreate?.({ tabKey: t.id, projectId: t.projectId, url: src });
     return (created ?? Promise.resolve(undefined))
       .then((r) => {
-        if (r && typeof r.wcId === 'number') {
-          wcIdsRef.current[t.id] = r.wcId;
-          noteOwner(t.id); // wcId 已知 → 早报 owner（老世界等 dom-ready，现在建好即知）
+        if (!r || typeof r.wcId !== 'number') return;
+        /**
+         * ★★ 2026-09-26 修（资源泄漏：孤儿原生视图）：
+         *
+         * `browserViewCreate` 是**异步 IPC**，而「关页」完全可能赶在它回执之前发生 ——
+         *   ① 用户开页后立刻点 ✕；② 登出/删智能体时 `closeAllTabs` 紧跟在开页之后；
+         *   ③ 深休眠唤醒后又立刻被判定休眠。
+         * 那种时序下宿主侧的 `hostGone` **先到**：`viewHostClose` 在 `entries` 里找不到这条
+         * tabKey（视图还没建），是**空操作**；随后 create 回执才落地 ⇒ 原生视图照样被建出来、
+         * 挂在窗口上 ⇒ **孤儿视图**：页面在后台继续跑（`backgroundThrottling:false`），
+         * 渲染进程与内存都收不回来，直到窗口关闭。
+         *
+         * 所以回执落地时**先确认这张页还在**（`findTab` 读的是权威的 pagesRef）；
+         * 不在了就当场把它销毁 —— 绝不留孤儿。
+         */
+        if (!findTab(t.id)) {
+          void window.workbench?.browserViewClose?.(t.id);
+          return;
         }
+        wcIdsRef.current[t.id] = r.wcId;
+        noteOwner(t.id); // wcId 已知 → 早报 owner（老世界等 dom-ready，现在建好即知）
       })
       .catch((err) => {
         console.warn('[browser] 原生页宿主创建失败：', err);

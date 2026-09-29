@@ -33,6 +33,8 @@ import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
 import { listPageStates, loadPageState } from '../pageState';
 import { loadConversationState } from '../sessionState';
+// 交互对齐片(2026-09-26)：聊天流 delta 的**唯一**口径（只有 say 进对话流，轨迹走事件）
+import { chatDeltaFor } from '../chatDelta';
 import {
   advance,
   getLoop,
@@ -51,6 +53,8 @@ import {
   injectUserMessage,
   type LoopStateBrief,
 } from '../toolLoop';
+import { mainLoopToolNamesWithMcp } from '../plugins/mcpLoop';
+import { modelAvailableForUser } from '../modelSettings';
 import { broadcastLoopEvent, endLoopSse } from '../loopSse';
 import { orchestrationBlockFor } from '../orchestrator/roster';
 import { getJob, jobOfLoop } from '../orchestrator/registry';
@@ -118,8 +122,8 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
   app.post('/agent/loop/start', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期（工具循环需要第 5 步的 JWT）');
-    if (!env.deepseekApiKey) {
-      return errJson(reply, 503, '未配置模型：在 apps/server/.env 填 DEEPSEEK_API_KEY 后重启 npm run dev:server', {
+    if (!(await modelAvailableForUser(pool, cipher, claims.sub, env))) {
+      return errJson(reply, 503, '未配置模型：在设置里填 DeepSeek API Key 后重试', {
         code: 'llm_not_configured',
       });
     }
@@ -167,6 +171,8 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
       console.warn('[loop] 记忆块拼装失败（忽略，照常建循环）：', (err as Error).message);
     }
 
+    // 片2 · MCP 通用桥：当前用户挂的 MCP server 工具拼进这轮工具表（没挂 → undefined，走老路逐字节不变）
+    const mcpToolNames = await mainLoopToolNamesWithMcp(pool, cipher, claims.sub, env);
     const session = startLoop(env, {
       userId: claims.sub,
       agentId,
@@ -174,6 +180,7 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
       wcId,
       goal,
       pageUrl: typeof b?.pageUrl === 'string' ? b.pageUrl.trim().slice(0, 500) : '',
+      toolNames: mcpToolNames,
       state,
       // 多智能体编排：同项目同事名单 + 编排规矩（追加到第一条 user 消息）。
       // ★ 名单必须在这里查、在这里传：它是**按项目按当下**变的，进不了工具 description。
@@ -259,16 +266,27 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
 
       const decision: AgentLoopDecision = await advance(env, session, result);
 
-      // 实时向 SSE 长连接推送 AI 步骤与人话进展
+      /**
+       * 实时推送 —— ★ 2026-09-26「交互对齐片」：**过程轨迹与最终回答分开走**。
+       *
+       * 用户定的目标态：**执行中主对话流不出现步骤墙**；只留一条轻量状态（旋转 + 一句当前动作），
+       * 完整轨迹进「可点开、默认收起」的抽屉；助手最终回答才是干净 markdown。
+       *
+       * 所以这里的分工是**硬契约**（改之前先想清楚）：
+       *   · `step` / `note` / `ask` / `done` / `stopped` = **结构化事件**（走 `broadcastLoopEvent`
+       *     的具名事件），由桌面端决定怎么呈现：轨迹 → 抽屉，状态 → 一行，求助 → 一行 ⚠️。
+       *   · **只有 `say`（模型对用户说的话）才写进聊天长连的 `delta`** —— 那才是「回答」。
+       *   ✗ 不要再往 `delta` 里塞 `**步骤 N**：…` / `🎉 任务完成` / `> ℹ️ …` / `💬 用户补充指令`：
+       *     它们会直接落进助手气泡，既造成「步骤墙」，又与桌面端的事件渲染**重复一遍**
+       *     （同一句话在聊天流里出现两次 —— 用户报的「同一段出现两次」就是这个）。
+       */
       if (decision.kind === 'tool') {
         const desc = formatToolDesc(decision.call);
-        // R2 全面加固：广播给聊天长连的 call 必须脱敏（type 的明文会直接打进聊天气泡）
+        // R2 全面加固：广播给桌面的 call 必须脱敏（type 的明文会经事件进 UI）
         const safeCall = scrubCallForBroadcast(decision.call);
         broadcastLoopEvent(loopId, 'step', { step: session.step + 1, call: safeCall, description: desc });
-        broadcastLoopEvent(loopId, null, { delta: `\n\n**步骤 ${session.step + 1}**：${desc}` });
       } else if (decision.kind === 'done') {
         broadcastLoopEvent(loopId, 'step', { step: session.step, phase: 'done', summary: decision.summary });
-        broadcastLoopEvent(loopId, null, { delta: `\n\n🎉 **任务完成**\n${decision.summary || ''}` });
         endLoopSse(loopId, { conversationId: session.conversationId, done: true });
         } else if (decision.kind === 'ask' && decision.reason === 'job_pending') {
           // 多智能体编排：这是「在等同事交活」，**不是**「AI 卡住了要人帮忙」。
@@ -284,17 +302,23 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
             jobKind: decision.jobKind,
             etaMs: decision.etaMs,
           });
-          broadcastLoopEvent(loopId, 'note', { level: 'info', text: decision.question });
-          broadcastLoopEvent(loopId, null, { delta: `\n\n⏳ ${decision.question}` });
+          // ★ 用「⏳ 等待中」口径（不是 ⚠️ 求助）：把 park 原话带给用户，前端按 ask 事件的
+          //   jobId/etaMs 画倒计时。info 级 —— 这不是异常，是在等同事交活。
+          broadcastLoopEvent(loopId, 'note', { level: 'info', text: `⏳ ${decision.question}` });
         } else if (decision.kind === 'ask') {
+          // 真正的求助（need_user 等）：保留 ⚠️ 求助话术 —— 真卡住时还得报（别跟 job_pending 混）。
           broadcastLoopEvent(loopId, 'ask', { reason: decision.reason, question: decision.question, step: session.step });
-          broadcastLoopEvent(loopId, null, { delta: `\n\n⚠️ **需要协助**：${decision.question}` });
-        } else if (decision.kind === 'say') {
-        broadcastLoopEvent(loopId, null, { delta: `\n\n${decision.text}` });
-      } else if (decision.kind === 'stopped') {
+          broadcastLoopEvent(loopId, 'note', { level: 'warn', text: `⚠️ **需要协助**：${decision.question}` });
+        } else if (decision.kind === 'stopped') {
         broadcastLoopEvent(loopId, 'stopped', { reason: decision.reason });
         endLoopSse(loopId, { stopped: true });
       }
+      /**
+       * ★ 交互对齐片：**唯一**往聊天长连写 `delta` 的地方（口径见 `chatDelta.ts`）——
+       * 只有 `say`（模型对用户说的话）会返回文本；步骤/完成/等待/求助/停止一律 null。
+       */
+      const chatDelta = chatDeltaFor(decision);
+      if (chatDelta) broadcastLoopEvent(loopId, null, { delta: chatDelta });
 
       return { decision };
     } catch (err) {
@@ -340,8 +364,9 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
     const loopId = typeof b?.loopId === 'string' ? b.loopId.trim() : '';
     const text = typeof b?.text === 'string' ? b.text.trim() : '';
     if (loopId && text) {
+      // ★ 交互对齐片：只发**结构化事件**（桌面把它放进轨迹抽屉），不再往聊天流塞 `> ℹ️ …`
+      //   —— 否则同一句话既作为事件渲染、又作为 delta 落进助手气泡（重复一遍）。
       broadcastLoopEvent(loopId, 'note', { level: b?.level || 'info', text });
-      broadcastLoopEvent(loopId, null, { delta: `\n> ℹ️ ${text}` });
     }
     return { ok: true };
   });
@@ -361,8 +386,12 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
     if (!session) return errJson(reply, 404, '任务循环不存在或已结束');
     if (session.userId !== claims.sub) return errJson(reply, 403, '无权操作该循环');
     injectUserMessage(session, message);
+    /**
+     * ★ 交互对齐片：只发事件（进轨迹抽屉），**不再**往聊天流塞 `💬 **用户补充指令**：…`。
+     * 用户那句话本身已经作为**正常用户气泡**上屏（桌面 useChat 里做的），
+     * 再在助手气泡里复述一遍就是「同一段出现两次」。
+     */
     broadcastLoopEvent(loopId, 'note', { level: 'info', text: `已将补充指令追加至任务上下文：${message}` });
-    broadcastLoopEvent(loopId, null, { delta: `\n\n💬 **用户补充指令**：${message}` });
     return { ok: true, queued: true };
   });
 

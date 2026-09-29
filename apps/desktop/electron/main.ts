@@ -25,7 +25,8 @@ import { startSensitiveAutoResume } from './driver';
 import { createHelpHub } from './helpState';
 import { getSettings, onSettingsChange, setSettings } from './settings';
 import { initResourceGuard, syncDrivingFlags } from './resource-guard';
-import { ensurePostgres, ensureServer, getServerState, stopOwnedServer } from './server-supervisor';
+import { ensurePostgres, ensureServer, getServerState, markLocalRuntimeUnavailable, stopOwnedServer } from './server-supervisor';
+import { preparePackagedRuntime, type PackagedRuntime } from './packaged-runtime';
 // ADR-0002：页宿主（WebContentsView）生命周期 + 分区前缀常量（唯一建页口，分区闸在这里执行）
 import {
   PROJECT_PARTITION_PREFIX,
@@ -68,6 +69,7 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 let mainWindow: BrowserWindow | null = null;
+let packagedRuntime: PackagedRuntime | null = null;
 
 /** 只允许 http(s) —— 其余协议（bytedance: / snssdk / itms-apps: / market: …）一律不进导航 */
 const isHttpUrl = (url: string): boolean => /^https?:\/\//i.test(url);
@@ -335,6 +337,8 @@ function createMainWindow(): void {
       // ---- 安全桥三件套 ----
       // 1. preload 独立上下文，渲染进程拿不到 require / process
       preload: path.join(__dirname, 'preload.js'),
+      // 片⑤：只给 preload 一个布尔标记，不透传密钥；安装包不接受旧 localStorage 的自定义后端地址。
+      additionalArguments: app.isPackaged ? ['--workbench-packaged'] : [],
       // 2. 渲染进程与 preload 隔离在不同 JS 上下文
       contextIsolation: true,
       // 3. 禁用 Node 集成
@@ -421,6 +425,29 @@ function sendToMainWindow(channel: string, payload?: unknown): void {
 // IPC：渲染进程只能走这里注册的通道，preload 里再做一层白名单收敛
 // ---------------------------------------------------------------------------
 ipcMain.handle('app:ping', () => `pong from electron ${process.versions.electron}`);
+// 首跑口令只在主进程和本机 server 子进程：renderer 只提供密码，不能读口令或文件。
+ipcMain.handle('workbench:server:status', () => getServerState());
+ipcMain.handle('workbench:auth:onboarding', async (event, rawPassword: unknown) => {
+  if (!app.isPackaged || !packagedRuntime || event.sender !== mainWindow?.webContents ||
+      !getServerState().ownedByUs || !getServerState().reachable)
+    throw new Error('本地引导不可用，请检查服务端状态');
+  if (typeof rawPassword !== 'string' || rawPassword.length < 8 || rawPassword.length > 128)
+    throw new Error('本机密码须为 8–128 字符');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    const res = await fetch('http://127.0.0.1:8787/auth/onboarding', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-workbench-bootstrap-secret': packagedRuntime.bootstrapSecret },
+      body: JSON.stringify({ password: rawPassword }),
+      signal: ctrl.signal,
+      redirect: 'error',
+    });
+    // 不把任何上游原文抄回 IPC；成功才给一份原有 AuthSession。
+    if (!res.ok) throw new Error(res.status === 409 ? '本地账号已创建，请用 XYZ 号登录' : `本地引导失败（HTTP ${res.status}）`);
+    return await res.json();
+  } finally { clearTimeout(timer); }
+});
 
 // 第 2 步（内嵌版）：主窗口渲染进程 -> 主进程 -> 主窗口渲染进程
 // 绕一圈的意义：显示 / 隐藏这类 UI 指令将来可能来自任务系统、快捷键或主进程侧逻辑，
@@ -1772,6 +1799,24 @@ ipcMain.handle('workbench:browser:view-close', (_event, tabKeyRaw: unknown) => {
   const wcId = viewHostWcIdOf(tabKey);
   viewHostClose(tabKey);
   if (wcId) stopWatchForWc(wcId);
+  /**
+   * ★ R7 修复（2026-09-29）：关页时告诉服务端"这一路不要了"。
+   *
+   * 原状：这里只停了 watch（主进程自己的事），**服务端完全不知道页关了**。
+   *   于是服务端 `pageState` 里那张页的分片状态会滞留最多 10 分钟，
+   *   `latestPageStateOfAgent()` 继续把它当"最新"并进显示态 —— 界面显示
+   *   "需要登录 / 还在忙"，而用户早就把那张页关掉了。
+   *
+   * 带 `wcId`（不是 loopId）是关键：服务端 `stopLoopsOfPage` 会停掉该页**全部**循环，
+   *   并顺手清掉该页的分片状态。用 loopId 只会停一路，页状态照样留着。
+   *
+   * fire-and-forget：关页是 UI 的即时动作，不能为了等后端回包卡住它。
+   *   没登录（`agentJwt` 空）时 `agentPost` 会抛，被 catch 吞掉 —— 与同文件其他
+   *   `void agentPost(...).catch(() => undefined)` 的用法一致。
+   */
+  if (wcId) {
+    void agentPost('/agent/loop/stop', { wcId, reason: 'page_closed' }).catch(() => undefined);
+  }
 });
 
 // 第 8 步：结果文档下载。拿到 Markdown 后：先本地脱敏兜底，再弹系统"保存为"对话框（只有 1 个窗口，不新增窗）。
@@ -1929,6 +1974,16 @@ if (!gotTheLock) {
   });
 
   void app.whenReady().then(() => {
+    if (app.isPackaged) {
+      try {
+        packagedRuntime = preparePackagedRuntime(app.getPath('userData'), process.resourcesPath);
+      } catch (err) {
+        // 缺资源/钥匙损坏时绝不能改扫开发仓库或随机生成新 key；窗口仍打开并显示故障。
+        const message = (err as Error).message;
+        markLocalRuntimeUnavailable(message);
+        console.error('[main] 安装包本地运行态不可用：', message);
+      }
+    }
     /**
      * ★ 服务端守护：**先确保后端可用，再开窗**。
      *
@@ -1976,14 +2031,16 @@ if (!gotTheLock) {
       if (m) sendToMainWindow('workbench:sms:mock', { masked: `${m[1]}****${m[2]}`, code: m[3] });
     };
 
-    void ensurePostgres(relayServerLog)
+    // 开发态走既有便携 PG；安装包只用自身 PGlite，不碰本机共享的 5432。
+    const ensureDatabase = app.isPackaged ? Promise.resolve(Boolean(packagedRuntime)) : ensurePostgres(relayServerLog);
+    void ensureDatabase
       .then((pgOk) => {
+        if (app.isPackaged && !pgOk) return false; // 本地密钥/资源失败即停，不能退回开发仓库
         if (!pgOk) {
           console.warn('[main] 数据库未能自动就绪 —— 登录页会提示「数据库没连上」，请手动跑 start-dev.cmd。');
         }
-        // 库这一步无论成败都继续拉服务端：库没起来时服务端也会起（只是 /auth 回 503），
-        // 而且它自己会带重试地建表 —— 库稍后就绪时能自己接上。
-        return ensureServer(undefined, relayServerLog);
+        // 旧 PG 不通时服务端保持迁移重试；安装包 PGlite 的目录与密钥由主进程一次性准备。
+        return ensureServer(undefined, relayServerLog, packagedRuntime ?? undefined);
       })
       .then((ok) => {
         if (!ok) {
@@ -2012,9 +2069,10 @@ if (!gotTheLock) {
      */
     const HEARTBEAT_MS = 10_000;
     const heartbeat = setInterval(() => {
-      void ensurePostgres(relayServerLog, { quiet: true })
-        .catch(() => false)
-        .then(() => ensureServer(undefined, relayServerLog))
+      if (app.isPackaged && !packagedRuntime) return; // 密钥坏了不能靠重试创建新 key
+      const dbReady = app.isPackaged ? Promise.resolve(true) : ensurePostgres(relayServerLog, { quiet: true }).catch(() => false);
+      void dbReady
+        .then(() => ensureServer(undefined, relayServerLog, packagedRuntime ?? undefined))
         .then((ok) => {
           if (ok) sendToMainWindow('workbench:server-state', getServerState());
           else console.warn('[main] 后端保活：这一轮没能拉起，10 秒后再试。');

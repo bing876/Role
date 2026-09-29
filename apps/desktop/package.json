@@ -10,15 +10,17 @@
     "build:renderer": "vite build",
     "build": "npm run build:electron && npm run build:renderer",
     "start": "npm run build:electron && npm run build:renderer && node scripts/start-electron.mjs",
-    "package": "npm run build && electron-builder --publish never",
-    "package:dir": "npm run build && electron-builder --dir --publish never",
+    "package": "electron-builder --publish never",
+    "package:dir": "electron-builder --dir --publish never",
+    "package:win": "electron-builder --win nsis --x64 --publish never",
+    "package:mac": "electron-builder --mac dmg --publish never",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
     "dev:renderer": "vite"
   },
   "build": {
     "appId": "com.bing876.aiworkbench",
     "productName": "AI 工作台",
-    "electronVersion": "33.4.11",
+    "electronVersion": "44.4.5",
     "artifactName": "AI-Workbench-${version}-${os}-${arch}.${ext}",
     "directories": {
       "output": "release"
@@ -31,6 +33,18 @@
       "!**/.env",
       "!**/.env.*",
       "!**/apps/server/**"
+    ],
+    "extraResources": [
+      {
+        "from": "packaging",
+        "to": "server",
+        "filter": ["package.json", "dist/**/*", "!**/*.map", "!**/.env", "!**/.env.*"]
+      },
+      {
+        "from": "packaging/node_modules",
+        "to": "server/node_modules",
+        "filter": ["**/*", "!**/*.map", "!**/.env", "!**/.env.*", "!.bin/**"]
+      }
     ],
     "asar": true,
     "npmRebuild": false,
@@ -68,7 +82,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^44.4.5",
+    "electron": "44.4.5",
     "electron-builder": "^26.15.3",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",

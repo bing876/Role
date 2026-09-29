@@ -95,6 +95,8 @@ export type SearchEvent =
 export interface ChatWithSearchOptions {
   /** 日志标签 */
   tag: string;
+  /** 当前登录用户，用于选本地密文模型配置（不给时沿用 env） */
+  userId?: number;
   /** 客户端断开就掐上游（沿用第 6 步的 AbortController） */
   signal: AbortSignal;
   /**
@@ -277,6 +279,7 @@ export async function streamChatWithSearch(
     try {
       res = await llmFetch(env, msgs, {
         tag: forceAnswer ? `${opts.tag}/answer` : round === 0 ? opts.tag : `${opts.tag}/after-search${round}`,
+        userId: opts.userId,
         stream: true,
         signal: opts.signal,
         tools: webSearchOpenAITools,

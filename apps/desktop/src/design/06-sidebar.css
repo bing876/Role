@@ -131,7 +131,17 @@
   font-weight: var(--fw-medium); font-size: 14px; line-height: 1; font-family: inherit;
   display: grid; place-items: center;
   /* Round 138：头像仅保留 brightness 过渡（hover 提亮）；白外环已移除 */
-  transition: filter .18s ease;
+  transition: filter .18s ease, box-shadow .18s ease;
+  /* 形态③（2026-09-27）：颜色环 = 六态颜色（--state-c）；没状态时用透明，不抢戏 */
+  box-shadow: 0 0 0 2px var(--state-c, transparent);
+}
+/* 形态③：头像下方那一个词（空闲/思考/执行/需你处理/出错/休眠），颜色跟状态走 */
+.contact-avatar__state {
+  position: absolute; left: 50%; bottom: -13px; transform: translateX(-50%);
+  font-size: 10px; font-weight: 600; line-height: 1; white-space: nowrap;
+  color: var(--state-c, rgba(255,255,255,0.6));
+  text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+  pointer-events: none;
 }
 
 /* 中间文字区域：两行 21 + 3 + 16 = 40 → 与头像 40 严格等高，垂直重心对齐。
@@ -221,6 +231,27 @@
   word-break: break-word;
 }
 
+/* B1 设置抽屉：账号 / 密码 / 浏览器参数 / 保活 收进可开合抽屉（默认收起 = 降噪）。
+   记忆 / 知识库不进抽屉（查阅 ≠ 设置），仍常显在侧栏。 */
+.settingsDrawer {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settingsDrawer__toggle {
+  width: 100%;
+}
+.settingsDrawer__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
 /* 第 16 步：「启动并保活」开关（左栏） */
 .keepalive {
   margin-top: 8px;
@@ -250,6 +281,16 @@
 }
 .projectBox__row {
   padding: 3px 6px;
+}
+/* B4 项目下拉：原生 <select>（取代「按钮 + 展开列表 + 行」，降噪） */
+.projectBox__select {
+  width: 100%;
+  padding: 4px 6px;
+  font-size: inherit;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
 }
 /* F2-③：成功槽（朴素） */
 .projectBox__note {
@@ -398,3 +439,51 @@
   color: var(--text-weak);
   word-break: break-all;
 }
+
+/* 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话 */
+.routinesPanel {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.routinesPanel__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+.routinesPanel__row:hover { background: rgba(255, 255, 255, 0.06); }
+.routinesPanel__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.routinesPanel__state {
+  font-size: 11px;
+  color: #46b57c;
+  flex: 0 0 auto;
+}
+.routinesPanel__state--off { color: #8b93a1; }
+.routinesPanel__btn,
+.routinesPanel__del {
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.routinesPanel__btn:disabled,
+.routinesPanel__del:disabled { opacity: 0.5; cursor: default; }
+.routinesPanel__del { color: #e05c5c; }

@@ -3,8 +3,9 @@
  * ---------------------------------------------------------------------------
  * 为什么要有这个脚本（它补的是 agent-loop-audit-test.mts 的一个结构性漏洞）：
  *
- *   `scripts/verify/agent-loop-audit-test.mts` 里的 `shouldEnterTaskModeTest`
- *   是 `apps/server/src/routes/chat.ts` 里 `shouldEnterTaskMode` 的**手抄副本**，不是 import。
+ *   真身是 `apps/server/src/routes/chat.ts` 里的 `shouldEnterTaskMode`。
+ *   （曾经有份 `scripts/verify/agent-loop-audit-test.mts`，里面是它的**手抄副本**、
+ *    在本地自测 —— 测的是抄来的那份，不是产品，2026-09-29 已删。别再造这种副本。）
  *   ⇒ 副本通过 ≠ 线上代码正确。以后谁改了 chat.ts 而忘了改副本（或反过来），
  *     审计用例照样全绿，而真实发车行为已经变了。这类漂移是静默的。
  *

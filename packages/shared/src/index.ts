@@ -52,7 +52,9 @@ export type BrowserEvent =
   | 'settings'
   | 'resources'
   | 'opentab'
-  | 'pageinfo';
+  | 'pageinfo'
+  // 形态② 教一遍：主进程把 webview 键鼠操作录下来的动作喂给渲染层
+  | 'teachAction';
 
 /**
  * 第 23 步：「内嵌页想开新标签」的请求体。
@@ -124,10 +126,60 @@ export interface TaskState {
  * `ask_user` / `done` 本步**只定类型、不接业务**（第 3 步不接大模型），
  * 执行器遇到它们只会返回“未实现”，留着给后面的步骤填。
  */
+/**
+ * ADR-0004 · 浏览器深度 第二片:稳健元素定位的**语义目标**。
+ *
+ * 全是**抗改版**维度(没有 class):稳定属性(id/aria-label/name/data-testid)优先,
+ * 文本 + tag + 结构兜底。站点换 class / 调 DOM 顺序后,同一语义目标照样解析到同一颗元素。
+ */
+export interface SemanticTarget {
+  /** 稳定属性(按此优先级,最抗改版):id */
+  id?: string;
+  /** data-testid */
+  testId?: string;
+  /** aria-label */
+  ariaLabel?: string;
+  /** name */
+  name?: string;
+  /** 兜底:可见文本(包含匹配)。 */
+  text?: string;
+  /** 兜底:标签名(如 'button'),收窄候选。 */
+  tag?: string;
+  /** 兜底:CSS 祖先选择器(结构约束,如 'form' / 'nav'),在同文案多元素时定位置。 */
+  within?: string;
+}
+
+/** 语义定位的解析结果(先解析,再操作)。 */
+export interface SemanticLocateResult {
+  found: boolean;
+  /** 命中方式:id / testid / aria / name / text / text+tag / text+within / text+tag+within / none */
+  via:
+    | 'id'
+    | 'testid'
+    | 'aria'
+    | 'name'
+    | 'text'
+    | 'text+tag'
+    | 'text+within'
+    | 'text+tag+within'
+    | 'none';
+  /** 人/模型可读的解析描述(进回执 detail,可诊断「这次凭什么找到的」)。 */
+  description: string;
+  /** 命中元素的可见文本(截断 60 字)。 */
+  label: string;
+  /** 元素中心坐标(最顶层视口,供 CDP 用);未命中为 null。 */
+  cx: number | null;
+  cy: number | null;
+  w: number;
+  h: number;
+  /** 页面侧解析异常(换页途中 document 为 null 等)——不抛,如实回。 */
+  error?: string;
+}
+
 export type BrowserAction =
   | { action: 'open_url'; url: string }
-  | { action: 'click'; target: string }
-  | { action: 'type'; target: string; text: string; submit?: boolean }
+  | { action: 'click'; target: string; semantic?: SemanticTarget }
+  | { action: 'type'; target: string; text: string; submit?: boolean; semantic?: SemanticTarget }
   | { action: 'scroll'; direction: 'up' | 'down' }
   | { action: 'wait'; seconds: number }
   | { action: 'read_page' }
@@ -235,6 +287,25 @@ export interface DriveResult {
    * 不是失败（ok 仍为 true），只是给驾驶循环一个「这次多半没点中」的信号。
    */
   noChange?: boolean;
+  /**
+   * P1-2 修复（2026-09-29）· 这一步到底做成没有。
+   *
+   * 为什么必须有这个字段：以前只有 ok:true/false，而**超时**被记成 ok:false，
+   * 跟「元素没找到」「参数不合法」这种**确定没做成**的失败混成一类。
+   * 可超时的真相是：**动作可能已经执行了**（Promise.race 超时后，
+   * hooks.exec() 仍在后台跑，那一下点击照样发出去）。
+   * 模型看到「失败」就去重试，于是点两次 = 下两单 / 发两条 / 提交两次。
+   *
+   * 三态口径：
+   *   'done'    确定执行完了（ok:true 的缺省值）
+   *   'failed'  确定**没**执行（ok:false 且原因是执行前的校验/定位失败）
+   *   'unknown' **不知道**（超时 / 被打断）。此时绝不许直接重试，
+   *            必须先 read_page 看当前页面再决定。
+   *
+   * 可选字段（不破坏旧代码）：驾驶循环用 res.outcome ?? (res.ok?'done':'failed')
+   * 推导，所以没填的旧路径行为不变。
+   */
+  outcome?: 'done' | 'failed' | 'unknown';
   /** screenshot 动作的产物：data URL，只放内存，不落库 */
   screenshot?: string;
 }
@@ -304,8 +375,14 @@ export interface WorkbenchBridge {
    * 这个字段**必须存在** —— 缺失时 `!undefined` 为真，会被误判成 web 直测模式，桌面端将永远连不上后端。
    */
   isElectron: boolean;
+  /** 片⑤：仅 Electron 安装包为 true；可选字段，旧桥仍兼容。安装包不信任旧的自定义后端地址。 */
+  isPackaged?: boolean;
   /** 连通性自检：主进程返回 pong */
   ping: () => Promise<string>;
+  /** 片⑤：安装包后端守护状态；错误原因不含密钥、账号或请求正文。 */
+  serverStatus: () => Promise<{ reachable: boolean; ownedByUs: boolean; lastError: string | null }>;
+  /** 片⑤：仅安装包首次本地建号；renderer 只传密码，不会获得主进程的 bootstrap secret。 */
+  createLocalAccount: (password: string) => Promise<AuthSession>;
   /** 打开内嵌浏览器区域；url 省略时沿用当前地址 */
   openBrowser: (url?: string) => Promise<void>;
   /** 显示内嵌浏览器区域 */
@@ -929,7 +1006,9 @@ export interface AgentView {
   /** 第 16 步：是否处于「启动并保活」监听态（挂在会话状态上；空闲不调模型） */
   listening?: boolean;
   /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户 */
-  status?: 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done';
+  /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户
+   * 形态③（2026-09-27）：补 failed（出错）/ sleeping（休眠）两态 → 六态齐（空闲/思考/执行/需你处理/出错/休眠） */
+  status?: 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done' | 'failed' | 'sleeping';
   /** 状态人话摘要（折叠一行，细节前端可展开） */
   statusDetail?: string;
   /** 状态对应的循环 id（调试/追踪用） */
@@ -1029,6 +1108,8 @@ export type LoopToolName =
   | 'read_page'
   | 'click'
   | 'type'
+  | 'click_semantic'
+  | 'type_semantic'
   | 'scroll'
   | 'stop'
   | 'web_search'
@@ -1056,6 +1137,21 @@ export interface LoopToolResult {
   page?: PageSnapshot;
   /** 工具压根没执行（被本地安全闸拦下）时的原因 */
   refused?: string;
+  /**
+   * P1-2（2026-09-29）· 这一步**到底做成没有**（与 DriveResult.outcome 同源，由桌面透传）。
+   *
+   *   以前只有 ok:true/false，而**超时**被记成 ok:false，跟"元素没找到"这种
+   *   **确定没做成**的失败混成一类。真相是超时的动作**可能已经执行了**
+   *   （Promise.race 超时不取消执行，那一下点击照样发出去）。
+   *   模型看到"失败"就重试，于是点两次 = 下两单 / 发两条 / 提交两次。
+   *
+   *   'done'    确定执行完了
+   *   'failed'  确定**没**执行
+   *   'unknown' **不知道**（超时/被打断）—— 此时必须先读页面确认，不许直接重试
+   *
+   * 可选字段：没填时按 ok 推导（ok:true -> done，ok:false -> failed），旧行为不变。
+   */
+  outcome?: 'done' | 'failed' | 'unknown';
   /** 用户在循环跑着的时候补的一句答复（只进上下文，不落库） */
   userAnswer?: string;
   /**
@@ -1710,7 +1806,113 @@ export interface WhiteboardPostResult {
   whiteboard: WhiteboardView;
 }
 
+// ---------------------------------------------------------------------------
+// 能力与连接（插件系统，2026-09-27）：
+//   · 插件 = 一个「可开关的外部能力」（当前两个原生：网页搜索 / 生成图片）。
+//   · 每个插件：id / 名称 / description(给 AI 判断何时用) / tools(接进循环引擎) /
+//     configFields(填 key 的表单) —— 全在本文的类型里，前后端共用一份口径。
+//   · 配置**加密落本地**（服务端 AES-256-GCM，key 只在内存，读回一律打码）。
+// ---------------------------------------------------------------------------
+
+/** 真模型接入层：用户显式设置模型（默认 DeepSeek）；密钥只写本地密文，不进 WorkbenchSettings。 */
+export type ModelProviderName = 'deepseek' | 'openai' | 'custom';
+export interface ModelConfigView {
+  provider: ModelProviderName;
+  model: string;
+  baseUrl: string;
+  apiKeySet: boolean;
+  /** 只有两种值：**** 表示已有密钥，空串表示没有；不返回密钥正文。 */
+  apiKeyMasked: '****' | '';
+  /** local=本账号密文，env=存量 DEEPSEEK_API_KEY，none=未配置，invalid=密文损坏（不降级） */
+  source: 'local' | 'env' | 'none' | 'invalid';
+}
+export interface ModelConfigInput {
+  provider: ModelProviderName;
+  model?: string;
+  baseUrl?: string;
+  /** 新 key；留空只在当前用户、同供应商、同 baseUrl 的本地配置上保留旧值。 */
+  apiKey?: string;
+}
+export interface ModelTestResult { ok: boolean; detail: string }
+/** 设置表单默认值；旧 DEEPSEEK_MODEL 环境变量保持其既有默认，不受此表影响。 */
+export const MODEL_PROVIDER_DEFAULTS: Record<ModelProviderName, { model: string; baseUrl: string }> = {
+  deepseek: { model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com' },
+  openai: { model: 'gpt-4o-mini', baseUrl: 'https://api.openai.com/v1' },
+  custom: { model: '', baseUrl: '' },
+};
+
+export type PluginId = 'web_search' | 'image_gen' | 'github' | 'feishu' | `mcp_s${number}`;
+
+/** 当前登录用户对这个插件的配置状态：没配 / 配了 / 配了且测过 */
+export type PluginStatus = 'unconfigured' | 'configured' | 'tested';
+
+export interface PluginConfigField {
+  /** 配置字段名（进 config JSON 的 key） */
+  key: string;
+  /** 显示名 */
+  label: string;
+  /** 输入形态：文本 / 密文（打码） / 下拉 */
+  type: 'text' | 'secret' | 'select';
+  /** 是否必填 */
+  required?: boolean;
+  placeholder?: string;
+  /** select 的候选值 */
+  options?: string[];
+  /** 帮助文案 */
+  help?: string;
+}
+
+/** 一个字段读回后的展示状态（secret 字段 value 是打码后的，masked=true） */
+export interface PluginFieldView {
+  /** 有值（secret 也只看「设没设」，不看值） */
+  set: boolean;
+  /** 打码后的展示值（secret = ****；非 secret = 原值） */
+  masked: boolean;
+  value: string;
+}
+
+/** GET /plugins/:id/config 的读回（**绝不**含明文密钥） */
+export interface PluginConfigView {
+  pluginId: string;
+  configured: boolean;
+  /** key → 打码后的字段值 */
+  fields: Record<string, PluginFieldView>;
+}
+
+/** GET /plugins 的列表项（含当前登录用户的配置状态） */
+export interface PluginInfo {
+  id: PluginId;
+  name: string;
+  /** 给 AI 判断「何时用」的描述（也进循环引擎工具表的 description） */
+  description: string;
+  /** 这个能力提供的工具名（接进循环引擎当可调用工具） */
+  tools: string[];
+  /** 需要的配置字段（前端「填 key」表单依据） */
+  configFields: PluginConfigField[];
+  /** 当前登录用户的配置状态：灰(unconfigured) / 绿(configured) / 测过(tested) */
+  status: PluginStatus;
+  /** 是否已配齐可用（决定卡片绿/灰） */
+  enabled: boolean;
+}
+
+/** 片2 · MCP 通用桥。GET /mcp/servers 只回工具元数据/是否设过 token，绝不回 token。 */
+export interface McpToolView { name: string; description?: string }
+export interface McpServerView {
+  id: number;
+  name: string;
+  url: string;
+  hasAuth: boolean;
+  tools: McpToolView[];
+}
+export interface McpAddServerInput {
+  name: string;
+  url: string;
+  auth?: { bearerToken?: string; headers?: Record<string, string> };
+}
+export interface McpTestView { ok: boolean; detail: string; count?: number }
+
 export * from './tools';
+export * from './semanticTools';
 
 /**
  * 批次 J（2026-09-24）：`@点名` 的确定性解析器。

@@ -19,6 +19,7 @@ import type { Pool } from 'pg';
 import type { AgentActionRequest, AgentActionResponse, PageSnapshot } from '@ai-workbench/shared';
 import type { BrowserAction } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
+import { modelAvailableForUser } from '../modelSettings';
 import type { JsonCipher } from '../crypto';
 import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
@@ -27,6 +28,7 @@ import { notifyUser } from '../notify';
 import { buildMemoryBlock, triggerTaskExtract } from './memories';
 import { scrubTaskText, taskDisplayTitle } from '../orchestrator/redact';
 import { recordTaskAsPendingSkill } from '../orchestrator/skills';
+import { writeCollabToProjectChat } from '../orchestrator/collabChat';
 import { decideOnce } from '../toolLoop';
 import { currentProjectId } from '../projectScope';
 
@@ -191,8 +193,8 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
   app.post('/agent/next-action', async (req: FastifyRequest, reply: FastifyReply) => {
     const claims = authed(req, env);
     if (!claims) return errJson(reply, 401, '未登录或登录已过期（驾驶员接口需要第 5 步的 JWT）');
-    if (!env.deepseekApiKey) {
-      return errJson(reply, 503, '未配置模型：在 apps/server/.env 填 DEEPSEEK_API_KEY 后重启 npm run dev:server', {
+    if (!(await modelAvailableForUser(pool, cipher, claims.sub, env))) {
+      return errJson(reply, 503, '未配置模型：在设置里填 DeepSeek API Key 后重试', {
         code: 'llm_not_configured',
       });
     }
@@ -208,6 +210,7 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
       // 第 10 步：驾驶员同样吃“已确认记忆”（pending 不会出现在这里——只查 active）
       const memBlock = await buildMemoryBlock(pool, cipher, claims.sub, goal);
       const out = await decideOnce(env, {
+        userId: claims.sub,
         goal,
         stepsSummary: steps,
         snapshot,
@@ -322,6 +325,15 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
           goal: taskGoalFromRow(t, cipher),
           steps: (payloadWithoutGoal(t.payload) as { steps?: string[] }).steps ?? [],
         }).catch((err) => console.warn('[agent] G4 技能录制失败（忽略,不影响任务）：', (err as Error).message));
+        // 形态⑤ 主动汇报（2026-09-27）：任务结束 → 一句话报结果进对话流（不弹通知、不打扰，写进项目主会话）。
+        void writeCollabToProjectChat(pool, cipher, Number(t.project_id), {
+          kind: 'system',
+          fromId: 0,
+          fromName: '系统',
+          toId: 0,
+          toName: '你',
+          detail: `✅ 任务完成：${taskGoalFromRow(t, cipher).slice(0, 60)}`,
+        }).catch((err) => console.warn('[agent] 形态⑤ 主动汇报失败（忽略）：', (err as Error).message));
       }
       return { ok: true };
     } catch (err) {
@@ -350,7 +362,7 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
         document_outline: Array.isArray(b?.document_outline) ? (b.document_outline as unknown[]).slice(0, 12) : [],
       };
       let doc = buildFallbackDoc(goal, steps, doneBits as unknown as Record<string, unknown>);
-      if (env.deepseekApiKey) {
+      if (await modelAvailableForUser(pool, cipher, claims.sub, env)) {
         // 只整理一次；模型连不上/乱答都退回兜底，绝不让收尾卡死
         try {
           const points = Array.isArray(b?.pagePoints) ? (b.pagePoints as unknown[]).map(String).slice(0, 12) : [];
@@ -369,7 +381,7 @@ export function registerAgentRoutes(app: FastifyInstance, { pool, env, cipher }:
                 ].join('\n\n'),
               },
             ],
-            { tag: 'agent/task/finish', json: true, temperature: 0.2 },
+            { tag: 'agent/task/finish', userId: claims.sub, json: true, temperature: 0.2 },
           );
           if (r.ok) {
             const data = (await r.json()) as { choices?: { message?: { content?: string } }[] };

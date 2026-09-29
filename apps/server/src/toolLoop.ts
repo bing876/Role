@@ -45,6 +45,7 @@ import { pageDelta } from './pageDelta';
 import { mentionsLogin } from './promptPolicy';
 import {
   bindPageLoop,
+  clearPageState,
   pageStateOf,
   patchPageState,
   summaryFromSnapshot,
@@ -954,6 +955,24 @@ export function stopLoopsOfPage(userId: number, wcId: number): number {
       notifyLoopStopped(s.id, 'page_dropped');
     }
   }
+  /**
+   * ★ R7 修复（2026-09-29）：放下这一路时，把该页的分片状态一起清掉。
+   *
+   * 原状：`clearPageState` 从落地起就**没有任何调用点**（接手报告 10.2 记为 R7 未修）。
+   *   后果是用户关掉一张页之后，`latestPageStateOfAgent()` 还会把那张**已关闭**页的
+   *   状态当"最新"返回，`chat.ts` 的 `mergeLatestPageState` 于是把它并进显示态 ——
+   *   `login_required` / `current_task` 最多**滞留 10 分钟**（PAGE_STATE_TTL_MS），
+   *   用户看到的是"页面都关了，界面还说需要登录 / 还在忙"。
+   *
+   * 为什么清在**这个函数**里而不是 `stopLoop(loopId)` 里：
+   *   分片状态的键是 `wcId`（页），不是 `loopId`（循环）。一张页可能同时有多路循环，
+   *   在单路 `stopLoop` 里清会把同页其他路的状态一起抹掉。而"停下这张页的全部循环"
+   *   语义上就等于"这一路不要了"，此时清页状态才是对的。
+   *
+   * 注：这不是内存泄漏修复（`pageState.ts` 本就有 TTL 扫描 + 64 条上限兜底），
+   *   是**显示正确性**修复。
+   */
+  clearPageState(wcId);
   return n;
 }
 
@@ -1078,7 +1097,7 @@ export type SanitizeOutcome =
  *
  * 阶段 0：默认走注册表（查定义 → JSON 解析 → 定义的 validate）。
  * `TOOL_REGISTRY_LEGACY=1` 时走下面的 sanitizeToolCallLegacy（旧 switch，逐字保留）。
- * 两条路的等价性由 `scripts/verify/tool-registry-parity.mjs` 逐用例断言。
+ * 两条路的等价性由 `scripts/verify/tool-registry-parity.mts` 逐用例断言。
  */
 export function sanitizeToolCall(raw: LlmToolCall, snapshot: PageSnapshot | null): SanitizeOutcome {
   if (useLegacyToolPath()) return sanitizeToolCallLegacy(raw, snapshot);
@@ -1217,6 +1236,7 @@ async function askModel(env: ServerEnv, session: LoopSession, tag: string): Prom
   session.abortCtl = ctl;
   const r = await llmFetch(env, session.messages, {
     tag,
+    userId: session.userId,
     temperature: 0.2,
     timeoutMs: 90_000,
     signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(90_000)]),
@@ -1683,6 +1703,8 @@ function lastToolCall(session: LoopSession): LoopToolCall | null {
 // ---------------------------------------------------------------------------
 
 export interface DecideOnceInput {
+  /** 老的一步接口的登录账号号；测试/旧调用方可不传（退回旧 env 模型）。 */
+  userId?: number;
   goal: string;
   stepsSummary: string[];
   snapshot: PageSnapshot;
@@ -1714,7 +1736,7 @@ export async function decideOnce(env: ServerEnv, input: DecideOnceInput): Promis
   ];
   const fake: LoopSession = {
     id: 'oneshot',
-    userId: 0,
+    userId: input.userId ?? 0,
     agentId: null,
     conversationId: null,
     wcId: null,

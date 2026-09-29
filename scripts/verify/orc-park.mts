@@ -41,6 +41,7 @@ const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('
 const { advance, getLoop, resumeLoop, pauseLoop, startLoop, stopLoop } = req(
   '../../apps/server/src/toolLoop',
 ) as typeof import('../../apps/server/src/toolLoop');
+const { installModelLookup } = req('../../apps/server/src/modelSettings') as typeof import('../../apps/server/src/modelSettings');
 const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
 const { liveJobCount } = req('../../apps/server/src/orchestrator/registry') as typeof import('../../apps/server/src/orchestrator/registry');
 
@@ -170,6 +171,8 @@ async function main(): Promise<void> {
   const pool = makePool('pglite://memory');
   await migrate(pool);
   const cipher = makeCipher(ENV.dataKey);
+  // 和生产 buildApp 一样，给独立的循环验收安装每用户密文模型查询（不关闭缺失查询器的安全闸）。
+  installModelLookup(pool, cipher);
   initOrchestrator({ pool, env: ENV, cipher });
 
   const SPAWN = {

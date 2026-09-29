@@ -14,12 +14,15 @@ import {
   type WatchHandle,
   type WatchSpec,
 } from './wait-watch';
+// ADR-0004 · 浏览器深度 第二片:稳健元素定位(语义定位层,纯 core,注入 JS 单一真源)
+import { semanticResolveExpr } from './semantic-locate';
 import type {
   BrowserAction,
   BrowserActionType,
   DriveActionLabel,
   DriveResult,
   PageSnapshot,
+  SemanticTarget,
   TaskPhase,
   TaskState,
 } from '@ai-workbench/shared';
@@ -84,6 +87,14 @@ const MAX_REASON_LEN = 1_000;
 const MAX_OUTLINE_ITEMS = 100;
 const MAX_FORM_FIELDS = 100;
 const MAX_WAIT_SECONDS = 300;
+/**
+ * P1-2（2026-09-29）· **实际睡眠上限**。
+ *
+ * 原来这里是个散落在 `case 'wait'` 里的字面量 30，而校验用的上限是
+ * MAX_WAIT_SECONDS=300 —— 两个数不一致，导致"模型要 300 秒、实际睡 30 秒、
+ * 回执还说等了 300 秒"。提成常量并让回执按真实值报。
+ */
+const MAX_WAIT_SECONDS_CLAMPED = 30;
 
 export type ActionShapeCheck =
   | { ok: true; action: BrowserAction }
@@ -147,6 +158,36 @@ export function validateBrowserAction(raw: unknown): ActionShapeCheck {
     return { ok: true, v };
   };
 
+  /**
+   * ADR-0004:归一化可选的 `semantic`(语义定位目标)。缺失 = undefined(走老 target 路径);
+   * 给了就必须是「字符串字段对象」且至少一个非空字段(F10 输入校验,复用形状闸)。
+   */
+  const semantic = (): { ok: true; v: SemanticTarget | undefined } | { ok: false; why: string } => {
+    const s = raw.semantic;
+    if (s === undefined) return { ok: true, v: undefined };
+    if (!isPlainObject(s)) {
+      return { ok: false, why: `「${name}」的 semantic 必须是对象（收到 ${typeOf(s)}）` };
+    }
+    const keys = ['id', 'testId', 'ariaLabel', 'name', 'text', 'tag', 'within'] as const;
+    const out: Record<string, string> = {};
+    for (const k of keys) {
+      const v = s[k];
+      if (v === undefined) continue;
+      if (typeof v !== 'string') {
+        return { ok: false, why: `「${name}」的 semantic.${k} 必须是字符串（收到 ${typeOf(v)}）` };
+      }
+      if (v.trim() === '') continue; // 空串/纯空白 = 没给这个字段(不让它「匹配一切」)
+      if (v.length > MAX_TARGET_LEN) {
+        return { ok: false, why: `「${name}」的 semantic.${k} 太长（${v.length} 字，上限 ${MAX_TARGET_LEN}）` };
+      }
+      out[k] = v.trim();
+    }
+    if (Object.keys(out).length === 0) {
+      return { ok: false, why: `「${name}」的 semantic 至少要给一个定位字段（id/testId/ariaLabel/name/text/tag/within）` };
+    }
+    return { ok: true, v: out as SemanticTarget };
+  };
+
   switch (name) {
     case 'open_url': {
       const r = str('url', MAX_URL_LEN);
@@ -154,7 +195,13 @@ export function validateBrowserAction(raw: unknown): ActionShapeCheck {
     }
     case 'click': {
       const r = str('target', MAX_TARGET_LEN);
-      return r.ok ? { ok: true, action: { action: 'click', target: r.v } } : bad(r.why);
+      if (!r.ok) return bad(r.why);
+      const sm = semantic();
+      if (!sm.ok) return bad(sm.why);
+      return {
+        ok: true,
+        action: sm.v ? { action: 'click', target: r.v, semantic: sm.v } : { action: 'click', target: r.v },
+      };
     }
     case 'type': {
       const t = str('target', MAX_TARGET_LEN);
@@ -165,7 +212,14 @@ export function validateBrowserAction(raw: unknown): ActionShapeCheck {
       if (submitRaw !== undefined && typeof submitRaw !== 'boolean') {
         return bad(`「type」的 submit 必须是布尔（收到 ${typeOf(submitRaw)}）`);
       }
-      return { ok: true, action: { action: 'type', target: t.v, text: x.v, submit: Boolean(submitRaw) } };
+      const sm = semantic();
+      if (!sm.ok) return bad(sm.why);
+      return {
+        ok: true,
+        action: sm.v
+          ? { action: 'type', target: t.v, text: x.v, submit: Boolean(submitRaw), semantic: sm.v }
+          : { action: 'type', target: t.v, text: x.v, submit: Boolean(submitRaw) },
+      };
     }
     case 'scroll': {
       const d = raw.direction;
@@ -829,8 +883,58 @@ async function evaluate<T>(wc: Target, expression: string): Promise<T> {
   return res.result?.value as T;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * P1-2 补刀（2026-09-29）· **可取消的 sleep**。
+ *
+ * 原状就是一个裸 setTimeout promise，没有任何办法中途叫停。于是「等 30 秒」
+ * 这个动作一旦开始，就算外面已经决定放弃了，它也会老老实实睡满 30 秒 ——
+ * 期间整条驾驶循环被它堵着，用户点了「暂停」也得等它睡完。
+ *
+ * 取消语义：**提前 resolve（不是 reject）**。这是有意的 ——
+ * 调用方（drive 的 wait 分支）会另外看 signal.aborted 来决定怎么回执，
+ * 让 sleep 抛错只会逼着每一处调用都写 try/catch，而它们本来就要判 aborted。
+ *
+ * @param signal 传入已 aborted 的 signal 会**立即**返回（不排一个定时器）
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    // 取消时也要把定时器清掉：否则进程里会留一个 30 秒的悬空 timer，
+    // 单元测试里表现为「进程不退出」，生产里表现为无谓的句柄占用。
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+/**
+ * 这一步还要不要继续？**可取消执行的唯一判据**。
+ *
+ * 放在这里而不是散在各 case 里，是因为「什么时候算还能救」必须只有一处口径：
+ * 一旦 signal 已 aborted，就**不再产生任何新的页面副作用**。
+ *
+ * ★ 诚实的边界（必须写清楚，别夸大成"能撤销"）：
+ *   信号只能挡住**还没派发出去**的动作。若那一下点击已经通过 CDP 发给浏览器了，
+ *   **没有任何办法把它收回来** —— 本机制的价值在于"决定放弃之后不再继续下手"，
+ *   以及"别再傻等自己发起的等待"，不是"撤销已经发生的点击"。
+ */
+function abortIfRequested(
+  signal: AbortSignal | undefined,
+  actionName: DriveActionLabel,
+): DriveResult | null {
+  if (!signal?.aborted) return null;
+  return {
+    ok: false,
+    action: actionName,
+    // 与 P1-2 的超时回执同属一类：**不确定有没有生效**
+    outcome: 'unknown',
+    error: `这一步在派发前就被取消了（${actionName}）—— 没有产生任何页面副作用。`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -877,7 +981,7 @@ export function browserWatch(
 // ---------------------------------------------------------------------------
 
 const PAGE_HELPERS = `(() => {
-  if (window.__wbHelper && window.__wbHelper.__v === 12) return;
+  if (window.__wbHelper && window.__wbHelper.__v === 13) return;
   /**
    * ★ 第 23 步：**穿透遍历**（这一版最重要的改动）。
    *
@@ -1091,6 +1195,14 @@ const PAGE_HELPERS = `(() => {
    */
   let pickKey = null;
   const pick = (target) => {
+    // ADR-0004:语义定位解析出的元素优先(先解析再操作,同一轮 type 的四个脚本全程盯同一颗)。
+    // 由 typeInto 在给了 semantic 时预解析后写入;没有则回落到老的 findInput 路径。
+    const sem = window.__wbSemanticTarget;
+    if (sem && sem.isConnected) {
+      pickKey = String(target);
+      window.__wbTypeTarget = sem;
+      return sem;
+    }
     const key = String(target);
     const stashed = window.__wbTypeTarget;
     if (pickKey === key && stashed && stashed.isConnected) return stashed;
@@ -1320,7 +1432,7 @@ const PAGE_HELPERS = `(() => {
    * （那只是相对自己那一帧的坐标，点下去会偏到别的元素上）。
    */
   window.__wbHelper = {
-    __v: 12, visible, text, find, findInput, findClickable, pick, fieldOf, sensitiveish, otpish,
+    __v: 13, visible, text, find, findInput, findClickable, pick, fieldOf, sensitiveish, otpish,
     loginish, overlayish, challengeish, pageKey, schemeOf, contentTexts, snapshot,
     absRect, queryDeep, ownerWindow,
   };
@@ -1354,11 +1466,12 @@ async function readSnapshot(wc: Target): Promise<PageSnapshot> {
 }
 
 /** 第 9 步：type/fill_form 的敏感字段守卫——命中就拒填（不依赖模型自觉） */
-async function typeSensitiveGuard(wc: Target, target: string): Promise<string | null> {
+async function typeSensitiveGuard(wc: Target, target: string, semantic?: SemanticTarget): Promise<string | null> {
   const d = await evaluate<FieldDescriptor | null>(
     wc,
     pageScript(`(() => {
-      const el = window.__wbHelper.findInput(${JSON.stringify(target)});
+      // 语义动作必须按**实际将要输入的元素**判断敏感性；旧 target 描述不能代替硬闸。
+      const el = ${semantic ? `${semanticResolveExpr(JSON.stringify(semantic))}.el` : `window.__wbHelper.findInput(${JSON.stringify(target)})`};
       return el ? window.__wbHelper.fieldOf(el) : null;
     })()`),
   );
@@ -1388,11 +1501,12 @@ function failureHint(snap: PageSnapshot | undefined): string {
 }
 
 /** 第 9 步：click 的支付确认守卫——收银台最终确认永远由用户点 */
-async function payClickGuard(wc: Target, target: string): Promise<string | null> {
+async function payClickGuard(wc: Target, target: string, semantic?: SemanticTarget): Promise<string | null> {
   const hit = await evaluate<{ label: string } | null>(
     wc,
     pageScript(`(() => {
-      const el = window.__wbHelper.find(${JSON.stringify(target)});
+      // 语义动作以**真命中的按钮**做支付硬闸，不按旧 target 找另一颗来放行。
+      const el = ${semantic ? `${semanticResolveExpr(JSON.stringify(semantic))}.el` : `window.__wbHelper.find(${JSON.stringify(target)})`};
       return el ? { label: window.__wbHelper.text(el) } : null;
     })()`),
   );
@@ -1449,7 +1563,16 @@ async function navigate(wc: Target, url: string): Promise<void> {
 type ClickOutcome =
   | { kind: 'notfound' }
   | { kind: 'applink'; scheme: string; label: string }
-  | { kind: 'done'; label: string; method: string; hittable: boolean; noChange: boolean };
+  | {
+      kind: 'done';
+      label: string;
+      method: string;
+      hittable: boolean;
+      noChange: boolean;
+      /** ADR-0004:语义定位命中方式(via)+ 描述;没走语义定位时缺省。 */
+      semanticVia?: string;
+      semanticDesc?: string;
+    };
 
 /**
  * click：优先用 CDP 发**真实鼠标事件**（先短距离移动再按下+抬起）点元素中心，最接近真人操作。
@@ -1472,6 +1595,8 @@ async function clickTarget(
   target: string,
   /** 第 4 步：任务循环传入的存活检查；每个鼠标动作发出前复查，暂停即中止本步 */
   shouldAbort?: () => boolean,
+  /** ADR-0004:语义定位目标。给了 = **先按语义解析出元素**再点(抗改版);没给 = 老 findClickable 路径。 */
+  semantic?: SemanticTarget,
 ): Promise<ClickOutcome> {
   const tick = (): void => {
     if (shouldAbort && !shouldAbort()) throw new TaskAborted();
@@ -1485,11 +1610,25 @@ async function clickTarget(
     blockedScheme: string;
     before: string;
     inFrame: boolean;
+    semVia: string | null;
+    semDesc: string | null;
   } | null>(
     wc,
     pageScript(`(() => {
       const H = window.__wbHelper;
-      const el = H.findClickable(${JSON.stringify(target)});
+      let el;
+      let semVia = null;
+      let semDesc = null;
+      ${
+        semantic
+          ? `// ADR-0004:语义定位(先解析)—— 稳定属性优先,文本+tag+结构兜底
+           const __sem = ${semanticResolveExpr(JSON.stringify(semantic))};
+           window.__wbSemanticTarget = __sem.el || null;
+           el = __sem.el;
+           semVia = __sem.via;
+           semDesc = __sem.description;`
+          : `el = H.findClickable(${JSON.stringify(target)});`
+      }
       if (!el) return null;
       const scheme = H.schemeOf(el);
       try { el.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
@@ -1526,6 +1665,7 @@ async function clickTarget(
         blockedScheme: scheme,
         before: H.pageKey(),
         inFrame,
+        semVia, semDesc,
       };
     })()`),
   );
@@ -1567,6 +1707,7 @@ async function clickTarget(
       method: 'cdp-mouse',
       hittable: true,
       noChange: !moved,
+      ...(hit.semVia ? { semanticVia: hit.semVia, semanticDesc: hit.semDesc ?? undefined } : {}),
     };
   }
 
@@ -1575,7 +1716,8 @@ async function clickTarget(
   const done = await evaluate<boolean>(
     wc,
     pageScript(`(() => {
-      const el = window.__wbHelper.findClickable(${JSON.stringify(target)});
+      // ADR-0004:语义定位的兜底 click 也要盯**同一颗**(先解析再操作),不重新按脆 key 挑
+      const el = ${semantic ? `(window.__wbSemanticTarget && window.__wbSemanticTarget.isConnected ? window.__wbSemanticTarget : null)` : `window.__wbHelper.findClickable(${JSON.stringify(target)})`};
       if (!el) return false;
       el.click();
       return true;
@@ -1584,7 +1726,14 @@ async function clickTarget(
   await sleep(1200);
   if (!done) return { kind: 'notfound' };
   const moved = await changed();
-  return { kind: 'done', label: `${hit.tag}「${hit.label}」`, method: 'page-el.click', hittable: false, noChange: !moved };
+  return {
+    kind: 'done',
+    label: `${hit.tag}「${hit.label}」`,
+    method: 'page-el.click',
+    hittable: false,
+    noChange: !moved,
+    ...(hit.semVia ? { semanticVia: hit.semVia, semanticDesc: hit.semDesc ?? undefined } : {}),
+  };
 }
 
 /**
@@ -1605,10 +1754,33 @@ async function typeInto(
   submit: boolean,
   /** 第 4 步：任务循环传入的存活检查；每个键盘/写入动作发出前复查，暂停即中止本步 */
   shouldAbort?: () => boolean,
-): Promise<{ ok: true; label: string; method: string } | { ok: false; reason: string }> {
+  /** ADR-0004:语义定位目标。给了 = 先按语义解析出**输入框**并缓存,后续 pick 全程盯同一颗。 */
+  semantic?: SemanticTarget,
+): Promise<{ ok: true; label: string; method: string; semanticVia?: string } | { ok: false; reason: string }> {
   const tick = (): void => {
     if (shouldAbort && !shouldAbort()) throw new TaskAborted();
   };
+  // ADR-0004:先解析 —— 给了 semantic 就先按语义把输入框解析出来并写入 window.__wbSemanticTarget,
+  // 之后 pick(找框/读回/三写)优先认它,同一轮盯住同一颗(不再中途按脆 key 换目标)。
+  // 语义目标没解析到就停（不能回落脆 target 猜输入框）；老 type 无 semantic 仍走旧 pick。
+  let semanticVia: string | undefined;
+  if (semantic) {
+    const r = await evaluate<{ found: boolean; via: string } | null>(
+      wc,
+      pageScript(`(() => {
+        const r = ${semanticResolveExpr(JSON.stringify(semantic))};
+        // type 只可命中真输入框：语义文本相同的按钮/链接不许被当作输入目标。
+        const el = r.el && r.el.matches && r.el.matches('input, textarea, [contenteditable="true"], [role="textbox"]') ? r.el : null;
+        window.__wbSemanticTarget = el;
+        return { found: !!el, via: el ? r.via : 'none' };
+      })()`),
+    );
+    if (!r?.found || r.via === 'none') return { ok: false, reason: '语义输入框没找到（未回落旧选择器，未输入）' };
+    semanticVia = r.via;
+  } else {
+    // 上一个语义动作的缓存不能污染后来未带 semantic 的旧 type。
+    await evaluate(wc, pageScript('(() => { window.__wbSemanticTarget = null; return true; })()'));
+  }
   const found = await evaluate<{ tag: string; label: string; x: number; y: number } | null>(
     wc,
     pageScript(`(() => {
@@ -1802,7 +1974,7 @@ async function typeInto(
     }
   }
 
-  return { ok: true, label: `${found.tag}「${found.label}」`, method };
+  return { ok: true, label: `${found.tag}「${found.label}」`, method, ...(semanticVia ? { semanticVia } : {}) };
 }
 
 /**
@@ -1926,7 +2098,21 @@ async function captureScreenshot(wc: Target): Promise<string> {
 // ---------------------------------------------------------------------------
 
 /** 传入一个动作 → 在内嵌页执行 → 返回 { ok, pageSnapshot } */
-export async function drive(action: BrowserAction, targetWebContentsId?: number): Promise<DriveResult> {
+/**
+ * @param signal 可选取消信号（P1-2 补刀，2026-09-29）。
+ *   传入后：① 一开始就已取消则直接返回、不碰页面；
+ *           ② 派发每个动作**之前**再查一次，取消了就当场返回（不下手）；
+ *           ③ 自己发起的等待（wait / 各类 settle sleep）可被中途叫停。
+ *   不传则行为与之前完全一致（三个既有调用方无需改动）。
+ *
+ *   ★ 挡不住的是「已经派发出去的那一下」——CDP 发出去就收不回来。
+ *     这条机制保证的是「决定放弃之后不再继续下手」，不是「撤销已发生的点击」。
+ */
+export async function drive(
+  action: BrowserAction,
+  targetWebContentsId?: number,
+  signal?: AbortSignal,
+): Promise<DriveResult> {
   /**
    * ★ 形状闸：先把"这到底是不是一个合法动作"查清楚，再谈执行。
    *
@@ -1949,6 +2135,11 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
   action = check.action;
 
   const actionName = action.action;
+
+  // P1-2 补刀：一开始就已取消 → 直接返回，**不解析目标、不碰页面**。
+  // 放在形状闸之后：非法动作仍然要报"动作不合法"，不能报成"已取消"（那会误导排查）。
+  const earlyAbort = abortIfRequested(signal, actionName);
+  if (earlyAbort) return earlyAbort;
 
   // 第 22 步：**先解析目标**（没点名 / 页没了都当场报错），因为下面的暂停门是按 target 判的
   // —— 先知道是哪张页，才谈得上它有没有被按住。
@@ -1973,6 +2164,11 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
   }
 
   try {
+    // P1-2 补刀：**派发前最后一道闸**。到这里目标已解析、暂停门已过，
+    // 再往下就是真正会产生页面副作用的动作了。取消请求必须在这里生效。
+    const preAbort = abortIfRequested(signal, actionName);
+    if (preAbort) return preAbort;
+
     /** 补充说明（例如 type 实际用了哪种写入方式），会一路带到调试区 */
     let detail: string | undefined;
     /** 第 17 步：动作做了但页面没动（点了几次都没反应时给「原因 + 下一步」） */
@@ -1985,7 +2181,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         break;
       }
       case 'click': {
-        const pay = await payClickGuard(wc, action.target); // 第 9 步：支付最终确认不代点
+        const pay = await payClickGuard(wc, action.target, action.semantic); // 第 9 步：按**实际语义命中的元素**守支付闸
         if (pay) {
           // 第 28 步：带 `risk` 标记 —— 驾驶循环见此标记**必定**停下来申报（不再靠模型自觉）
           return {
@@ -1996,7 +2192,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
             pageSnapshot: await readSnapshot(wc),
           };
         }
-        const hit = await clickTarget(wc, action.target);
+        const hit = await clickTarget(wc, action.target, undefined, action.semantic);
         if (hit.kind === 'notfound') {
           // 第 16 步：click 是最常见的失败，必须给「可能原因 + 一个下一步」，
           // 不能只甩一句「没找到」——那会让模型/用户都只能干瞪眼。
@@ -2025,11 +2221,14 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         detail = hit.hittable
           ? `已用真实鼠标点击 ${hit.label}`
           : `点击了 ${hit.label}（该元素不在视口内，真实鼠标点不到，改用页面侧 click()）`;
+        if (hit.kind === 'done' && hit.semanticVia) {
+          detail += `（语义定位：${hit.semanticVia}${hit.semanticDesc ? ` · ${hit.semanticDesc}` : ''}）`;
+        }
         if (hit.noChange) detail += '；页面暂时没有可见变化';
         break;
       }
       case 'type': {
-        const guard = await typeSensitiveGuard(wc, action.target); // 第 9 步：敏感字段不代填
+        const guard = await typeSensitiveGuard(wc, action.target, action.semantic); // 第 9 步：按**实际语义命中的框**守敏感闸
         if (guard) {
           // 第 28 步：`risk` 标记 ⇒ 驾驶循环必定停下来申报，不再只是"一次失败"
           return {
@@ -2040,7 +2239,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
             pageSnapshot: await readSnapshot(wc),
           };
         }
-        const result = await typeInto(wc, action.target, action.text, Boolean(action.submit));
+        const result = await typeInto(wc, action.target, action.text, Boolean(action.submit), undefined, action.semantic);
         if (!result.ok) {
           const snap = await readSnapshot(wc);
           return {
@@ -2053,6 +2252,7 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         // R2（2026-09-22）：写入值只记长度、不记原文 —— detail 会拼进步骤摘要（落库/上屏），
         // 还会随回执进服务端消息历史（之后每轮都发给模型）。
         detail = `已向 ${result.label} 写入 ${[...action.text].length} 个字符（方式：${result.method}）`;
+        if (result.semanticVia) detail += `（语义定位：${result.semanticVia}）`;
         break;
       }
       case 'scroll': {
@@ -2061,8 +2261,35 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         break;
       }
       case 'wait': {
-        await sleep(Math.min(Math.max(action.seconds, 0), 30) * 1000);
-        detail = `等待了 ${action.seconds}s`;
+        /**
+         * P1-2 修复（2026-09-29）· **不再谎报等待时长**。
+         *
+         * 原状：detail 报的是**模型要求的**秒数（模板串里直接取 action.seconds），
+         * 而实际睡眠被上一行截到 30 秒。模型要 300 秒时，回执写"等待了 300s"，
+         * 实际只等了 30 秒 —— 这句假话直接进模型上下文，它会据此判断"已经等够了"，
+         * 于是在页面还没加载完时就去点下一步。
+         *
+         * 现在报**真实等了的**秒数，并且超过上限时如实说明被截断了。
+         */
+        const asked = action.seconds;
+        const actual = Math.min(Math.max(asked, 0), MAX_WAIT_SECONDS_CLAMPED);
+        // P1-2 补刀：等待本身可被中途叫停。被叫停时如实说"只等了这么多"，
+        // 不许继续说"等待了 Ns"（那又是一句对模型的假话）。
+        const startedAt = Date.now();
+        await sleep(actual * 1000, signal);
+        const waitedSec = (Date.now() - startedAt) / 1000;
+        if (signal?.aborted) {
+          return {
+            ok: false,
+            action: actionName,
+            outcome: 'unknown',
+            error: `等待被取消了：原定等 ${actual}s，实际只等了 ${waitedSec.toFixed(1)}s。不确定页面后来变成什么样，先 read_page 确认。`,
+          };
+        }
+        detail =
+          actual < asked
+            ? `等待了 ${actual}s（要求 ${asked}s，本机单次等待上限 ${MAX_WAIT_SECONDS_CLAMPED}s，已按上限执行）`
+            : `等待了 ${actual}s`;
         break;
       }
       case 'read_page': {

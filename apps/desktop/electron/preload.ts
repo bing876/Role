@@ -24,7 +24,10 @@ const bridge: WorkbenchBridge = {
   appVersion: process.env.npm_package_version ?? '0.1.0',
   // ★ 渲染层据此把后端地址定为 http://127.0.0.1:8787（缺失会被误判成 web 直测模式 → 连不上后端）
   isElectron: true,
+  isPackaged: process.argv.includes('--workbench-packaged'),
   ping: () => ipcRenderer.invoke('app:ping'),
+  serverStatus: () => ipcRenderer.invoke('workbench:server:status'),
+  createLocalAccount: (password: string) => ipcRenderer.invoke('workbench:auth:onboarding', password),
 
   // ---- 内嵌浏览器区域：渲染进程只发指令，显示/隐藏由主进程转发回来决定 ----
   openBrowser: (url?: string) => ipcRenderer.invoke('workbench:open', url),

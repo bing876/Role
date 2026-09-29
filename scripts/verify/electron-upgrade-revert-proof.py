@@ -3,10 +3,12 @@
 把「升级真的发生了/声明真的改了」分别拆掉,验收必须当场红。
 
 当前片:第六片(42→44,43–44 合并到最新稳定),回退目标 = 第五片装后版本 42.11.8。
-  M1  装后版本回退(node_modules/electron 实际版本改回 42.x,声明仍是 ^44)
+  M1  装后版本回退(node_modules/electron 实际版本改回 42.x,声明仍精确锁 44.4.5)
       → 红在「装后版本核对」—— 证明验收查的是**装上的版本**,不是声明。
   M2  声明回退(apps/desktop/package.json 改回 ^42.11.8)
-      → 红在「声明核对」—— 证明验收查的是 package.json 声明,没被 lock/缓存绕过。
+      → 红在「声明核对」—— 证明精确声明没被 lock/缓存绕过。
+  M3  builder 的 electronVersion 回退到 42.11.8
+      → 红在「声明核对」—— 证明声明、实装与生成安装包的版本三处不能各玩各的。
 
   (webview 红线本身的反证由既有 app-shell-smoke-revert.py R1–R4 承担,不重复造。)
 
@@ -38,7 +40,7 @@ DECLARED = REPO / 'apps' / 'desktop' / 'package.json'
 MUTATIONS = [
     {
         'id': 'M1',
-        'name': '装后版本回退(node_modules/electron 改回上一片 42.x,声明仍 ^44)',
+        'name': '装后版本回退(node_modules/electron 改回上一片 42.x,声明仍精确锁 44.4.5)',
         'target': INSTALLED,
         'mutate': lambda pj: (pj.update(version='42.11.8'), pj)[1],
         'expect': '装后版本核对',
@@ -48,7 +50,14 @@ MUTATIONS = [
         'name': '声明回退(apps/desktop/package.json 改回 ^42.11.8)',
         'target': DECLARED,
         'mutate': lambda pj: (pj['devDependencies'].update(electron='^42.11.8'), pj)[1],
-        'expect': '声明核对',
+        'expect': '声明须精确锁到已安装的 Electron 版本',
+    },
+    {
+        'id': 'M3',
+        'name': '打包 Electron 目标回退到 42.11.8（安装包跟实际依赖分叉）',
+        'target': DECLARED,
+        'mutate': lambda pj: (pj['build'].update(electronVersion='42.11.8'), pj)[1],
+        'expect': 'electron-builder 目标须与安装版本一致',
     },
 ]
 

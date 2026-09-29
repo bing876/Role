@@ -21,6 +21,9 @@ export interface ServerEnv {
   smsMock: boolean;
   smsHttpUrl: string;
   isProduction: boolean;
+  /** 仅安装包本地 PGlite：首跑一次性建号，不经渲染层暴露的每进程启动随机口令。 */
+  localMode?: boolean;
+  localBootstrapSecret?: string;
   /** 第 6 步：DeepSeek 流式聊天。key 只允许存在这里（apps/server/.env），缺失不拒启——/chat/stream 自己拒答 */
   deepseekApiKey: string;
   deepseekBaseUrl: string;
@@ -37,6 +40,22 @@ export interface ServerEnv {
    *   配置项 AGENT_LOOP_MAX_STEPS。
    */
   agentLoopMaxSteps: number;
+  /**
+   * 2026-09-29 对抗性审查新增：XYZ 号 + 密码登录的**失败锁定**口径。
+   *
+   * 为什么需要可配：这两个值是拍脑袋定的（10 次 / 15 分钟），没有真实数据支撑。
+   *   而它们的副作用是**真用户连错 N 次会被锁 cooldownMs**。配歪了要么形同虚设、
+   *   要么把自己锁在门外。做成配置项，运维/用户能按自己的承受度调，不用改代码重打包。
+   *
+   * 区间（用 intIn 夹住，配成 0/负数/天文数字都回退默认）：
+   *   · maxFails   1~100，默认 10
+   *   · cooldownMs 1000~3600000（1 秒~1 小时），默认 900000（15 分钟）
+   *   配 cooldownMs = 1000 相当于「几乎不锁」——允许，但那是用户自己的选择。
+   *
+   * 配置项：LOGIN_MAX_FAILS / LOGIN_COOLDOWN_MS。
+   */
+  loginMaxFails: number;
+  loginCooldownMs: number;
   /**
    * 第 26 步：联网搜索（Tavily）。key 只允许存在这里（apps/server/.env）。
    *
@@ -281,6 +300,15 @@ export function loadEnv(): ServerEnv {
 
   const isProduction = (process.env.NODE_ENV || 'development').trim() === 'production';
   const smsMock = process.env.SMS_MOCK === '1' || process.env.SMS_MOCK === 'true' || !isProduction;
+  const localMode = process.env.WORKBENCH_LOCAL_MODE === '1';
+  const localBootstrapSecret = (process.env.WORKBENCH_BOOTSTRAP_SECRET || '').trim();
+  // 本地一次性建号只供安装包生产态 + 本机 PGlite 使用。弱/缺密钥直接拒绝启动。
+  if (localMode && (!isProduction || !databaseUrl.startsWith('pglite://') || smsMock || !/^[0-9a-f]{64}$/.test(localBootstrapSecret))) {
+    throw new Error('安装包本地模式必须使用生产态 PGlite、关闭模拟短信并设置随机首跑口令');
+  }
+  const deepseekApiKey = (process.env.DEEPSEEK_API_KEY || (process.env.ENABLE_DEV_MOCK_LLM === '1' ? 'mock' : '')).trim();
+  if (localMode && (deepseekApiKey === 'mock' || deepseekApiKey.startsWith('mock:')))
+    throw new Error('安装包本地模式不能启用模拟模型；请在设置中配置真实密钥');
   const smsHttpUrl = (process.env.SMS_HTTP_URL || '').trim();
   if (isProduction && !smsMock && !smsHttpUrl) {
     console.warn(
@@ -298,10 +326,14 @@ export function loadEnv(): ServerEnv {
     smsMock,
     smsHttpUrl,
     isProduction,
-    deepseekApiKey: (process.env.DEEPSEEK_API_KEY || (process.env.ENABLE_DEV_MOCK_LLM === '1' ? 'mock' : '')).trim(),
+    localMode,
+    localBootstrapSecret: localMode ? localBootstrapSecret : undefined,
+    deepseekApiKey,
     deepseekBaseUrl: (process.env.DEEPSEEK_BASE_URL || '').trim() || 'https://api.deepseek.com',
     deepseekModel: (process.env.DEEPSEEK_MODEL || '').trim() || 'deepseek-chat',
     agentLoopMaxSteps: resolveAgentLoopMaxSteps(process.env.AGENT_LOOP_MAX_STEPS),
+    loginMaxFails: intIn(process.env.LOGIN_MAX_FAILS, 10, 1, 100),
+    loginCooldownMs: intIn(process.env.LOGIN_COOLDOWN_MS, 15 * 60_000, 1_000, 60 * 60_000),
     tavilyApiKey: (process.env.TAVILY_API_KEY || '').trim(),
     tavilyBaseUrl: (process.env.TAVILY_BASE_URL || '').trim() || 'https://api.tavily.com',
     orch: resolveOrchestratorEnv(process.env),

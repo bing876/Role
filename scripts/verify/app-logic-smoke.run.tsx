@@ -101,6 +101,8 @@ const emitAgent = (p: Record<string, unknown>): void => {
 const bridge = new Proxy(
   {
     isElectron: false,
+    // 新桥属性是布尔常量：Proxy 的方法兜底不能误判成安装包。
+    isPackaged: false,
     apiBase: () => '',
     token: () => null,
     getSettings: async () => ({
@@ -136,6 +138,10 @@ const bridge = new Proxy(
     loopGoneChoice: async (wcId: number, choice: string) => {
       bridgeCalls.push(`loopGoneChoice(${wcId}, ${choice})`);
     },
+    resumeTask: async (wcId: number) => {
+      bridgeCalls.push(`resumeTask(${wcId})`);
+    },
+    /** A①：「继续」= 走主进程 `resumeTask`（先读真实页 → 服务端解挂 → 原地接上） */
     resumeTask: async (wcId: number) => {
       bridgeCalls.push(`resumeTask(${wcId})`);
     },
@@ -290,6 +296,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/auth/sms/send') {
     return json({ ok: true });
   }
+  if (path === '/auth/onboarding') return json({ available: false, local: false }); // web 直测无本机首跑
   if (path === '/auth/me') {
     if (authMeFails) return new Response(JSON.stringify({ error: 'token 过期' }), { status: 401, headers: { 'content-type': 'application/json' } });
     const meBody = { user: { id: 1, phone: '13800000000', xyz: '', has_password: hasPassword }, project: PROJECT, agents: [{ id: 97, name: '小助' }] };
@@ -422,6 +429,7 @@ const { act } = await import('react-dom/test-utils');
 const { createRoot } = await import('react-dom/client');
 const React = (await import('react')).default;
 const App = (await import('../../apps/desktop/src/App')).default;
+const { avatarStateOf } = await import('../../apps/desktop/src/App');
 const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge');
 const { useMemory } = await import('../../apps/desktop/src/features/memory');
 const { useBrowserGlue } = await import('../../apps/desktop/src/app/browserGlue');
@@ -512,6 +520,19 @@ function click(el: Element | null, label: string): void {
   assert.ok(el, `找不到可点的元素：${label}`);
   el.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
 }
+/**
+ * B1：设置抽屉默认收起 —— 账号 / 密码 / 浏览器参数 / 保活 / 退出登录 都收在抽屉里。
+ *   访问它们之前必须先点「设置」开关，等 `.settingsDrawer__panel`（含 `.account`）渲染出来。
+ */
+async function openSettings(): Promise<void> {
+  const toggle = qa('button.settingsDrawer__toggle')[0];
+  assert.ok(toggle, '找不到「设置」抽屉开关（button.settingsDrawer__toggle）');
+  await act(async () => {
+    toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await waitFor('设置抽屉面板出现', () => q('.settingsDrawer__panel') !== null);
+}
 const requestsTo = (path: string): Req[] => requests.filter((r) => r.path === path);
 
 log('');
@@ -598,8 +619,10 @@ await check('删掉一条：走 DELETE /knowledge/11，列表立刻少一条，�
 });
 
 await check('登出把这套状态清干净（列表清空 + 面板收起）', async () => {
-  // 先确保面板是开着的（上一条删完还开着）
+  // 先确保面板是开着的（上一条删完还开着）—— 知识库不进设置抽屉，仍常显
   assert.ok(q('.knowledgePanel'), '面板应该还开着');
+  // B1：退出登录收进设置抽屉（默认收起）→ 先开抽屉
+  await openSettings();
   // 找到登出按钮（左栏账号小块里的「退出登录」）
   const logout = qa('aside.sidebar button').find((b) => /退出登录|登出/.test(b.textContent ?? ''));
   assert.ok(logout, '找不到登出按钮');
@@ -853,20 +876,32 @@ log('--- ⑤ 项目：列表 / 切换（名单与资料一起换）/ 新建 ---'
 /** 项目面板的展开按钮（文案里带「项目」二字） */
 const projectToggle = (): Element | null => qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('项目')) ?? null;
 
-await check('项目面板列出两个项目，当前那个标着「使用中」', async () => {
-  click(projectToggle(), '项目面板入口');
-  await flush(3);
-  const rows = qa('.projectBox__row');
-  assert.equal(rows.length, 2, `项目行数不对：${rows.length}`);
-  const on = qa('.projectBox__row').filter((r) => r.className.includes('contact--on'));
+await check('★ B4：项目切换 = 原生 <select>，列出两个项目、当前那个标「使用中」', async () => {
+  const sel = q('.projectBox__select') as HTMLSelectElement | null;
+  assert.ok(sel, '项目下拉（<select>）不见了（B4：项目切换应为下拉）');
+  // ★ R1 门禁：DOM 元素一律不进断言库（失败时 jsdom 环形图会 OOM）—— 用 sameNode 比「是不是 null」
+  sameNode(q('.projectBox__row'), null, '旧的「项目行」按钮还在（B4 该换成 <select> 了）');
+  const opts = qa('.projectBox__select option');
+  assert.equal(opts.length, 2, `项目选项数不对：${opts.length}`);
+  const on = opts.filter((o) => (o.textContent ?? '').includes('使用中'));
   assert.equal(on.length, 1, `「使用中」的项目应当只有一个：${on.length}`);
   assert.match(on[0].textContent ?? '', /默认项目/, `使用中的不是 7 号：${on[0].textContent}`);
+  assert.equal(sel.value, '7', `下拉选中值应是当前项目（7 号）：${sel.value}`);
 });
 
-await check('点 8 号项目 → POST /projects/8/activate（body {}），随后按新项目重拉名单与资料', async () => {
+/** 选下拉里的某个项目（React 受控 <select>：走原生 value setter + change 事件） */
+const selectProject = async (id: string): Promise<void> => {
+  const sel = q('.projectBox__select') as HTMLSelectElement;
+  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value')!.set!;
+  await act(async () => {
+    setter.call(sel, id);
+    sel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  });
+};
+
+await check('下拉选 8 号项目 → POST /projects/8/activate（body {}），随后按新项目重拉名单与资料', async () => {
   const before = requests.length;
-  const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '8');
-  click(row ?? null, '8 号项目');
+  await selectProject('8');
   await waitFor('发出 activate', () => requests.some((r) => r.path === '/projects/8/activate'));
   await flush(4);
   const act = requests.filter((r) => r.path === '/projects/8/activate').pop()!;
@@ -933,9 +968,7 @@ await check('新建项目 → POST /projects（body 带名字）→ 进入新项
 await check('★ F2-③：切换项目失败时，失败进专门的红色槽（成功槽保持干净）', async () => {
   activateFails = true;
   const before = requestsTo('/projects/7/activate').length;
-  const row = qa('.projectBox__row').find((r) => r.getAttribute('data-project-id') === '7');
-  assert.ok(row, '找不到「默认项目」那一行（7 号）');
-  click(row, '7 号项目（这一次服务端会拒绝）');
+  await selectProject('7');
   await waitFor('发出 activate（失败那一次）', () => requestsTo('/projects/7/activate').length > before);
   await flush(4);
   activateFails = false;
@@ -1007,10 +1040,10 @@ await check('改密码：首次设置只送新密码，成功后页面上真的�
   const root = await mountApp(true);
   await waitFor('离开登录页', () => q('.authWrap') === null);
   /**
-   * ★ 「我的号」那一块在 `{curAgent && (…)}` 里（与记忆/资料同一个面板），
-   *   所以要等名单拉回来、有当前智能体之后，密码输入框才存在。
+   * ★ B1：「我的号」（含密码输入框）收进设置抽屉（默认收起）→ 先开抽屉，
+   *   等 `.settingsDrawer__panel`（含 `.account`）渲染出来。
    */
-  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  await openSettings();
   const setVal = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
   const newInput = qa('input[placeholder="新密码（≥8 位）"]')[0];
   assert.ok(newInput, '找不到新密码输入框');
@@ -1035,7 +1068,7 @@ await check('改密码：首次设置只送新密码，成功后页面上真的�
 await check('改密码（已设过）：必须带原密码 —— 不带就会被服务端挡下并显示原因', async () => {
   const root = await mountApp(true);
   await waitFor('离开登录页', () => !onLoginScreen() && !onCheckingScreen());
-  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  await openSettings(); // B1：密码输入框在设置抽屉里
   const setVal = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
   const oldInput = qa('input[placeholder="原密码"]')[0];
   const newInput = qa('input[placeholder="新密码（≥8 位）"]')[0];
@@ -1122,16 +1155,16 @@ await check('F3-A2：坏负载不许覆盖上一次的好状态（暂停横幅�
   bridgeMode.getTaskState = 'ok';
   const root = await mountApp(true);
   await ensure('App 起来（侧栏在）', () => !!q('aside.sidebar'));
-  assert.ok(!doc.body.textContent!.includes('你主动接管'), '前提不成立：一开始就有接管横幅');
-  // 好负载 → 横幅出现
+  assert.ok(!doc.body.textContent!.includes('你在操作'), '前提不成立：一开始就有接管横幅');
+  // 好负载 → 横幅出现（形态片·真接管：by=user 的暂停态文案 = 「你在操作」）
   emitBridge('state', JSON.stringify({ phase: 'paused', detail: '页面归你', step: 1, blocked: false, pausedBy: 'user' }));
   await flush(3);
-  assert.match(doc.body.textContent ?? '', /你主动接管/, '正常广播没生效（防白屏把正常路径也挡了）');
+  assert.match(doc.body.textContent ?? '', /你在操作/, '正常广播没生效（防白屏把正常路径也挡了）');
   // 坏负载（合法 JSON 但是 null / 缺字段）→ 横幅必须还在（状态没被清掉、也没崩）
   emitBridge('state', 'null');
   emitBridge('state', JSON.stringify({ detail: '没有 phase' }));
   await flush(3);
-  assert.match(doc.body.textContent ?? '', /你主动接管/, '坏负载把好状态覆盖掉了（应当忽略坏值，保持上一次的值）');
+  assert.match(doc.body.textContent ?? '', /你在操作/, '坏负载把好状态覆盖掉了（应当忽略坏值，保持上一次的值）');
   assert.ok(q('aside.sidebar'), '坏负载把整页搞崩了');
   await act(async () => root.unmount());
 });
@@ -1241,7 +1274,7 @@ await check('登出：退出登录 → 回登录页 + 清 token + 清主进程�
     }));
     throw e;
   }
-  await waitFor('「我的号」面板出现', () => q('.account') !== null);
+  await openSettings(); // B1：退出登录在设置抽屉里
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await waitFor('回到登录页', onLoginScreen);
   assert.ok(!dom.window.localStorage.getItem('workbench.token'), '登出后 token 还在本地');
@@ -1411,9 +1444,25 @@ async function typeIntoInput(text: string): Promise<void> {
   await flush(2);
 }
 
-/** 点「发送」（文案有 发送 / 发送补充 / 打字中… 三种） */
-const clickSend = (): void =>
-  click(qa('.inputbar button').find((b) => /发送/.test(b.textContent ?? '')) ?? null, '发送');
+/**
+ * 点「发送」。
+ *
+ * 交互对齐片(2026-09-26)之后文案只有两种：`发送` 与 `停止`（执行中发送键变「停止」）。
+ * 所以：
+ *   · 有「发送」键 → 点它（正常路径）；
+ *   · 只剩「停止」键 → 说明循环正在跑，这时**真实用户是按回车**发消息的（按钮已经是停止），
+ *     这里就走同一条路（dispatch 一个 Enter keydown），而不是去点「停止」把任务停掉。
+ */
+const clickSend = (): void => {
+  const btn = qa('.inputbar button').find((b) => /发送/.test(b.textContent ?? ''));
+  if (btn) {
+    click(btn, '发送');
+    return;
+  }
+  const field = q('.inputbar-field') as HTMLInputElement | null;
+  assert.ok(field, '既没有「发送」键、也找不到输入框');
+  field!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+};
 
 /**
  * 聊天区里那条**正在打字**的助手气泡（`.caret` 是它的标志）。
@@ -1499,13 +1548,16 @@ await check('片 7b·③ 智能体的步骤逐条显示（新一轮先清空上�
   );
 });
 
-await check('片 7b·④ 任务卡出现（服务端给了循环号 → 「AI 任务执行中」+ 真的发车）', async () => {
+await check('片 7b·④ 执行状态出现（服务端给了循环号 → 轻量状态行 + 真的发车）', async () => {
   bridgeCalls.length = 0;
   ssePush('meta', { conversationId: 4243, agentId: 97 });
   ssePush('loop', { loopId: 'loop-77', wcId: 7777 });
   await flush(4);
-  const card = qa('.taskState').find((n) => (n.textContent ?? '').includes('AI 任务执行中'));
-  assert.ok(card, '服务端给了循环号，界面上却没有「AI 任务执行中」那张任务卡');
+  /**
+   * 交互对齐片(2026-09-26)：判据从「AI 任务执行中」那张卡换成**轻量状态行** ——
+   * 用户要的是「执行中主对话流不出现步骤墙，只有一条状态」，所以这里查结构不查文案。
+   */
+  assert.ok(q('.runStatus') !== null, '服务端给了循环号，界面上却没有执行中的轻量状态行');
   assert.ok(
     bridgeCalls.some((c) => c.startsWith('agentStart(') && c.includes('loop-77') && c.includes('wc=7777')),
     `没真的把活派给主进程：${JSON.stringify(bridgeCalls)}`,
@@ -1514,8 +1566,8 @@ await check('片 7b·④ 任务卡出现（服务端给了循环号 → 「AI �
   sseEnd();
   await waitRoundEnd();
   assert.ok(
-    !qa('.taskState').some((n) => (n.textContent ?? '').includes('AI 任务执行中')),
-    '这一轮已经收尾，任务卡还挂着（用户会以为任务还在跑）',
+    q('.runStatus') === null,
+    '这一轮已经收尾，执行状态行还挂着（用户会以为任务还在跑）',
   );
 });
 
@@ -1635,16 +1687,19 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
   ssePush(null, { delta: '好，我开始处理这个长任务。' });
   await flush(3);
   // 前置：这一轮**确实在跑**（否则下面那些"不许露"的断言全都在测空气）
-  assert.match(q('.chat')?.textContent ?? '', /AI 任务执行中/, '前置不成立：任务卡没出现');
+  // 交互对齐片(2026-09-26)：执行中的判据从「AI 任务执行中」那张卡改成**轻量状态行**
+  assert.ok(q('.runStatus') !== null, '前置不成立：执行中的轻量状态行没出现');
   /**
    * ★ 先取出**标量**再断言（R1 门禁：DOM 元素不许进断言库 —— 失败时 Node 去 inspect
    *   jsdom 的环形巨图会 OOM 137，连哪条红了都看不到）。`?.textContent` 这种可选链
    *   不在门禁的值取值白名单里，所以这里先落到局部变量，别跟门禁绕。
    */
   const preBtnText = q('.inputbar button')?.textContent ?? '';
-  assert.equal(preBtnText, '发送补充', '前置不成立：输入框没进「发送补充」');
+  // 形态片·真接管(2026-09-27)：执行中发送键从「停止」改名「接管」（同一暂停机制）
+  assert.equal(preBtnText, '接管', '前置不成立：执行中发送键应变「接管」');
 
-  // 流还开着就登出
+  // 流还开着就登出（B1：退出登录在设置抽屉里，先开抽屉）
+  await openSettings();
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await flush(4);
   assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
@@ -1670,8 +1725,8 @@ await check('★ F5：流式进行中登出 → 重新登录，上一轮的「�
   await flush(4);
 
   assert.ok(
-    !(q('.chat')?.textContent ?? '').includes('AI 任务执行中'),
-    '上一轮的「AI 任务执行中」卡片露出来了（F5 复发：登出没清循环号）',
+    q('.runStatus') === null && q('.runTrace') === null,
+    '上一轮的执行状态/轨迹抽屉露出来了（F5 复发：登出没清循环号）',
   );
   const btnText = q('.inputbar button')?.textContent ?? '';
   assert.equal(btnText, '发送', `输入框按钮还停在上一轮（F5 复发：登出没清流式态）：${btnText}`);
@@ -1904,7 +1959,15 @@ await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.t
   assert.ok(!app.includes('function AgentGuide('), 'AgentGuide 还定义在 App.tsx（M8\' 没搬?）');
   assert.ok(!/const SETTINGS_FALLBACK/.test(app), 'SETTINGS_FALLBACK 还定义在 App.tsx（M8\' 没搬?）');
   assert.ok(app.includes("AuthScreen, useAuth } from './features/auth'"), 'App 没从 features/auth 引 AuthScreen');
-  assert.ok(app.includes("CollabCard, PersonaChips, isCollabMessage, useChat } from './features/chat'"), 'App 没从 features/chat 引 C1 chips / C3 折叠卡');
+  /**
+   * ★ 交互对齐片：这里原来咬**整串字面量**（`CollabCard, PersonaChips, …`），
+   *   加一个 MarkdownText 就假红 —— 断言的本意是「这几个东西都从 features/chat 引」，
+   *   所以改成逐个名字检查（更严：少引任何一个都红）。
+   */
+  const chatImportLine = app.split('\n').find((l) => l.includes("from './features/chat'")) ?? '';
+  for (const need of ['CollabCard', 'PersonaChips', 'isCollabMessage', 'useChat', 'MarkdownText']) {
+    assert.ok(chatImportLine.includes(need), `App 没从 features/chat 引 ${need}`);
+  }
   const chatImport = app.split('\n').find((l) => l.includes("from './features/chat'")) ?? '';
   assert.ok(!chatImport.includes('AgentGuide'), 'App 还在从 features/chat 引 AgentGuide（C1 已删）');
   assert.ok(!/<AgentGuide[\s/>]/.test(app), 'App.tsx 还在渲染 <AgentGuide/>（C1 已删）');
@@ -1923,6 +1986,7 @@ await check('⑮-1 M8\' 红线：三块代码已在新家且接线完整（App.t
 await check('⑮-2 M8\' 行为：登录页搬走后 ⚡ 快捷登录照旧走真两跳（sms/send + login/sms）进工作台', async () => {
   const root = await mountApp(true);
   await waitFor('静默登录完成', () => !onLoginScreen() && !onCheckingScreen());
+  await openSettings(); // B1：退出登录在设置抽屉里
   click(qa('button').find((b) => (b.textContent ?? '').includes('退出登录')) ?? null, '退出登录');
   await flush(4);
   assert.ok(onLoginScreen(), '点了退出登录却没回到登录页');
@@ -2027,6 +2091,567 @@ await check('⑱-1 F:连开页到全局上限 → 拒绝新开+话说明白,已�
   assert.ok((q('.chatNote')?.textContent ?? '').includes('到上限'), '到上限没有一句话说明（用户只会觉得"点了没反应"）');
   await act(async () => root.unmount());
 });
+
+/**
+ * ===========================================================================
+ * ⑲ 交互对齐片（2026-09-26）—— 对齐市面 AI 工具的输出内容 + 会话交互
+ *
+ * 用户定的目标态（逐条都要有断言）：
+ *   ① 执行中主对话流**不出现步骤墙**；只有一条轻量状态（旋转 + 一句当前动作）；
+ *   ② 完整轨迹进「可点开、**默认收起**」的抽屉；
+ *   ③ 输入框永远是正常输入框；执行中发送键变「停止」（带旋转）；
+ *   ④ 执行中用户输入 = 正常用户气泡上屏 + 静默注入（**没有黄色横幅**）；
+ *   ⑤ 助手最终回答 = 干净 markdown（`**加粗**` 要渲染成 <strong>，不能露出字面量）；
+ *   ⑥ 发「停」= 一条正常消息，发了就生效（且**不继续派活**）。
+ * ===========================================================================
+ */
+log('');
+log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨迹抽屉 / 输入框正常 / markdown ---');
+{
+  currentProjectId = 7;
+  dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+  const root19 = await mountApp(true);
+  await ensure('⑲ 前置：App 起来', () => !!q('aside.sidebar'));
+  await act(async () => {
+    emitBridge('open', 'https://example.com/');
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await waitFor('⑲ 前置：浏览器层出现（有活页）', () => q('.browserLayer') !== null);
+
+  await check('⑲-1 执行中：主对话流没有步骤墙，只有一条轻量状态（旧的「AI 任务执行中」横幅已删）', async () => {
+    await typeIntoInput('打开抖音并随便做个操作');
+    // ★ 必须用「**比发出前多**」当判据：streamBodies 是跨段累积的，
+    //   写成 `> 0` 会在这一轮还没注册流时就立刻通过，后面的 ssePush 全打进空气里。
+    const streamsBefore19 = streamBodies.length;
+    clickSend();
+    await waitFor('⑲ 发出 /chat/stream', () => streamBodies.length > streamsBefore19);
+    ssePush('meta', { conversationId: 4249, agentId: 97 });
+    ssePush('loop', { loopId: 'loop-19', wcId: 7777 });
+    await flush(4);
+    assert.ok(q('.runStatus') !== null, '执行中没有轻量状态行（.runStatus）');
+    assert.ok(q('.runStatus__spin') !== null, '状态行里没有旋转图标');
+    /**
+     * ★ 判据用**整个文档**而不是 `.chat`：UX 收尾片把状态行搬到了输入框正上方（`.chat` 之外），
+     *   只查 `.chat` 的话「有人把旧横幅加回聊天区/加回输入框上方」都可能漏掉。
+     */
+    const docText = doc.body.textContent ?? '';
+    assert.ok(!docText.includes('AI 任务执行中'), '旧的「AI 任务执行中」横幅还在（目标态要删掉它）');
+    assert.ok(!docText.includes('发送补充'), '旧的特殊条「发送补充」还在');
+    // 输入框必须还是正常输入框（不是被换掉的特殊控件）
+    const field = q('.inputbar-field') as HTMLInputElement | null;
+    assert.ok(field, '输入框不见了');
+    assert.ok(
+      (field!.getAttribute('placeholder') ?? '').includes('聊聊'),
+      `执行中 placeholder 不是正常那句：${field!.getAttribute('placeholder')}`,
+    );
+    // 发送键变「接管」+ 带旋转（形态片·真接管：从「停止」改名「接管」）
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(stopBtn, '执行中发送键没有变「接管」');
+    assert.ok(stopBtn!.querySelector('.inputbar__spin') !== null, '「接管」键上没有旋转图标');
+  });
+
+  await check('⑲-2 步骤事件进「可点开、默认收起」的轨迹抽屉，且**不进**主对话流', async () => {
+    const before = q('.chat')?.textContent ?? '';
+    emitAgent({ kind: 'step', wcId: 7777, summary: '打开抖音首页', ok: true });
+    await flush(3);
+    const trace = q('.runTrace');
+    assert.ok(trace, '步骤没有进轨迹抽屉（.runTrace 不在）');
+    assert.ok((trace!.textContent ?? '').includes('打开抖音首页'), '轨迹抽屉里没有这条步骤');
+    /**
+     * ★ 判据要精确：状态行（.runStatus）**本来就在** `.chat` 里 —— 它就是
+     *   「对话流里的一条轻量状态」，所以不能拿 `.chat` 的 textContent 当判据。
+     *   真正要防的是「步骤落成了一条**助手气泡**」（那才是步骤墙）。
+     */
+    const bubbles = qa('.msg').map((m) => m.textContent ?? '');
+    assert.ok(
+      !bubbles.some((t) => t.includes('打开抖音首页')),
+      `步骤落成了助手气泡（步骤墙又回来了）：${JSON.stringify(bubbles)}`,
+    );
+    const details = q('.runTrace') as HTMLDetailsElement | null;
+    assert.ok(details && details.tagName.toLowerCase() === 'details', '轨迹抽屉必须是 <details>（原生可点开/默认收起）');
+    assert.equal(details!.open, false, '轨迹抽屉默认必须是**收起**的（用户点开才看）');
+    assert.ok(before.length >= 0, '（占位：确保上面读到的 before 不是 undefined）');
+  });
+
+  await check('⑲-3 执行中的用户输入 = 正常用户气泡上屏 + 静默注入（没有黄色横幅）', async () => {
+    await typeIntoInput('顺便看一下价格');
+    clickSend();
+    await waitFor('⑲ 补充指令发出', () => requestsTo('/agent/loop/message').length > 0);
+    await flush(3);
+    const mine = qa('.msg.user').map((n) => n.textContent ?? '');
+    assert.ok(mine.includes('顺便看一下价格'), `补充消息没有作为正常用户气泡上屏：${JSON.stringify(mine)}`);
+    assert.ok(
+      !(q('.chatNote')?.textContent ?? '').includes('已将补充指令注入'),
+      '黄色横幅（「已将补充指令注入当前任务上下文」）还在 —— 目标态要静默注入',
+    );
+  });
+
+  await check('⑲-4 建议清单第 1 条：循环在跑时说「打开百度」必须先开页，不被当补充指令吞掉', async () => {
+    const tabsBefore = qa('.browserTab').length;
+    const supplementBefore = requestsTo('/agent/loop/message').length;
+    await typeIntoInput('打开百度');
+    clickSend();
+    await flush(6);
+    const tabs = qa('.browserTab').map((n) => n.textContent ?? '');
+    assert.ok(
+      tabs.length > tabsBefore || tabs.some((t) => /baidu/i.test(t)),
+      `说「打开百度」没有开页（tab 没变：${JSON.stringify(tabs)}）`,
+    );
+    assert.equal(
+      requestsTo('/agent/loop/message').length,
+      supplementBefore,
+      '「打开百度」被当成补充指令发给了正在跑的循环（用户的明确指令被吞了）',
+    );
+  });
+
+  await check('⑲-5 助手最终回答 = 干净 markdown（`**加粗**` 渲染成 <strong>，不露字面量）', async () => {
+    ssePush(null, { delta: '**结论**：三家店都比过了，- 第一家最便宜\n- 第二家最快' });
+    await flush(4);
+    const bubble = q('.caret')?.parentElement ?? null;
+    assert.ok(bubble, '没有找到正在打字的助手气泡');
+    assert.ok(bubble!.querySelector('strong') !== null, '`**结论**` 没有渲染成 <strong>（还是纯文本渲染）');
+    assert.ok(
+      !(bubble!.textContent ?? '').includes('**'),
+      `气泡里还露着 raw ** ：${bubble!.textContent}`,
+    );
+    assert.ok(bubble!.querySelector('li') !== null, 'markdown 列表没有渲染成 <li>');
+  });
+
+  await check('⑲-6 发「停」= 一条正常消息，发了就生效（走 pauseTask，且不再往下派活）', async () => {
+    /**
+     * ★ ⑲-4 的「打开百度」走了**新一轮**（开页 = 新的 /chat/stream），
+     *   所以这里要把「当前轮正在跑」重新钉一次（推 meta + loop），否则前置不成立。
+     */
+    ssePush('meta', { conversationId: 4250, agentId: 97 });
+    ssePush('loop', { loopId: 'loop-19b', wcId: 7777 });
+    await flush(4);
+    assert.ok(q('.runStatus') !== null, '前置不成立：这一轮没进执行态（点停止前必须真的在跑）');
+    bridgeCalls.length = 0;
+    /** ★ 「停」是控制指令 ⇒ **不许再开一轮**（判据取"轮数有没有涨"，比 agentStart 更靠前） */
+    const roundsBeforeStop = streamBodies.length;
+    // 形态片·真接管(2026-09-27)：执行中主按钮从「停止」改名「接管」（同一暂停机制，
+    //   语义 = 用户键鼠直接操作内嵌页、AI 当场暂停）。这里按新文案找按钮。
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(stopBtn, '找不到「接管」键');
+    await act(async () => {
+      click(stopBtn!, '接管');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(4);
+    const mine = qa('.msg.user').map((n) => n.textContent ?? '');
+    assert.ok(mine.includes('停'), `「停」没有作为正常用户气泡上屏：${JSON.stringify(mine)}`);
+    /**
+     * 「真的停了」有两条合法证据：
+     *   · 主进程 `pauseTask`（本轮的循环属于**当前这张页**时走它）；
+     *   · 服务端 `/agent/loop/pause`（桌面同时会把循环挂到服务端，凭证/现场都保留）。
+     * ★ 本桩的 Proxy 兜底**不记账**（见 bridge 定义），所以 pauseTask 那条在这里查不到 ——
+     *   用 `/agent/loop/pause` 这条真请求当主判据，两者取或，避免把"桩不记账"误判成"没停"。
+     */
+    const stopped =
+      requestsTo('/agent/loop/pause').length > 0 || bridgeCalls.some((c) => c.startsWith('pauseTask('));
+    assert.ok(
+      stopped,
+      `「停」没有真的停下这一路（既没发 /agent/loop/pause，也没调 pauseTask）：${JSON.stringify(bridgeCalls)}`,
+    );
+    assert.equal(
+      streamBodies.length,
+      roundsBeforeStop,
+      '「停」之后又开了一轮 /chat/stream（控制指令必须短路，不能既是控制又是任务）',
+    );
+    assert.ok(
+      !bridgeCalls.some((c) => c.startsWith('agentStart(')),
+      `「停」之后还往下派活了（控制指令必须短路）：${JSON.stringify(bridgeCalls)}`,
+    );
+  });
+
+  /**
+   * ⑲-7 是给反证留的**非运行态**入口:⑲-6 走的是「有循环」那条分支（分支 A 自带 return），
+   * 所以把「停」的短路摘掉时它测不出来 —— 必须再钉一条「**没有循环在跑时**发『停』」。
+   */
+  await check('⑲-7 没有循环在跑时发「停」也必须短路（不开新一轮、不派活）', async () => {
+    ssePush('done', { conversationId: 4250, messageId: 9100, contentLength: 2, searches: 0, sources: [] });
+    sseEnd();
+    await waitRoundEnd();
+    await flush(3);
+    assert.ok(q('.inputbar-btn--stop') === null, '前置不成立：这一轮的循环号没清掉');
+    const roundsBefore = streamBodies.length;
+    await typeIntoInput('停');
+    clickSend();
+    await flush(5);
+    assert.equal(
+      streamBodies.length,
+      roundsBefore,
+      '「停」之后又开了一轮 /chat/stream（没有循环在跑时也必须短路）',
+    );
+    const mine = qa('.msg.user').map((x) => x.textContent ?? '');
+    assert.ok(mine.includes('停'), `「停」没有作为正常用户气泡上屏：${JSON.stringify(mine)}`);
+  });
+
+  /**
+   * 形态片·真接管（①，2026-09-27；规格 docs/产品交互规格.md）：
+   *   点「接管」→ 用户键鼠直接操作内嵌页、AI 当场暂停（状态条「你在操作」）；
+   *   点「交还」→ 恢复 AI，从你留下的位置接上（走既有 resumeTask）。
+   * 反证：scripts/verify/takeover-revert-proof.py（拆暂停闸必红）。
+   */
+  await check('①-a 执行中主按钮 = 「接管」，点了真的暂停这一路', async () => {
+    // ⑲-7 把上一轮流收尾了 → 这里先真正发一轮，把 /chat/stream 重新开起来（sseCtl 有值）
+    await typeIntoInput('把这一页整理一下');
+    const streamsBeforeTk = streamBodies.length;
+    clickSend();
+    await waitFor('①-a 发出 /chat/stream', () => streamBodies.length > streamsBeforeTk);
+    ssePush('meta', { conversationId: 4260, agentId: 97 });
+    ssePush('loop', { loopId: 'loop-tk1', wcId: 7777 });
+    await flush(4);
+    assert.ok(q('.runStatus') !== null, '前置不成立：这一轮没进执行态（点接管前必须真的在跑）');
+    const takeBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(takeBtn, '执行中找不到「接管」键（主按钮应该是它）');
+    bridgeCalls.length = 0;
+    await act(async () => {
+      click(takeBtn!, '接管');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(4);
+    const paused =
+      requestsTo('/agent/loop/pause').length > 0 || bridgeCalls.some((c) => c.startsWith('pauseTask('));
+    assert.ok(
+      paused,
+      `点「接管」没有真的暂停这一路（既没发 /agent/loop/pause，也没调 pauseTask）：${JSON.stringify(bridgeCalls)}`,
+    );
+  });
+
+  await check('①-b 接管后：状态条写「你在操作」（你接管的琥珀色）+ 出现「交还」键', async () => {
+    // 服务端把这一路挂成 by=user（暂停闸的产物）→ 桌面靠 state 广播把它画出来
+    assert.equal(
+      emitBridge('state', JSON.stringify({ phase: 'paused', pausedBy: 'user', detail: '你在操作这一页', step: 3, blocked: false })),
+      1,
+      'App 没订阅 state 广播（接管后的状态画不出来）',
+    );
+    await flush(4);
+    const driveState = q('.driveState');
+    assert.ok(driveState, '接管后没有那条「谁在等谁」状态条（.driveState）');
+    assert.match(driveState?.textContent ?? '', /你在操作/, `状态条没写「你在操作」：${driveState?.textContent}`);
+    assert.ok(
+      (driveState?.className ?? '').includes('driveState--user'),
+      `「你在操作」该走你接管的琥珀色（.driveState--user），实际：${driveState?.className}`,
+    );
+    const backBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('交还'));
+    assert.ok(backBtn, '接管（by=user）之后找不到「交还」键');
+  });
+
+  await check('①-c 点「交还」→ 恢复 AI（走既有 resumeTask）', async () => {
+    bridgeCalls.length = 0;
+    const backBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('交还'));
+    assert.ok(backBtn, '前置不成立：「交还」键不见了');
+    await act(async () => {
+      click(backBtn!, '交还');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(5);
+    assert.ok(
+      bridgeCalls.some((c) => c.startsWith('resumeTask(')),
+      `点「交还」没有恢复这一路（没调 resumeTask）：${JSON.stringify(bridgeCalls)}`,
+    );
+  });
+
+  // ★ 收尾：把 ① 这条流收尾 —— 别把「循环在跑 + 流还开着」的状态漏给后面的 ⑲-8/9/10
+  ssePush('done', { conversationId: 4260, messageId: 9200, contentLength: 2, searches: 0, sources: [] });
+  sseEnd();
+  await waitRoundEnd();
+  await flush(3);
+
+  /**
+   * 形态片·教一遍（②，2026-09-27；规格 docs/产品交互规格.md）：
+   *   有活页给「教」→ 点进录制态（横幅「正在录制你的操作」）→ 主进程把 webview 键鼠操作
+   *   经 teachAction 喂进来（真人操作，非写死假数据）→ 点「完成」带动作序列 POST /skills/teach。
+   * 反证：scripts/verify/teach-revert-proof.py（拆录制闸必红）。
+   */
+  await check('②-a 有活页时出现「教」键；点了进录制态（横幅「正在录制你的操作」）', async () => {
+    const teachBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').trim() === '教');
+    assert.ok(teachBtn, '有活页却找不到「教」键');
+    await act(async () => { click(teachBtn!, '教'); await new Promise((r) => setTimeout(r, 0)); });
+    await flush(3);
+    const banner = q('.teachBanner');
+    assert.ok(banner, '点了「教」没有录制横幅（.teachBanner）');
+    assert.match(banner?.textContent ?? '', /正在录制你的操作/, `横幅文案不对：${banner?.textContent}`);
+  });
+  await check('②-b 主进程喂进来的动作被录下（teachAction，真人操作非写死），「完成」显示条数', async () => {
+    emitBridge('teachAction', JSON.stringify({ type: 'click', detail: '点击登录按钮' }));
+    emitBridge('teachAction', JSON.stringify({ type: 'input', detail: '在搜索框输入咖啡店' }));
+    emitBridge('teachAction', JSON.stringify({ type: 'click', detail: '点击按价格排序' }));
+    await flush(3);
+    const banner = q('.teachBanner');
+    assert.match(banner?.textContent ?? '', /已录 3 个动作/, `没录下 3 个动作：${banner?.textContent}`);
+    const finishBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('完成'));
+    assert.ok(finishBtn, '录制中找不到「完成」键');
+    assert.match(finishBtn?.textContent ?? '', /完成（3）/, `「完成」键没显示条数：${finishBtn?.textContent}`);
+  });
+  await check('②-c 点「完成」→ POST /skills/teach 带上录下的动作序列 + 技能名', async () => {
+    const before = requestsTo('/skills/teach').length;
+    const finishBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('完成'));
+    assert.ok(finishBtn, '前置不成立：「完成」键不见了');
+    await act(async () => { click(finishBtn!, '完成'); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor('②-c /skills/teach 发出', () => requestsTo('/skills/teach').length > before);
+    const req = requestsTo('/skills/teach')[requestsTo('/skills/teach').length - 1];
+    const body = JSON.parse(String(req.body)) as { actions?: Array<{ type: string; detail: string }>; name?: string; triggerCondition?: string };
+    assert.ok(body.actions && body.actions.length === 3, `动作序列没带上（应是 3 条）：${JSON.stringify(body.actions)}`);
+    assert.ok(body.actions!.some((a) => a.detail.includes('点击登录按钮')), '第 1 个动作丢了');
+    assert.ok(body.actions!.some((a) => a.detail.includes('按价格排序')), '第 3 个动作丢了');
+    assert.ok(body.name, '技能卡没有名字');
+    assert.ok(body.triggerCondition, '技能卡没有触发条件（之后没法一句话命中回放）');
+  });
+
+  await check('⑲-8（A②）状态行钉在输入框正上方：同一个容器、排在输入框之前', async () => {
+    await typeIntoInput('把刚才那个页面再看一遍');
+    const streamsB = streamBodies.length;
+    clickSend();
+    await waitFor('⑲-8 新一轮发出', () => streamBodies.length > streamsB);
+    ssePush('meta', { conversationId: 4251, agentId: 97 });
+    ssePush('loop', { loopId: 'loop-19c', wcId: 7777 });
+    await flush(4);
+    const bar = q('.runStatus');
+    const ib = q('.inputbar');
+    assert.ok(bar && ib, '找不到状态行或输入框');
+    assert.ok(
+      bar!.parentElement === ib!.parentElement,
+      '状态行与输入框不在同一个容器里（没"钉"在输入框上方）',
+    );
+    const kids = Array.from(bar!.parentElement!.children);
+    assert.ok(kids.indexOf(bar!) < kids.indexOf(ib!), '状态行没有排在输入框**之前**（"正上方"）');
+    assert.ok(q('.runStatus__spin') !== null, '执行中状态行应有旋转图标');
+  });
+
+  await check('⑲-9（A①）发「停」→ 非执行态（已暂停 + 输入框回正常发送）；说「继续」→ 接回执行中', async () => {
+    bridgeCalls.length = 0;
+    // 形态片·真接管：执行中发送键 = 「接管」（从「停止」改名）
+    const stopBtn = qa('.inputbar button').find((b) => (b.textContent ?? '').includes('接管'));
+    assert.ok(stopBtn, '前置：执行中发送键应是「接管」');
+    await act(async () => {
+      click(stopBtn!, '接管');
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush(4);
+    assert.ok(q('.runStatus--paused') !== null, '「停」之后状态行没有切成暂停态');
+    assert.ok(
+      (q('.runStatus')?.textContent ?? '').includes('已暂停'),
+      `暂停态文案不对：${q('.runStatus')?.textContent}`,
+    );
+    assert.ok(
+      !qa('.inputbar button').some((b) => (b.textContent ?? '').includes('接管')),
+      '暂停后发送键还是「接管」（目标态要回「交还」）',
+    );
+    assert.ok(
+      qa('.inputbar button').some((b) => (b.textContent ?? '').includes('交还')),
+      '暂停后找不到「交还」键',
+    );
+    const field = q('.inputbar-field') as HTMLInputElement | null;
+    assert.ok(field && !field.disabled, '暂停后输入框被禁用了（用户没法打那句「继续」）');
+    sameNode(q('.caret'), null, '暂停后还画着打字光标（那是"还在长"的意思）');
+    // 「继续」→ 走既有的 resumeTask 链路，界面回执行中
+    const rounds = streamBodies.length;
+    await typeIntoInput('继续');
+    clickSend();
+    await flush(5);
+    assert.ok(
+      bridgeCalls.some((c) => c.startsWith('resumeTask(7777')),
+      `「继续」没有走 resumeTask：${JSON.stringify(bridgeCalls)}`,
+    );
+    assert.equal(streamBodies.length, rounds, '「继续」又开了一轮 /chat/stream（应该接回原来那条循环）');
+    assert.ok(q('.runStatus--paused') === null, '「继续」之后还停在暂停态');
+    assert.ok(q('.runStatus__spin') !== null, '「继续」之后没回到执行中（旋转图标不在）');
+  });
+
+  await check('⑲-10（A③）补充注入 → 状态行瞬态「已收到补充」，且不弹横幅、不开新轮', async () => {
+    const rounds = streamBodies.length;
+    const supp = requestsTo('/agent/loop/message').length;
+    await typeIntoInput('顺便看一眼价格');
+    clickSend();
+    await waitFor('⑲-10 补充指令发出', () => requestsTo('/agent/loop/message').length > supp);
+    await flush(3);
+    assert.equal(streamBodies.length, rounds, '补充指令不该新开一轮聊天（静默注入）');
+    const ok = q('.runStatus__ok');
+    assert.ok(ok, '状态行没有瞬态「已收到补充」');
+    assert.ok((ok!.textContent ?? '').includes('已收到补充'), `瞬态文案不对：${ok!.textContent}`);
+    assert.ok(
+      !(q('.chatNote')?.textContent ?? '').includes('补充'),
+      '又弹了那条补充横幅（目标态 = 静默 + 状态行瞬态）',
+    );
+  });
+
+  await act(async () => root19.unmount());
+}
+
+/**
+ * ===========================================================================
+ * ⑳ 降噪片（2026-09-26 用户拍板 B3/B5/B6）—— 与「用户操心的事越少越好」直接相关
+ * ===========================================================================
+ */
+log('');
+log('--- ⑳ 降噪片：占位行不显示 / 结束键条件显示 / 首进引导一次性 ---');
+{
+  currentProjectId = 7;
+  dom.window.localStorage.setItem('workbench.token', 'smoke-token');
+  // B3：这一条要能看到「标记落盘」，所以先清掉上一段留下的标记
+  try {
+    dom.window.localStorage.removeItem('workbench.guided.7');
+  } catch {
+    /* ignore */
+  }
+
+  await check('⑳-0（B1）设置抽屉：账号/密码/浏览器参数/保活 默认收起、点开才出；记忆/知识库不进抽屉', async () => {
+    const rootB1 = await mountApp(true);
+    await ensure('⑳-0 前置：侧栏在（名单拉回来）', () => qa('.contact-item').length > 0);
+    // ① 默认收起：抽屉面板与账号块都不在 DOM（降噪——侧栏不再恒显那一堆设置）
+    assert.ok(q('.settingsDrawer__toggle') !== null, '找不到「设置」抽屉开关（.settingsDrawer__toggle）');
+    assert.ok(q('.settingsDrawer__panel') === null, '设置抽屉默认就该收起（面板不该在 DOM 里）');
+    assert.ok(q('.account') === null, '账号块默认就该收起（.account 不该在 DOM 里）');
+    // ② 记忆 / 知识库不进抽屉：入口在侧栏常显（抽屉收起时也在）
+    assert.ok(qa('button').some((b) => (b.textContent ?? '').includes('知识库')), '知识库入口不该进抽屉（应常显在侧栏）');
+    assert.ok(qa('button').some((b) => (b.textContent ?? '').includes('用户记忆')), '用户记忆入口不该进抽屉（应常显在侧栏）');
+    // ③ 点开抽屉：账号块 + 保活 + 浏览器参数 一起出来
+    await openSettings();
+    assert.ok(q('.account') !== null, '点开抽屉后账号块该出现');
+    assert.ok(q('#setConcurrency') !== null && q('#setMaxPages') !== null, '浏览器参数（并发/开页）该在抽屉里');
+    assert.ok(q('.keepalive__btn') !== null, '保活开关该在抽屉里（当前智能体在场时）');
+    await act(async () => rootB1.unmount());
+  });
+
+  await check('⑳-1（B5）占位名「新智能体」的智能体不显示在左栏', async () => {
+    // 临时往名单里塞一个占位名的家伙（「＋ 添加」会先用占位名建出来）
+    AGENTS.push({
+      id: 199,
+      name: '新智能体',
+      kind: 'worker',
+      deletable: true,
+      projectId: 7,
+      personaStatus: 'ready',
+      persona: null,
+      conversationId: 599,
+      status: 'idle',
+    });
+    const root20 = await mountApp(true);
+    await ensure('⑳-1 前置：名单拉回来', () => qa('.contact-item').length > 0);
+    const names = qa('.contact-name').map((x) => x.textContent ?? '');
+    assert.ok(!names.includes('新智能体'), `占位行还在左栏：${JSON.stringify(names)}`);
+    assert.ok(names.includes('小助'), `正常智能体被误伤：${JSON.stringify(names)}`);
+    await act(async () => root20.unmount());
+    AGENTS.pop();
+  });
+
+  await check('⑳-2（B6）「结束」键条件显示：有内容才给（结构闸 + 有消息时在场）', async () => {
+    const root20b = await mountApp(true);
+    await ensure('⑳-2 前置：历史消息在', () => (q('.chat')?.textContent ?? '').includes('九七号的历史'));
+    assert.ok(
+      qa('.inputbar button').some((b) => (b.textContent ?? '').includes('结束')),
+      '有消息时「结束」键不见了（条件写反了）',
+    );
+    await act(async () => root20b.unmount());
+    // 结构闸：那个按钮必须真的被「有内容」这个条件包着（空对话不该给）
+    const src = readFileSync(join(process.env.SMOKE_REPO ?? process.cwd(), 'apps', 'desktop', 'src', 'App.tsx'), 'utf8');
+    assert.ok(
+      /\{messages\.length > 0 && \(\s*\/\*[\s\S]{0,200}?className="inputbar-btn end"/.test(src),
+      '「结束」键没有被 `messages.length > 0` 包着（空对话又会冒出来）',
+    );
+  });
+
+  await check('⑳-3（B3）首进引导（欢迎卡）一次性：标记落 localStorage，见过就不再出', async () => {
+    const root20c = await mountApp(true);
+    await ensure('⑳-3 前置：历史消息在', () => (q('.chat')?.textContent ?? '').includes('九七号的历史'));
+    await flush(3);
+    assert.equal(
+      dom.window.localStorage.getItem('workbench.guided.7'),
+      '1',
+      '有内容却没落「已引导」标记（下次还会弹欢迎卡）',
+    );
+    assert.ok(q('.welcomeCard') === null, '已经见过引导了，欢迎卡还在');
+    await act(async () => root20c.unmount());
+  });
+}
+
+/**
+ * 形态片·头像六态（③，2026-09-27；规格 docs/产品交互规格.md）：
+ *   空闲/思考/执行/需你处理/出错/休眠 —— 全有颜色 + 一个词；点头像弹「它在干嘛」。
+ * 反证：app-logic-smoke-revert.py 的 TK3（拆六态映射必红）。
+ */
+await check('③-a 六态映射：每态都有颜色 + 一个词（空闲/思考/执行/需你处理/出错/休眠）', async () => {
+  const cases: Array<[status: string, sleeping: boolean, word: string, color: string]> = [
+    ['idle', false, '空闲', '#8b93a1'],
+    ['thinking', false, '思考', '#5b9bd5'],
+    ['working', false, '执行', '#46b57c'],
+    ['blocked', false, '需你处理', '#e0a63a'],
+    ['failed', false, '出错', '#e05c5c'],
+    ['idle', true, '休眠', '#9b7fd4'],
+  ];
+  for (const [status, sleeping, word, color] of cases) {
+    const st = avatarStateOf({ id: 1, status: status as never } as never, { sleeping });
+    assert.equal(st.word, word, `状态 ${status}${sleeping ? '(休眠)' : ''} 的词不对：${st.word}`);
+    assert.equal(st.color, color, `状态 ${status} 的颜色不对：${st.color}`);
+  }
+});
+{
+  const root3 = await mountApp(true);
+  await ensure('③ 前置：左栏头像在', () => qa('.contact-avatar').length > 0);
+  await flush(2);
+  await check('③-b 左栏头像显示当前状态：颜色环 + 一个词（idle + 没在监听 → 休眠）', async () => {
+    const av = qa('.contact-avatar')[0];
+    assert.ok(av, '找不到左栏头像');
+    const stateEl = av!.querySelector('.contact-avatar__state');
+    assert.ok(stateEl, '头像上没有那一个词（.contact-avatar__state）');
+    assert.match(stateEl!.textContent ?? '', /休眠|空闲/, `词不对：${stateEl?.textContent}`);
+    assert.ok((av!.getAttribute('style') ?? '').includes('--state-c'), '头像没有状态颜色环（--state-c）');
+  });
+  await check('③-c 头像带「它在干嘛」一行（title 气泡，点头像/悬停弹出）', async () => {
+    const av = qa('.contact-avatar')[0];
+    assert.ok(av, '找不到左栏头像');
+    const title = av!.getAttribute('title') ?? '';
+    assert.match(title, /它在干嘛/, `头像 title 不是「它在干嘛」：${title}`);
+  });
+  await act(async () => root3.unmount());
+}
+
+/**
+ * 形态片·Routines 管理（④，2026-09-27；规格 docs/产品交互规格.md）：
+ *   看看定时任务→列表；暂停/恢复/删第N个→一句话。
+ * 反证：app-logic-smoke-revert.py 的 TK4（拆掉列表加载必红）。
+ */
+{
+  const root4 = await mountApp(true);
+  await ensure('④ 前置：左栏在', () => q('.sidebar') !== null);
+  await flush(2);
+  await check('④-a 左栏有「定时任务」入口（点开拉 GET /routines 真数据）', async () => {
+    const btn = qa('.routinesToggle').find((b) => (b.textContent ?? '').includes('定时任务'));
+    assert.ok(btn, '找不到「定时任务」入口（.routinesToggle）');
+    const before = requestsTo('/routines').length;
+    await act(async () => { click(btn!, '定时任务'); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor('④-a GET /routines 发出', () => requestsTo('/routines').length > before);
+    const panel = q('.routinesPanel');
+    assert.ok(panel, '点了「定时任务」没有列表面板（.routinesPanel）');
+  });
+  await check('④-b 列表每行有名字 + 状态 + 暂停/恢复 + 删除（非写死假数据，来自 GET /routines）', async () => {
+    const rows = qa('.routinesPanel__row');
+    // 服务端返回空列表也合法（没建过 routine）——但入口和面板必须在
+    assert.ok(q('.routinesPanel'), '面板消失了');
+    if (rows.length > 0) {
+      const first = rows[0];
+      assert.ok(first!.querySelector('.routinesPanel__name'), '第一行没有名字');
+      assert.ok(first!.querySelector('.routinesPanel__state'), '第一行没有状态');
+      assert.ok(first!.querySelector('.routinesPanel__btn'), '第一行没有暂停/恢复键');
+      assert.ok(first!.querySelector('.routinesPanel__del'), '第一行没有删除键');
+    }
+  });
+  await check('④-c 点「暂停」→ POST /routines/:id/enable（enabled=false）', async () => {
+    const rows = qa('.routinesPanel__row');
+    if (rows.length === 0) {
+      log('    （跳过：没有可暂停的 routine —— 服务端空列表）');
+      return;
+    }
+    const btn = rows[0]!.querySelector('.routinesPanel__btn');
+    assert.ok(btn, '找不到暂停/恢复键');
+    const before = requestsTo('/enable').length;
+    await act(async () => { click(btn!, '暂停'); await new Promise((r) => setTimeout(r, 0)); });
+    await waitFor('④-c /enable 发出', () => requestsTo('/enable').length > before);
+  });
+  await act(async () => root4.unmount());
+}
 
 log('=== 结论 ===');
 log(`  ${passes} PASS / ${fails} FAIL`);
