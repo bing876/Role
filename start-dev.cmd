@@ -19,7 +19,7 @@ REM ---------- 0) 自检 ----------
 if not exist "%PG_BIN%\postgres.exe" (
   echo [错误] 找不到 PostgreSQL 便携包：
   echo        %PG_BIN%\postgres.exe
-  echo        先跑：node scripts\verify\pg-bringup.mjs
+  echo        先跑：node scripts\archive\one-off-probes\pg-bringup.mjs
   pause
   exit /b 1
 )
