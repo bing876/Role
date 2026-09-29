@@ -2,10 +2,10 @@ name: Verify
 
 # 为什么有这一份
 # -----------
-# 这个仓库有 41 步自动验证链（scripts/verify/，1175 条断言 + 54 条反证脚本），
-# 但此前**只有打包 workflow**，验证链从未在任何提交上自动跑过 —— 全靠人记得手动跑。
+# 这个仓库的主链现有 58 步（scripts/verify/，含 P1 输入让路与禁闸反证）；
+# 过去只有打包 workflow，曾经全靠人记得手动跑。步数必须与 package.json / golden 一致。
 #
-# 2026-09-29 在本分支 tip 实测基线（写这份 workflow 的依据）：
+# 2026-09-29 当时的实测基线（历史数据，不是这次 P1 的验收结果）：
 #   npm run verify  →  EXIT 0
 #   断言统计        →  1175 PASS / 0 FAIL
 #   总耗时          →  约 11.5 分钟（单核容器）
@@ -61,13 +61,14 @@ jobs:
       - run: npm run -s verify:p1-2-outcome
       - run: npm run -s verify:p1-2-abort
       - run: npm run -s verify:p1-5-pause
+      - run: npm run -s verify:p1-user-input-yield
       - run: npm run -s verify:p1-done-hijack
       - run: npm run -s verify:p2-idle-scan
       - run: npm run -s verify:idx-messages
 
-  # ---- 主链：46 步全跑 ----
+  # ---- 主链：58 步全跑 ----
   verify:
-    name: Verify chain (57 steps)
+    name: Verify chain (58 steps)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

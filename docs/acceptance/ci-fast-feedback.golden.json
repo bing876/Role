@@ -15,9 +15,10 @@
     "verify:p1-2-outcome",
     "verify:p1-2-abort",
     "verify:p1-5-pause",
+    "verify:p1-user-input-yield",
     "verify:p1-done-hijack",
     "verify:p2-idle-scan",
     "verify:idx-messages"
   ],
-  "chainStepCount": 57
+  "chainStepCount": 58
 }

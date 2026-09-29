@@ -24,11 +24,9 @@
  * 跑法：`npx tsx scripts/verify/p1-5-pause-driving.mts`
  */
 import { readFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { createUserInputTracker } from '../../apps/desktop/electron/user-input';
-// P1 分片期实际运行新增验收，避免脚本在主链独立接线前成为无人执行的孤儿。
-import './p1-user-input-yield.mts';
+// P1 原生 guest/drive/循环/服务端与禁闸反证：现由 verify:p1-user-input-yield 单独进主链。
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const read = (p: string): string => readFileSync(path.join(ROOT, p), 'utf8');
@@ -175,18 +173,7 @@ log('--- ④ P1 输入计时：唯一 guest 接线口 + 按页精确窗口（不
   ok(/pauseDriving/.test(wb) && /pauseTask/.test(wb), '手动暂停的两套既有接口仍在，不被临时计时器改写');
 }
 
-// 分片期即在现有主链实际执行新增验收与反证；独立主链命令接线后改由新命令运行。
-try {
-  const proof = execFileSync('python3', ['scripts/verify/p1-user-input-yield-revert-proof.py'], {
-    cwd: ROOT, encoding: 'utf8', timeout: 120_000,
-  });
-  log(proof.trim());
-} catch (err) {
-  bad += 1;
-  log(`  ★FAIL P1 禁闸反证未通过：${(err as Error).message}`);
-}
-
 log('');
 log(`=== 结论：${bad} 个问题 ===`);
-log('  （主进程输入与新闸在分片期已进现有主链；同类 CDP/真人来源需后续真机检验。）');
+log('  （P1 原生接线、未派发闸、同页同类模拟与禁闸反证已另入 verify:p1-user-input-yield；非真机。）');
 process.exit(bad > 0 ? 1 : 0);
