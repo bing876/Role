@@ -1,0 +1,80 @@
+name: Verify
+
+# 为什么有这一份
+# -----------
+# 这个仓库有 41 步自动验证链（scripts/verify/，1175 条断言 + 54 条反证脚本），
+# 但此前**只有打包 workflow**，验证链从未在任何提交上自动跑过 —— 全靠人记得手动跑。
+#
+# 2026-09-29 在本分支 tip 实测基线（写这份 workflow 的依据）：
+#   npm run verify  →  EXIT 0
+#   断言统计        →  1175 PASS / 0 FAIL
+#   总耗时          →  约 11.5 分钟（单核容器）
+#   verify:orch     →  11 个子脚本串跑约 128 秒（不是卡住，别误判）
+#   verify:electron →  绿，实际装后版本 44.4.5
+# 因此 job 超时设 30 分钟（CI 机器可能更慢），别设太小把链掐断。
+#
+# 刻意不进主链的（需要公网或真凭据，进了会天天假红）：
+#   verify:mcp:public / verify:connectors:live / eval:model:live
+# 它们在真机由人跑，产物落 docs/acceptance/。
+
+on:
+  push:
+    branches:
+      - main
+      - 'arena/**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---- 快反馈：类型检查单独一步，失败不用等 11 分钟 ----
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run -s verify:typecheck
+
+  # ---- 主链：41 步全跑 ----
+  verify:
+    name: Verify chain (41 steps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # 全链。任一步非 0 即整job红 —— 这是本 workflow 存在的全部意义。
+      - name: npm run verify
+        run: npm run verify
+
+  # ---- 打包运行时核对：需要 app-builder-lib + staging 过的 packaging/ ----
+  # 与主链拆开的原因：verify:release 要 electron 二进制 + release:prepare 的
+  # staging 产物，比主链重；且它已由 package-desktop.yml 在 win/mac 覆盖。
+  # 先标 continue-on-error：第一次跑可能是环境差异而非真回归，观察稳定后再收紧。
+  release-runtime:
+    name: Release runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run -s release:prepare
+      - run: npm run -s verify:release
