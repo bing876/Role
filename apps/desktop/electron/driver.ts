@@ -1,6 +1,6 @@
 import { webContents } from 'electron';
 import { viewHostRegistry } from './view-host';
-import { setUserInputListener, userInputRemainingMs } from './user-input';
+import { noteAutomatedCdpInput, setUserInputListener, userInputRemainingMs } from './user-input';
 import { classifyField, FIELD_REASON_CN, isPaymentConfirmAction, type FieldDescriptor } from './fieldClass';
 // ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语的纯 core(不 import electron,可单测);
 // 这里只做「wcId → 真实 debugger」的薄包装。
@@ -873,8 +873,12 @@ function ensureAttached(wc: Target): Electron.Debugger {
   if (!cdpPatched.has(dbg)) {
     cdpPatched.add(dbg);
     const raw = dbg.sendCommand.bind(dbg);
-    dbg.sendCommand = ((method: string, commandParams?: unknown, sessionId?: string) =>
-      Promise.race([
+    dbg.sendCommand = ((method: string, commandParams?: unknown, sessionId?: string) => {
+      // ★ P1 自阻断：先登记这张 guest 的短期 CDP Input 回声，**再**调用 raw。
+      // raw 可能同步派发 before-*；若先调用 raw，回声已被误记为真人。
+      // 只有 Input.* 会留下同类一次性标记；Runtime.evaluate/页面侧合成不会。
+      noteAutomatedCdpInput(wc.id, method, commandParams);
+      return Promise.race([
         raw(method, commandParams as never, sessionId),
         new Promise((_resolve, reject) => {
           setTimeout(
@@ -882,7 +886,8 @@ function ensureAttached(wc: Target): Electron.Debugger {
             CDP_TIMEOUT_MS,
           );
         }),
-      ])) as typeof dbg.sendCommand;
+      ]);
+    }) as typeof dbg.sendCommand;
   }
   return dbg;
 }

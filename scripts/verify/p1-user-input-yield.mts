@@ -1,7 +1,8 @@
 /**
  * P1 分片验收：真实 driver.ts 编译后执行，只把 Electron/WebContentsView 边界换为假 guest。
- * 不是“真机收到物理键鼠”的证明；同页同类来源问题在后续独立测试中正面验。
- * 由 p1-5-pause-driving.mts 在分片期实际运行；接入独立主链后移除重复导入。
+ * 不是“真机收到物理键鼠 / CDP 回声”的证明：假宿主显式回送 CDP 事件才可测
+ * 自阻断的条件路径；默认无回声只说明假宿主没模拟，不推断 Electron 真实路由。
+ * 由 verify:p1-user-input-yield 在 58 步主链中独立执行。
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -61,10 +62,12 @@ const advance = (ms: number): void => {
 };
 const page = { url: 'https://example.test/', title: '当前页', buttons: [], fields: [], text: '当前页' };
 const commands: Array<{ method: string; expression?: string }> = [];
+const echoCallbacks: Array<{ id: number; method: string; event: string; type: string }> = [];
 const guests = new Map<number, object>();
 const viewHostRegistry = new Set([101, 202]);
-let mode: 'normal' | 'click-race' | 'type-race' | 'type-clear-race' | 'same-key-prepare' | 'same-key-held' = 'normal';
+let mode: 'normal' | 'click-race' | 'type-race' | 'type-clear-race' | 'same-key-prepare' | 'same-key-held' | 'self-echo' | 'self-echo-no-mouse' | 'self-echo-keys' = 'normal';
 let releaseHeldKey: ((value: object) => void) | null = null;
+let fakeInputValue = '';
 let driver: typeof import('../../apps/desktop/electron/driver') & {
   recordUserInput(wcId: number): void;
   userInputRemainingMs(wcId: number): number;
@@ -80,8 +83,31 @@ function fakeGuest(id: number) {
     emit: nativeEvents.emit.bind(nativeEvents),
     debugger: {
       isAttached: () => true, attach: () => undefined,
-      sendCommand: async (method: string, params: { expression?: string; type?: string; key?: string } = {}) => {
+      sendCommand: async (method: string, params: { expression?: string; type?: string; key?: string; text?: string; x?: number; y?: number; button?: string } = {}) => {
         commands.push({ method, expression: params.expression });
+        // 可控的最坏路径：只有生产 driver 真调用 CDP Input 命令，假 guest 才同步回送
+        // Electron before-* 事件；测试绝不手工将“真人”事件混进 Q1/Q2。
+        if (id === 101 && mode.startsWith('self-echo') && method.startsWith('Input.')) {
+          if (method === 'Input.dispatchMouseEvent') {
+            const mouseType: Record<string, string> = {
+              mouseMoved: 'mouseMove', mousePressed: 'mouseDown', mouseReleased: 'mouseUp', mouseWheel: 'mouseWheel',
+            };
+            const delivered = nativeEvents.emit('before-mouse-event', {}, {
+              type: mouseType[params.type ?? ''], x: params.x, y: params.y, button: params.button,
+            });
+            if (delivered) echoCallbacks.push({ id, method, event: 'before-mouse-event', type: mouseType[params.type ?? ''] ?? '' });
+          } else if (method === 'Input.insertText') {
+            fakeInputValue = mode === 'self-echo-keys' ? '' : (params.text ?? '');
+            if (nativeEvents.emit('before-input-event', {}, { type: 'char', keyCode: params.text })) {
+              echoCallbacks.push({ id, method, event: 'before-input-event', type: 'char' });
+            }
+          } else if (method === 'Input.dispatchKeyEvent') {
+            if (nativeEvents.emit('before-input-event', {}, { type: params.type, keyCode: params.key })) {
+              echoCallbacks.push({ id, method, event: 'before-input-event', type: params.type ?? '' });
+            }
+            if (mode === 'self-echo-keys' && params.type === 'keyUp') fakeInputValue = 'x';
+          }
+        }
         if (id === 101 && method === 'Input.dispatchKeyEvent' && params.type === 'keyDown' && mode === 'same-key-prepare') {
           mode = 'same-key-held';
           // 模拟该 CDP keyDown 也进入 Electron 的前置事件：它与真人按下同一键没有来源位。
@@ -104,6 +130,20 @@ function fakeGuest(id: number) {
           return { result: { value: true } };
         }
         if (expression.includes('window.__wbHelper.snapshot()')) return { result: { value: page } };
+        if (mode.startsWith('self-echo') && expression.includes('el = H.findClickable(')) {
+          return { result: { value: { x: 100, y: 100, tag: 'BUTTON', label: '下一步', hittable: true,
+            blockedScheme: '', before: 'before', inFrame: false, semVia: null, semDesc: null } } };
+        }
+        if (mode.startsWith('self-echo') && expression.includes('window.__wbHelper.pageKey()')) {
+          return { result: { value: 'after' } };
+        }
+        if (mode.startsWith('self-echo') && expression.includes("desc.set.call(el, '')")) {
+          fakeInputValue = '';
+          return { result: { value: true } };
+        }
+        if (mode.startsWith('self-echo') && expression.includes("return String(('value' in el")) {
+          return { result: { value: fakeInputValue } };
+        }
         if (mode.startsWith('same-key-') && expression.includes("desc.set.call(el, '')")) {
           return { result: { value: true } }; // 唯一的假输入框「搜索」已聚焦/清空
         }
@@ -111,7 +151,7 @@ function fakeGuest(id: number) {
           return { result: { value: '' } }; // insertText 本机失败，走逐字符 CDP keyDown 兜底
         }
         if (expression.includes('window.__wbHelper.pick(')) {
-          return { result: { value: { tag: 'INPUT', label: '搜索', x: 100, y: 100 } } };
+          return { result: { value: { tag: 'INPUT', label: '搜索', x: mode === 'self-echo-no-mouse' ? 0 : 100, y: mode === 'self-echo-no-mouse' ? 0 : 100 } } };
         }
         return { result: { value: null } };
       },
@@ -157,6 +197,19 @@ sandbox.globalThis = sandbox;
 vm.runInNewContext(output.outputFiles![0]!.text, sandbox, { filename: 'driver-p1-test.cjs' });
 driver = moduleRef.exports as typeof driver;
 for (const guest of guests.values()) driver.wireGuestInput(guest); // 实际生产接线函数，不在测试里复刻监听器
+
+async function driveWithClock(action: Parameters<typeof driver.drive>[0], wcId = 101) {
+  let settled = false;
+  const result = driver.drive(action, wcId);
+  void result.then(() => { settled = true; }, () => { settled = true; });
+  // sendCommand 是假同步回包；driver 自己的 250/900ms 睡眠仍需推动同一假单调钟。
+  for (let i = 0; i < 220 && !settled; i += 1) {
+    await Promise.resolve();
+    advance(25);
+  }
+  assert.ok(settled, `${action.action} 没能在假单调钟内结束（可能被误判为接管或 CDP 命令卡住）`);
+  return result;
+}
 
 await check('真实 drive：本页 click/type/fill_form 返回 blocked，零 CDP 命令；read_page/别页照行', async () => {
   driver.recordUserInput(101);
@@ -216,6 +269,54 @@ await check('已发清空但未写字：回执如实说可能部分执行，不�
   driver.forgetUserInput(101);
 });
 
+// Q1/Q2：不是在测试外面手工 emit。假 guest 的 sendCommand 在生产驱动真正发出 Input.*
+// 时回送同页 Electron before-* 回调；缺了 echo 模拟会得到虚假的“不会自阻断”。
+let selfBlocked = 0;
+for (const probe of [
+  { label: 'Q1 · 仅 AI type 的 CDP insertText 回声', echoMode: 'self-echo-no-mouse',
+    action: { action: 'type', target: '搜索', text: 'x' }, expected: 'Input.insertText' },
+  { label: 'Q1 · AI type 聚焦点击 + insertText 的 CDP 回声', echoMode: 'self-echo',
+    action: { action: 'type', target: '搜索', text: 'x' }, expected: 'Input.insertText' },
+  { label: 'Q1 · AI type 插字失败后逐字符 keyDown/char/keyUp 的 CDP 回声', echoMode: 'self-echo-keys',
+    action: { action: 'type', target: '搜索', text: 'x' }, expected: 'Input.dispatchKeyEvent' },
+  { label: 'Q2 · 仅 AI click 的 CDP 移动/按下/抬起回声', echoMode: 'self-echo',
+    action: { action: 'click', target: '下一步' }, expected: 'Input.dispatchMouseEvent' },
+  { label: 'Q2 · 仅 AI fill_form 两字段的 CDP 回声', echoMode: 'self-echo',
+    action: { action: 'fill_form', fields: [{ target: '搜索', text: 'x' }, { target: '搜索', text: 'y' }] }, expected: 'Input.insertText' },
+] as const) {
+  driver.forgetUserInput(101);
+  fakeInputValue = '';
+  mode = probe.echoMode;
+  const startCommands = commands.length;
+  const startCallbacks = echoCallbacks.length;
+  try {
+    await check(probe.label, async () => {
+      const result = await driveWithClock(probe.action);
+      const ownCommands = commands.slice(startCommands).filter((x) => x.method.startsWith('Input.'));
+      const received = echoCallbacks.slice(startCallbacks);
+      assert.ok(ownCommands.length > 0 && received.length > 0,
+        '必须由生产 drive() 真派发 CDP Input 并进入本页已接线的 guest 回调');
+      assert.ok(ownCommands.some((x) => x.method === probe.expected),
+        `应发到 ${probe.expected}，实际只发了 ${ownCommands.map((x) => x.method).join(', ')}`);
+      assert.ok(received.every((x) => x.id === 101), 'CDP 回声只能落到这张页');
+      assert.equal(result.ok, true, `AI 不能被自己的 CDP 回声中断：${JSON.stringify(result)}`);
+      if (probe.action.action === 'fill_form') {
+        assert.equal(ownCommands.filter((x) => x.method === 'Input.insertText').length, 2, '两字段必须真的写入');
+      }
+      assert.equal(driver.userInputRemainingMs(101), 0,
+        `仅有 AI CDP 回声（guest 实收 ${received.map((x) => x.type).join('/')}）不能刷新真人时间戳`);
+      console.log(`    guest 实收 ${received.map((x) => x.type).join('/')}；AI 完整执行，真人时间戳仍为空`);
+    });
+  } catch (error) {
+    selfBlocked += 1;
+    console.error(`  ★FAIL ${probe.label}：${(error as Error).message}`);
+  } finally {
+    driver.forgetUserInput(101);
+    mode = 'normal';
+  }
+}
+assert.equal(selfBlocked, 0, 'SELF_BLOCKED：Q1/Q2 任一 CDP 回声刷新了真人时间戳或中断了生产动作');
+
 await check('同页同类（模拟 guest 原生回调）：AI type 的 CDP keyDown 未回包，同一「搜索」框真人同键事件仍刷新时间戳、挡三动作', async () => {
   driver.forgetUserInput(101);
   const guest = guests.get(101) as { emit: (name: string, event: object, input: object) => void };
@@ -231,7 +332,7 @@ await check('同页同类（模拟 guest 原生回调）：AI type 的 CDP keyDo
     advance(50);
   }
   assert.ok(releaseHeldKey && !finished, '必须真的卡在生产 typeInto 的 CDP keyDown 上，不是假设“AI 正在输入”');
-  assert.ok(driver.userInputRemainingMs(101) > 0, '若 CDP 自己的前置事件也上报，当前保守策略同样记它');
+  assert.equal(driver.userInputRemainingMs(101), 0, 'CDP keyDown 回声必须被一次性标记消费，不能冒充真人刷新时间戳');
   advance(10);
   guest.emit('before-input-event', {}, { type: 'keyDown', key: 'x' }); // 同页、同类、同键、同一焦点框的真人事件
   assert.equal(driver.userInputRemainingMs(101), 3_000, '真人的第二次按键必须刷新时间戳，不能被在途 CDP 键吞掉');
@@ -264,6 +365,25 @@ await check('同页同类（模拟 guest 原生回调）：AI type 的 CDP keyDo
   assert.match(oldAction.detail ?? '', /可能已写入部分文字.*后续操作未派发/);
   driver.forgetUserInput(101);
   mode = 'normal';
+});
+
+await check('Q3 · CDP 未回送原生事件时，150ms 到期后的同页同类真人键仍计数；别页不受本页标记影响', async () => {
+  driver.forgetUserInput(101);
+  driver.forgetUserInput(202);
+  const guest = guests.get(101) as { emit: (name: string, event: object, input: object) => void;
+    debugger: { sendCommand: (method: string, params: object) => Promise<object> } };
+  const other = guests.get(202) as { emit: (name: string, event: object, input: object) => void };
+  assert.ok(guest && other);
+  mode = 'normal'; // 宿主不会自动回声，但生产 CDP 统一出口仍须登记短窗标记
+  await guest.debugger.sendCommand('Input.dispatchKeyEvent', { type: 'keyDown', key: 'x' });
+  assert.equal(driver.userInputRemainingMs(101), 0, '只发 AI 命令本身不能刷新用户闸');
+  other.emit('before-input-event', {}, { type: 'keyDown', keyCode: 'x' });
+  assert.equal(driver.userInputRemainingMs(202), 3_000, 'A 页 CDP 标记不能吞 B 页真人');
+  advance(150); // “150ms 后”包含边界这一毫秒，不是必须等 3000ms
+  guest.emit('before-input-event', {}, { type: 'keyDown', keyCode: 'x' });
+  assert.equal(driver.userInputRemainingMs(101), 3_000, '同页同类真人在 CDP 命令发出满 150ms 后必须计数');
+  driver.forgetUserInput(101);
+  driver.forgetUserInput(202);
 });
 
 await check('真实状态广播：本页首次输入立刻显示原文，3 秒后还原；手动暂停优先/别页不串', () => {

@@ -6,7 +6,7 @@
 |---|---|---|
 | `packages/shared/src/index.ts:310` | 类型 `DriveResult.outcome` | 是；第四个可选值 |
 | `packages/shared/src/index.ts:1157` | 类型 `LoopToolResult.outcome` | 是；旧调用者不填仍兼容 |
-| `apps/desktop/electron/driver.ts:510,2238` | 生产者：入口 3 秒闸及异步派发前复查产生 `ok:false, outcome:'blocked'`，部分执行详情如实说明 | 是；既非 failed 亦非 unknown |
+| `apps/desktop/electron/driver.ts:510,2243` | 生产者：入口 3 秒闸及异步派发前复查产生 `ok:false, outcome:'blocked'`，部分执行详情如实说明 | 是；既非 failed 亦非 unknown |
 | `apps/desktop/electron/agent.ts:346` | `toResult()` 把 outcome 原样带入服务端回执 | 是；不降级 |
 | `apps/desktop/electron/agent.ts:729` | 桌面循环独立 blocked 分支，在普通步骤/失败/unknown 计数前等待本页安静、读当前页 | 是；不增桌面步数或失败/unknown 计数 |
 | `apps/desktop/electron/agent.ts:871` | 原有 unknown 分支；只针对超时或中断 | 是；blocked 已在此前 `continue`，不会落进 unknown |
