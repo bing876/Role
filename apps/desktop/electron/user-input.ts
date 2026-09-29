@@ -2,10 +2,13 @@
  * P1 · WebContentsView guest 的原生键鼠事件时间戳。只记 wcId/单调时间，不采集键值、坐标或表单内容。
  *
  * Electron 的 before-input-event / before-mouse-event 不提供可信的“物理用户 vs CDP”来源位。
- * 这一片先原样记录 guest 的事件；**不能**把“AI 同类输入在途”当成忽略所有同类
- * 事件的依据，否则用户同一瞬间在同一输入框打字会被静默漏掉。来源边界须在 P1
- * 同页同类验收中单独检验；此处不把模拟事件冒称真机来源证明。
+ * **保守选择不漏真人接管**：同一页/同一类/同一键在 CDP 未回包时照记时间戳，
+ * 因此 CDP 回声若也进入这些事件，会触发最多 3 秒的多余让路/提示。
+ * 这是可用性代价，不把“AI 同类输入在途”当忽略真人的理由；同类模拟事件
+ * 已有验收，Win/mac 物理键盘/CDP 交错仍需真机验证。见 ADR-0011。
  */
+import type { WebContents } from 'electron';
+
 export const USER_INPUT_QUIET_MS = 3_000;
 
 /** 注入时钟只用于精确测 2999/3000ms；生产始终用主进程单调钟。 */
@@ -52,4 +55,20 @@ export function forgetUserInput(wcId: number): void {
   expiryTimers.delete(wcId);
   guestInput.forget(wcId);
   listener?.(wcId, 'forgotten');
+}
+
+/** 主进程唯一 guest 创建口调用；抽出接线以便测试直接发原生回调，不复刻判断。 */
+export function wireGuestInput(contents: WebContents): void {
+  // Electron 的原生事件不含可信来源位。为保证同页同类的真人键不会被漏掉，
+  // 这里不以“AI 的 CDP 正在输入同类键”为理由吞事件；代价是 CDP 回声可能也会
+  // 触发保守让路。须在 Win/mac 真机确认 before-input-event 的具体触发路径。
+  contents.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseMove' || mouse.type === 'mouseDown' || mouse.type === 'mouseWheel') {
+      recordUserInput(contents.id);
+    }
+  });
+  contents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown') recordUserInput(contents.id);
+  });
+  contents.once('destroyed', () => { forgetUserInput(contents.id); });
 }

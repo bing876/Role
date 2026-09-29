@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
+import { EventEmitter } from 'node:events';
 import { build } from 'esbuild';
 import { runToolLoop } from '../../apps/desktop/electron/agent';
 import { describeToolResult } from '../../apps/server/src/toolLoop';
@@ -25,9 +26,11 @@ console.log('\n=== P1 · 用户操作后 3 秒内不派发后续键鼠动作 ===
 await check('唯一 WebContentsView guest 接线口真实监听键鼠事件并按 wcId 销毁清理', () => {
   const main = readFileSync(path.join(root, 'apps/desktop/electron/main.ts'), 'utf8');
   const wire = main.slice(main.indexOf('function wireBrowserGuest(contents: WebContents)'), main.indexOf('contents.setWindowOpenHandler('));
-  assert.match(wire, /contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/);
-  assert.match(wire, /contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/);
-  assert.match(wire, /contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/);
+  const inputSource = readFileSync(path.join(root, 'apps/desktop/electron/user-input.ts'), 'utf8');
+  assert.match(wire, /wireGuestInput\(contents\)/);
+  assert.match(inputSource, /contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/);
+  assert.match(inputSource, /contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/);
+  assert.match(inputSource, /contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/);
 });
 await check('旧手动暂停门紧邻新闸，锚定 if (，不能用 false && 虚晃过关', () => {
   const paused = source.indexOf('if (pausedOf(wcId) && PAUSED_BLOCKED.has(actionName))');
@@ -60,20 +63,31 @@ const page = { url: 'https://example.test/', title: '当前页', buttons: [], fi
 const commands: Array<{ method: string; expression?: string }> = [];
 const guests = new Map<number, object>();
 const viewHostRegistry = new Set([101, 202]);
-let mode: 'normal' | 'click-race' | 'type-race' | 'type-clear-race' = 'normal';
+let mode: 'normal' | 'click-race' | 'type-race' | 'type-clear-race' | 'same-key-prepare' | 'same-key-held' = 'normal';
+let releaseHeldKey: ((value: object) => void) | null = null;
 let driver: typeof import('../../apps/desktop/electron/driver') & {
   recordUserInput(wcId: number): void;
   userInputRemainingMs(wcId: number): number;
   forgetUserInput(wcId: number): void;
+  wireGuestInput(contents: unknown): void;
 };
 
 function fakeGuest(id: number) {
+  const nativeEvents = new EventEmitter();
   return {
     id, isDestroyed: () => false, getURL: () => 'https://example.test/',
+    on: nativeEvents.on.bind(nativeEvents), once: nativeEvents.once.bind(nativeEvents),
+    emit: nativeEvents.emit.bind(nativeEvents),
     debugger: {
       isAttached: () => true, attach: () => undefined,
-      sendCommand: async (method: string, params: { expression?: string } = {}) => {
+      sendCommand: async (method: string, params: { expression?: string; type?: string; key?: string } = {}) => {
         commands.push({ method, expression: params.expression });
+        if (id === 101 && method === 'Input.dispatchKeyEvent' && params.type === 'keyDown' && mode === 'same-key-prepare') {
+          mode = 'same-key-held';
+          // 模拟该 CDP keyDown 也进入 Electron 的前置事件：它与真人按下同一键没有来源位。
+          nativeEvents.emit('before-input-event', {}, { type: 'keyDown', key: params.key });
+          return new Promise<object>((resolve) => { releaseHeldKey = resolve; }); // CDP 尚未回包
+        }
         if (method !== 'Runtime.evaluate') return {};
         const expression = params.expression ?? '';
         if (mode === 'click-race' && id === 101) {
@@ -90,6 +104,12 @@ function fakeGuest(id: number) {
           return { result: { value: true } };
         }
         if (expression.includes('window.__wbHelper.snapshot()')) return { result: { value: page } };
+        if (mode.startsWith('same-key-') && expression.includes("desc.set.call(el, '')")) {
+          return { result: { value: true } }; // 唯一的假输入框「搜索」已聚焦/清空
+        }
+        if (mode.startsWith('same-key-') && expression.includes("return String(('value' in el")) {
+          return { result: { value: '' } }; // insertText 本机失败，走逐字符 CDP keyDown 兜底
+        }
         if (expression.includes('window.__wbHelper.pick(')) {
           return { result: { value: { tag: 'INPUT', label: '搜索', x: 100, y: 100 } } };
         }
@@ -105,7 +125,7 @@ guests.set(202, fakeGuest(202));
 const output = await build({
   stdin: {
     contents: `export * from ${JSON.stringify(path.join(root, 'apps/desktop/electron/driver.ts'))};\n` +
-      `export { recordUserInput, userInputRemainingMs, forgetUserInput } from ${JSON.stringify(path.join(root, 'apps/desktop/electron/user-input.ts'))};`,
+      `export { recordUserInput, userInputRemainingMs, forgetUserInput, wireGuestInput } from ${JSON.stringify(path.join(root, 'apps/desktop/electron/user-input.ts'))};`,
     resolveDir: root, sourcefile: 'p1-test-entry.ts', loader: 'ts',
   },
   write: false, bundle: true, format: 'cjs', platform: 'node', target: 'node22',
@@ -136,6 +156,7 @@ const sandbox: Record<string, unknown> = {
 sandbox.globalThis = sandbox;
 vm.runInNewContext(output.outputFiles![0]!.text, sandbox, { filename: 'driver-p1-test.cjs' });
 driver = moduleRef.exports as typeof driver;
+for (const guest of guests.values()) driver.wireGuestInput(guest); // 实际生产接线函数，不在测试里复刻监听器
 
 await check('真实 drive：本页 click/type/fill_form 返回 blocked，零 CDP 命令；read_page/别页照行', async () => {
   driver.recordUserInput(101);
@@ -193,6 +214,50 @@ await check('已发清空但未写字：回执如实说可能部分执行，不�
   assert.match(result.detail ?? '', /输入框可能已聚焦\/清空.*文字尚未派发/);
   assert.equal(commands.filter((x) => x.method.startsWith('Input.')).length, beforeInput);
   driver.forgetUserInput(101);
+});
+
+await check('同页同类（模拟 guest 原生回调）：AI type 的 CDP keyDown 未回包，同一「搜索」框真人同键事件仍刷新时间戳、挡三动作', async () => {
+  driver.forgetUserInput(101);
+  const guest = guests.get(101) as { emit: (name: string, event: object, input: object) => void };
+  assert.ok(guest, '假 guest 必须是 AI 正在输入的同一张页');
+  mode = 'same-key-prepare';
+  releaseHeldKey = null;
+  let finished = false;
+  const inFlight = driver.drive({ action: 'type', target: '搜索', text: 'x' }, 101)
+    .then((result) => { finished = true; return result; });
+  // 推进假时钟到 Input.insertText 读回失败、进入逐字符 CDP keyDown 且尚未回包。
+  for (let i = 0; i < 80 && !releaseHeldKey; i += 1) {
+    await Promise.resolve();
+    advance(50);
+  }
+  assert.ok(releaseHeldKey && !finished, '必须真的卡在生产 typeInto 的 CDP keyDown 上，不是假设“AI 正在输入”');
+  assert.ok(driver.userInputRemainingMs(101) > 0, '若 CDP 自己的前置事件也上报，当前保守策略同样记它');
+  advance(10);
+  guest.emit('before-input-event', {}, { type: 'keyDown', key: 'x' }); // 同页、同类、同键、同一焦点框的真人事件
+  assert.equal(driver.userInputRemainingMs(101), 3_000, '真人的第二次按键必须刷新时间戳，不能被在途 CDP 键吞掉');
+  const before = commands.filter((x) => x.method.startsWith('Input.')).length;
+  for (const action of [
+    { action: 'click', target: '下一步' },
+    { action: 'type', target: '搜索', text: '另一个词' },
+    { action: 'fill_form', fields: [{ target: '搜索', text: '另一个词' }] },
+  ] as const) {
+    const result = await driver.drive(action, 101);
+    assert.equal(result.outcome, 'blocked', `${action.action} 必须主动让路`);
+    assert.equal(result.ok, false);
+  }
+  assert.equal(commands.filter((x) => x.method.startsWith('Input.')).length, before,
+    '后续三动作不能趁在途 CDP 命令未回包继续下手');
+  releaseHeldKey!({}); // 已发出的那一个键不可撤销，须配对释放；后续写入则应收手
+  for (let i = 0; i < 45 && !finished; i += 1) {
+    await Promise.resolve();
+    advance(50);
+  }
+  assert.ok(finished, '放掉在途 CDP 键后旧 type 不能继续挂死');
+  const oldAction = await inFlight;
+  assert.equal(oldAction.outcome, 'blocked', '已发出的前缀如实标部分执行、后续未派发');
+  assert.match(oldAction.detail ?? '', /可能已写入部分文字.*后续操作未派发/);
+  driver.forgetUserInput(101);
+  mode = 'normal';
 });
 
 await check('真实状态广播：本页首次输入立刻显示原文，3 秒后还原；手动暂停优先/别页不串', () => {

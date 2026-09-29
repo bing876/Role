@@ -151,11 +151,13 @@ log('--- ④ P1 输入计时：唯一 guest 接线口 + 按页精确窗口（不
 {
   const main = read('apps/desktop/electron/main.ts');
   const wire = main.slice(main.indexOf('function wireBrowserGuest(contents: WebContents)'), main.indexOf('contents.setWindowOpenHandler('));
-  ok(/contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/.test(wire),
-    '唯一 WebContentsView guest 入口监听移动/按下/滚轮，并按真实 wcId 记录');
-  ok(/contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/.test(wire),
-    '同一入口监听键盘按下，而非网页内的 JS 事件');
-  ok(/contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/.test(wire),
+  const inputSource = read('apps/desktop/electron/user-input.ts');
+  ok(/wireGuestInput\(contents\)/.test(wire), '唯一 WebContentsView guest 建页口实际挂原生输入接线');
+  ok(/contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/.test(inputSource),
+    '主进程监听移动/按下/滚轮，按真实 wcId 记录');
+  ok(/contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/.test(inputSource),
+    '同一 guest 监听键盘按下，而非网页内的 JS 事件');
+  ok(/contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/.test(inputSource),
     '页销毁丢掉时间戳，wcId 重用不会误继承');
 
   let now = 1_000;
