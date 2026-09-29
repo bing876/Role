@@ -22,6 +22,13 @@ async function check(label: string, verify: () => void | Promise<void>): Promise
 }
 
 console.log('\n=== P1 · 用户操作后 3 秒内不派发后续键鼠动作 ===');
+await check('唯一 WebContentsView guest 接线口真实监听键鼠事件并按 wcId 销毁清理', () => {
+  const main = readFileSync(path.join(root, 'apps/desktop/electron/main.ts'), 'utf8');
+  const wire = main.slice(main.indexOf('function wireBrowserGuest(contents: WebContents)'), main.indexOf('contents.setWindowOpenHandler('));
+  assert.match(wire, /contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/);
+  assert.match(wire, /contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/);
+  assert.match(wire, /contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/);
+});
 await check('旧手动暂停门紧邻新闸，锚定 if (，不能用 false && 虚晃过关', () => {
   const paused = source.indexOf('if (pausedOf(wcId) && PAUSED_BLOCKED.has(actionName))');
   const gate = source.search(/if\s*\(\s*userInputRemainingMs\(wcId\)\s*>\s*0\s*&&\s*PAUSED_BLOCKED\.has\(actionName\)\s*\)/);
