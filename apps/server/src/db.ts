@@ -125,6 +125,18 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
+-- 怀疑 3 + #7（2026-09-29）：复合索引 (conversation_id, id)。
+--   它的左前缀就是 idx_messages_conversation，所以任何按 conversation_id 过滤的
+--   查询都能改用它；同时它让「按 conversation_id 取最近 N 条」
+--   （读历史 / 整理记忆各有一处，SQL 形如 WHERE conversation_id=$1 ORDER BY id DESC LIMIT n）
+--   从「索引扫描 + 排序」变成**纯反向索引扫描，去掉排序节点**，
+--   也让闲置调度里按 conversation_id 分组求 MAX(id) 能走索引。
+--   注：加了它之后 idx_messages_conversation 变成冗余索引（写放大 + 占盘）。
+--   **故意不删**：删索引是生产库操作，要和一次真实迁移 + 实测一起做，
+--   不该塞在这个改动里（用户规矩：接口/结构只增不破）。
+--   ★ 本段在 DDL 模板字符串里，注释也不能出现反引号 —— 会把模板截断
+--     （2026-09-29 真踩过一次：注释里写了两个反引号，tsc 直接报 Expected ";" but found "WHERE"）。
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages (conversation_id, id);
 
 -- 收尾 6（安全）：任务目标 goal 只以密文存 goal_enc 列。
 --   · payload 里不再有明文 goal（历史行由 migrateTaskGoalEncryption 摘掉）；

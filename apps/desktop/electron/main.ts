@@ -1799,6 +1799,24 @@ ipcMain.handle('workbench:browser:view-close', (_event, tabKeyRaw: unknown) => {
   const wcId = viewHostWcIdOf(tabKey);
   viewHostClose(tabKey);
   if (wcId) stopWatchForWc(wcId);
+  /**
+   * ★ R7 修复（2026-09-29）：关页时告诉服务端"这一路不要了"。
+   *
+   * 原状：这里只停了 watch（主进程自己的事），**服务端完全不知道页关了**。
+   *   于是服务端 `pageState` 里那张页的分片状态会滞留最多 10 分钟，
+   *   `latestPageStateOfAgent()` 继续把它当"最新"并进显示态 —— 界面显示
+   *   "需要登录 / 还在忙"，而用户早就把那张页关掉了。
+   *
+   * 带 `wcId`（不是 loopId）是关键：服务端 `stopLoopsOfPage` 会停掉该页**全部**循环，
+   *   并顺手清掉该页的分片状态。用 loopId 只会停一路，页状态照样留着。
+   *
+   * fire-and-forget：关页是 UI 的即时动作，不能为了等后端回包卡住它。
+   *   没登录（`agentJwt` 空）时 `agentPost` 会抛，被 catch 吞掉 —— 与同文件其他
+   *   `void agentPost(...).catch(() => undefined)` 的用法一致。
+   */
+  if (wcId) {
+    void agentPost('/agent/loop/stop', { wcId, reason: 'page_closed' }).catch(() => undefined);
+  }
 });
 
 // 第 8 步：结果文档下载。拿到 Markdown 后：先本地脱敏兜底，再弹系统"保存为"对话框（只有 1 个窗口，不新增窗）。

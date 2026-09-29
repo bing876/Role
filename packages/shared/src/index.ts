@@ -287,6 +287,25 @@ export interface DriveResult {
    * 不是失败（ok 仍为 true），只是给驾驶循环一个「这次多半没点中」的信号。
    */
   noChange?: boolean;
+  /**
+   * P1-2 修复（2026-09-29）· 这一步到底做成没有。
+   *
+   * 为什么必须有这个字段：以前只有 ok:true/false，而**超时**被记成 ok:false，
+   * 跟「元素没找到」「参数不合法」这种**确定没做成**的失败混成一类。
+   * 可超时的真相是：**动作可能已经执行了**（Promise.race 超时后，
+   * hooks.exec() 仍在后台跑，那一下点击照样发出去）。
+   * 模型看到「失败」就去重试，于是点两次 = 下两单 / 发两条 / 提交两次。
+   *
+   * 三态口径：
+   *   'done'    确定执行完了（ok:true 的缺省值）
+   *   'failed'  确定**没**执行（ok:false 且原因是执行前的校验/定位失败）
+   *   'unknown' **不知道**（超时 / 被打断）。此时绝不许直接重试，
+   *            必须先 read_page 看当前页面再决定。
+   *
+   * 可选字段（不破坏旧代码）：驾驶循环用 res.outcome ?? (res.ok?'done':'failed')
+   * 推导，所以没填的旧路径行为不变。
+   */
+  outcome?: 'done' | 'failed' | 'unknown';
   /** screenshot 动作的产物：data URL，只放内存，不落库 */
   screenshot?: string;
 }
@@ -1118,6 +1137,21 @@ export interface LoopToolResult {
   page?: PageSnapshot;
   /** 工具压根没执行（被本地安全闸拦下）时的原因 */
   refused?: string;
+  /**
+   * P1-2（2026-09-29）· 这一步**到底做成没有**（与 DriveResult.outcome 同源，由桌面透传）。
+   *
+   *   以前只有 ok:true/false，而**超时**被记成 ok:false，跟"元素没找到"这种
+   *   **确定没做成**的失败混成一类。真相是超时的动作**可能已经执行了**
+   *   （Promise.race 超时不取消执行，那一下点击照样发出去）。
+   *   模型看到"失败"就重试，于是点两次 = 下两单 / 发两条 / 提交两次。
+   *
+   *   'done'    确定执行完了
+   *   'failed'  确定**没**执行
+   *   'unknown' **不知道**（超时/被打断）—— 此时必须先读页面确认，不许直接重试
+   *
+   * 可选字段：没填时按 ok 推导（ok:true -> done，ok:false -> failed），旧行为不变。
+   */
+  outcome?: 'done' | 'failed' | 'unknown';
   /** 用户在循环跑着的时候补的一句答复（只进上下文，不落库） */
   userAnswer?: string;
   /**

@@ -44,7 +44,14 @@ export interface ToolLoopHooks {
    */
   next(loopId: string, result: LoopToolResult | null): Promise<AgentLoopDecision>;
   /** 现有 driver.ts 的单动作执行器（打到这一路自己的那张页上） */
-  exec(action: BrowserAction): Promise<DriveResult>;
+  /**
+   * 现有 driver.ts 的单动作执行器（打到这一路自己的那张页上）。
+   *
+   * @param signal 可选取消信号（P1-2 补刀，2026-09-29）。
+   *   实现方应在「派发前」和「自己发起的等待中」响应它。
+   *   ★ 它挡不住「已经派发出去的那一下」—— 见 driver.ts 的 abortIfRequested 注释。
+   */
+  exec(action: BrowserAction, signal?: AbortSignal): Promise<DriveResult>;
   /** 用户是否已接管（暂停标志）——每一格都查 */
   isPaused(): boolean;
   /** 这一路是否已作废（reset / stop / 被新任务顶掉） */
@@ -123,6 +130,8 @@ export interface ToolLoopHooks {
 const FAILS_BEFORE_ASK = 2;
 /** 点了但页面连着这么多次没变化就不再盲点（本地转 ask） */
 const STALE_BEFORE_ASK = 3;
+/** P1-2：连续这么多步「不确定是否生效」就停下来问人，不无限读页面-再试 */
+const UNCERTAIN_BEFORE_ASK = 3;
 
 /**
  * 第 21 步 · 单个工具执行的硬上限（**防死锁**）。
@@ -134,6 +143,69 @@ const STALE_BEFORE_ASK = 3;
  * 把原因喂回模型，让它给出「原因 + 一个下一步」，循环继续活着。
  */
 const EXEC_TIMEOUT_MS = 20_000;
+/**
+ * P1-2 修复（2026-09-29）· **按动作分别定超时**，不再一刀切 20 秒。
+ *
+ * 一刀切 20 秒有两个必现 bug：
+ *
+ *   ① `wait` 动作本身就是「等 N 秒」。driver 允许 0~300 秒（MAX_WAIT_SECONDS），
+ *      实际睡眠上限 30 秒。于是**任何 20~30 秒的 wait 都被 20 秒超时判成失败** ——
+ *      而它其实成功了。模型收到「失败」可能重试，于是白等两遍，甚至误判任务卡住。
+ *      => wait 的超时必须是「它自己要等的时间 + 余量」。
+ *
+ *   ② `open_url` 要等整个页面加载完。真实站点 20 秒经常不够（慢网 / 大页），
+ *      一超时就被记成「打开失败」，模型于是换个网址重开 —— 而原来那页其实还在加载。
+ *
+ * 其余交互类动作（click / type / scroll / fill_form ...）保持 20 秒：那些是本地
+ * CDP 调用，挂住基本就是真卡了，长等没有意义。
+ *
+ * 全部可配（env），配歪了有下限兜底，不会变成 0 或负数。
+ */
+const OPEN_URL_TIMEOUT_MS = (() => {
+  const n = Number(process.env.EXEC_TIMEOUT_OPEN_URL_MS);
+  return Number.isFinite(n) && n >= 5_000 ? Math.floor(n) : 90_000;
+})();
+const READ_PAGE_TIMEOUT_MS = (() => {
+  const n = Number(process.env.EXEC_TIMEOUT_READ_PAGE_MS);
+  return Number.isFinite(n) && n >= 5_000 ? Math.floor(n) : 40_000;
+})();
+/** wait 自己那段时间之外的余量（sleep 期间页面自己变样，也要留时间收尾） */
+const WAIT_GRACE_MS = (() => {
+  const n = Number(process.env.EXEC_TIMEOUT_WAIT_GRACE_MS);
+  return Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : 10_000;
+})();
+/** fill_form 每多一个字段多给这么久（要逐个定位 + 逐个写入） */
+const FILL_FORM_PER_FIELD_MS = (() => {
+  const n = Number(process.env.EXEC_TIMEOUT_FILL_FORM_PER_FIELD_MS);
+  return Number.isFinite(n) && n >= 1_000 ? Math.floor(n) : 8_000;
+})();
+
+/**
+ * 这一步该给多久。纯函数，可单测。
+ *
+ * ★ `wait` 那条是关键：**必须比它自己要等的时间长**，否则必现假失败。
+ *   driver 侧实际睡眠 = min(seconds, 30)，所以这里按同一个口径算，再加余量；
+ *   模型配 300 秒也不会真等 300 秒（driver 自己会截到 30）。
+ */
+export function execTimeoutFor(action: BrowserAction): number {
+  switch (action.action) {
+    case 'open_url':
+      return OPEN_URL_TIMEOUT_MS;
+    case 'read_page':
+      return READ_PAGE_TIMEOUT_MS;
+    case 'wait': {
+      // 与 driver.ts 的 sleep(min(max(seconds,0),30)*1000) 同口径
+      const sleepMs = Math.min(Math.max(action.seconds, 0), 30) * 1000;
+      return sleepMs + WAIT_GRACE_MS;
+    }
+    case 'fill_form':
+      return EXEC_TIMEOUT_MS + action.fields.length * FILL_FORM_PER_FIELD_MS;
+    case 'screenshot':
+      return READ_PAGE_TIMEOUT_MS;
+    default:
+      return EXEC_TIMEOUT_MS;
+  }
+}
 
 /** 「找不到输入框」类失败：模型给的 target 对不上页面上任何输入框 */
 const NO_INPUT_FOUND = /没找到可输入的输入框|找不到.{0,6}输入框/;
@@ -267,6 +339,9 @@ function toResult(res: DriveResult): LoopToolResult {
     error: res.error,
     noChange: res.noChange,
     page: res.pageSnapshot,
+    // P1-2（2026-09-29）：透传「到底做成没有」。服务端与模型都看得到
+    // 'unknown'，才不会把「超时」当「确定失败」去重试。
+    ...(res.outcome ? { outcome: res.outcome } : {}),
     // R3-F4：拒收标记透传 —— 之前这里把 risk 吞了，服务端/模型永远看不到"被闸拦下"，只能看到含糊的失败。
     ...(res.risk ? { refused: res.risk === 'pay' ? '付款/下单类动作被本地安全闸拦下：必须由用户自己点' : '敏感字段被本地安全闸拦下：必须由用户自己在页面里输' } : {}),
   };
@@ -310,6 +385,8 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
     answers.length > 0 ? { ok: true, detail: '（上一格在等用户答话，没有执行动作）', userAnswer: answers.join(' / ') } : null;
 
   let fails = 0;
+  /** P1-2：「不确定是否生效」的连续次数（与 fails 分开计，见下方 unknown 分支） */
+  let uncertain = 0;
   let staleClicks = 0;
   let step = 0;
   /** 这一路最近一次读到的页面快照（只用来给 done 收尾提供「最后页面要点」；按路隔离，不跨 lane） */
@@ -582,24 +659,64 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
     }
 
     let res: DriveResult;
+    // P1-2 修复（2026-09-29）：按动作取超时（wait 必须比自己长、open_url 要能等加载），
+    // 且超时要标成 outcome:'unknown' —— 见下面注释。
+    const execTimeoutMs = execTimeoutFor(action);
+    let timedOut = false;
+    /**
+     * P1-2 补刀（2026-09-29）· **超时之后真的去取消，而不是走开**。
+     *
+     * 原状只有 `Promise.race`：超时的那一秒，系统这边拿到一个 `{ok:false}`
+     * 就继续往下走了，而 `hooks.exec(action)` **仍在后台跑** ——
+     * 那一下点击照样会发出去。我把回执标成了 outcome:'unknown' 让模型别重试，
+     * 但**动作本身没有被止住**，用户侧该发生的事还是会发生。
+     *
+     * 现在：超时回调里 `execAbort.abort()`。执行方（driver.ts）收到后会
+     *   ① 不再派发任何新动作；② 中断自己发起的等待。
+     *
+     * ★ 仍然挡不住的（不夸大）：若那一下点击在 abort 之前已经通过 CDP 发给
+     *   浏览器了，**没有任何办法收回来**。所以这条机制的真实保证是
+     *   「决定放弃之后不再继续下手 + 不再傻等」，不是「撤销已发生的点击」。
+     *   这一点在 driver.ts 的 abortIfRequested 注释里也写了。
+     */
+    const execAbort = new AbortController();
     try {
-      // 第 21 步：给「手」加超时 —— 任何一次执行挂住都不能把整条循环带走（见 EXEC_TIMEOUT_MS）
+      // 第 21 步：给「手」加超时 —— 任何一次执行挂住都不能把整条循环带走。
+      //
+      // ★ P1-2 关键：`Promise.race` 超时**不会取消** `hooks.exec(action)`。
+      //   那一下点击照样会发出去，只是我们这边先拿到了"超时"这个结果。
+      //   所以超时**不是失败**，是"不知道成没成"。以前这里回 ok:false，
+      //   模型看到失败就重试，于是点两次 = 下两单 / 发两条 / 提交两次。
+      //   现在标 outcome:'unknown'，并在下面给人话 + 由驾驶循环决定怎么走。
       res = await Promise.race([
-        hooks.exec(action),
+        // P1-2 补刀：把取消信号交给执行方 —— 超时/停止时它真的会停手，
+        // 而不是像原状那样"系统这边先走了，动作还在后台跑完"。
+        hooks.exec(action, execAbort.signal),
         new Promise<DriveResult>((resolve) => {
-          setTimeout(
-            () =>
-              resolve({
-                ok: false,
-                action: action.action,
-                error: `这一步 ${EXEC_TIMEOUT_MS / 1000} 秒没有完成（页面可能卡住了或一直没加载完）`,
-              }),
-            EXEC_TIMEOUT_MS,
-          );
+          setTimeout(() => {
+            timedOut = true;
+            // ★ 关键的一步：真的叫停执行方。少了这句，前面所有工作都只是"换个说法"。
+            execAbort.abort();
+            resolve({
+              ok: false,
+              action: action.action,
+              // 不写"失败"，写"不确定"：这句文案直接进模型上下文，用词会决定它下一步怎么做
+              outcome: 'unknown',
+              error:
+                `这一步 ${Math.round(execTimeoutMs / 1000)} 秒没有回来（页面可能卡住了或一直没加载完）。` +
+                `注意：这一步**不确定有没有生效**，先 read_page 看当前页面再决定，不要直接重试同一个动作。`,
+            });
+          }, execTimeoutMs);
         }),
       ]);
     } catch (err) {
+      // 执行方抛错了：同样叫停，别让它在后台继续（例如抛错后还在跑 fill_form 剩下的字段）
+      execAbort.abort();
       res = { ok: false, action: action.action, error: (err as Error).message };
+    } finally {
+      // 正常跑完也要清掉 controller：否则 abort 监听器会一直挂在 signal 上
+      // （这一路循环可能还有成千上万步，攒下来就是无谓的内存/句柄占用）。
+      execAbort.abort();
     }
     if (hooks.aborted()) return 'aborted';
     if (res.pageSnapshot) lastSnapshot = res.pageSnapshot;
@@ -677,7 +794,61 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
       }
       staleClicks = 0;
       fails = 0;
+      uncertain = 0;
       result = toResult(res);
+      continue;
+    }
+
+    /**
+     * ★ P1-2：`outcome === 'unknown'`（超时/被打断）**不能**直接当成失败重试。
+     *
+     * 单独走一条路，理由：超时的真相是「动作可能已经执行了」
+     * （Promise.race 超时不取消 hooks.exec，那一下点击照样发出去）。
+     * 把它并进下面的 `fails += 1` 会让模型以为"确定没做成"，于是重试 ——
+     * 点两次 = 下两单 / 发两条 / 提交两次。
+     *
+     * 这里做三件事：
+     *   ① 给模型一句**明确指令**：先 read_page 看当前页面，别直接重试同一个动作。
+     *      这句话进 result.error，直接决定它下一步做什么 —— 光加个字段不够，
+     *      模型读的是文本。
+     *   ② 单独计数 uncertain，连 uncertain 到 UNCERTAIN_BEFORE_ASK 次就停下来问人，
+     *      不无限"读页面-再试"。
+     *   ③ 不进 fails（fails 是"确定没做成"的计数，混在一起会让求助时机错乱）。
+     */
+    if (res.outcome === 'unknown' || timedOut) {
+      uncertain += 1;
+      hooks.emit({
+        kind: 'note',
+        level: 'info',
+        text: `这一步 ${Math.round(execTimeoutMs / 1000)} 秒没回来，我不确定它到底生效没有 —— 先读当前页面确认，不直接重试。`,
+      });
+      const probe = await hooks.exec({ action: 'read_page' });
+      if (probe.pageSnapshot) lastSnapshot = probe.pageSnapshot;
+      const probeSummary = `步 ${step}（确认）：读当前页面${probe.ok ? '' : `；也没读成：${probe.error ?? '未知原因'}`}`;
+      hooks.emit({ kind: 'step', step, summary: probeSummary, ok: probe.ok });
+      await hooks.taskStep(taskId, probeSummary, probe.ok).catch(() => undefined);
+      result = {
+        ...toResult(res),
+        // 覆盖 error：把"下一步该干什么"说死，别让模型自己猜
+        error:
+          `上一步 ${Math.round(execTimeoutMs / 1000)} 秒没回来，**不确定是否生效**。` +
+          `已替你读了当前页面（${probe.ok ? '见下面的页面快照' : '但也没读成'}）。` +
+          `请**基于当前页面**决定下一步：如果目标已经达成就直接 done；` +
+          `如果看起来没生效，可以重试同一个动作；如果页面状态不明，先别动，向用户说明。`,
+      };
+      if (uncertain >= UNCERTAIN_BEFORE_ASK) {
+        maybeRaiseHelp(`连续 ${uncertain} 步不确定是否生效`);
+        hooks.emit({
+          kind: 'ask',
+          reason: 'exec_uncertain',
+          question:
+            `连续 ${uncertain} 步都不确定有没有生效（页面响应很慢或卡住了）。我不再盲试了。` +
+            '你可以：① 等页面加载完点「继续」，我会先读你当前停留的页面接着做；' +
+            '② 或者告诉我现在页面上该点什么，我按你说的来。',
+        });
+        hooks.phase('paused', '连续多步不确定是否生效，等用户', 'agent');
+        return pauseOut({ by: 'agent', result, reason: 'exec_uncertain' });
+      }
       continue;
     }
 

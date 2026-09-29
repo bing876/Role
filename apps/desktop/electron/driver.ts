@@ -87,6 +87,14 @@ const MAX_REASON_LEN = 1_000;
 const MAX_OUTLINE_ITEMS = 100;
 const MAX_FORM_FIELDS = 100;
 const MAX_WAIT_SECONDS = 300;
+/**
+ * P1-2（2026-09-29）· **实际睡眠上限**。
+ *
+ * 原来这里是个散落在 `case 'wait'` 里的字面量 30，而校验用的上限是
+ * MAX_WAIT_SECONDS=300 —— 两个数不一致，导致"模型要 300 秒、实际睡 30 秒、
+ * 回执还说等了 300 秒"。提成常量并让回执按真实值报。
+ */
+const MAX_WAIT_SECONDS_CLAMPED = 30;
 
 export type ActionShapeCheck =
   | { ok: true; action: BrowserAction }
@@ -875,8 +883,58 @@ async function evaluate<T>(wc: Target, expression: string): Promise<T> {
   return res.result?.value as T;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * P1-2 补刀（2026-09-29）· **可取消的 sleep**。
+ *
+ * 原状就是一个裸 setTimeout promise，没有任何办法中途叫停。于是「等 30 秒」
+ * 这个动作一旦开始，就算外面已经决定放弃了，它也会老老实实睡满 30 秒 ——
+ * 期间整条驾驶循环被它堵着，用户点了「暂停」也得等它睡完。
+ *
+ * 取消语义：**提前 resolve（不是 reject）**。这是有意的 ——
+ * 调用方（drive 的 wait 分支）会另外看 signal.aborted 来决定怎么回执，
+ * 让 sleep 抛错只会逼着每一处调用都写 try/catch，而它们本来就要判 aborted。
+ *
+ * @param signal 传入已 aborted 的 signal 会**立即**返回（不排一个定时器）
+ */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    // 取消时也要把定时器清掉：否则进程里会留一个 30 秒的悬空 timer，
+    // 单元测试里表现为「进程不退出」，生产里表现为无谓的句柄占用。
+    signal?.addEventListener('abort', done, { once: true });
+  });
+}
+
+/**
+ * 这一步还要不要继续？**可取消执行的唯一判据**。
+ *
+ * 放在这里而不是散在各 case 里，是因为「什么时候算还能救」必须只有一处口径：
+ * 一旦 signal 已 aborted，就**不再产生任何新的页面副作用**。
+ *
+ * ★ 诚实的边界（必须写清楚，别夸大成"能撤销"）：
+ *   信号只能挡住**还没派发出去**的动作。若那一下点击已经通过 CDP 发给浏览器了，
+ *   **没有任何办法把它收回来** —— 本机制的价值在于"决定放弃之后不再继续下手"，
+ *   以及"别再傻等自己发起的等待"，不是"撤销已经发生的点击"。
+ */
+function abortIfRequested(
+  signal: AbortSignal | undefined,
+  actionName: DriveActionLabel,
+): DriveResult | null {
+  if (!signal?.aborted) return null;
+  return {
+    ok: false,
+    action: actionName,
+    // 与 P1-2 的超时回执同属一类：**不确定有没有生效**
+    outcome: 'unknown',
+    error: `这一步在派发前就被取消了（${actionName}）—— 没有产生任何页面副作用。`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2040,7 +2098,21 @@ async function captureScreenshot(wc: Target): Promise<string> {
 // ---------------------------------------------------------------------------
 
 /** 传入一个动作 → 在内嵌页执行 → 返回 { ok, pageSnapshot } */
-export async function drive(action: BrowserAction, targetWebContentsId?: number): Promise<DriveResult> {
+/**
+ * @param signal 可选取消信号（P1-2 补刀，2026-09-29）。
+ *   传入后：① 一开始就已取消则直接返回、不碰页面；
+ *           ② 派发每个动作**之前**再查一次，取消了就当场返回（不下手）；
+ *           ③ 自己发起的等待（wait / 各类 settle sleep）可被中途叫停。
+ *   不传则行为与之前完全一致（三个既有调用方无需改动）。
+ *
+ *   ★ 挡不住的是「已经派发出去的那一下」——CDP 发出去就收不回来。
+ *     这条机制保证的是「决定放弃之后不再继续下手」，不是「撤销已发生的点击」。
+ */
+export async function drive(
+  action: BrowserAction,
+  targetWebContentsId?: number,
+  signal?: AbortSignal,
+): Promise<DriveResult> {
   /**
    * ★ 形状闸：先把"这到底是不是一个合法动作"查清楚，再谈执行。
    *
@@ -2063,6 +2135,11 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
   action = check.action;
 
   const actionName = action.action;
+
+  // P1-2 补刀：一开始就已取消 → 直接返回，**不解析目标、不碰页面**。
+  // 放在形状闸之后：非法动作仍然要报"动作不合法"，不能报成"已取消"（那会误导排查）。
+  const earlyAbort = abortIfRequested(signal, actionName);
+  if (earlyAbort) return earlyAbort;
 
   // 第 22 步：**先解析目标**（没点名 / 页没了都当场报错），因为下面的暂停门是按 target 判的
   // —— 先知道是哪张页，才谈得上它有没有被按住。
@@ -2087,6 +2164,11 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
   }
 
   try {
+    // P1-2 补刀：**派发前最后一道闸**。到这里目标已解析、暂停门已过，
+    // 再往下就是真正会产生页面副作用的动作了。取消请求必须在这里生效。
+    const preAbort = abortIfRequested(signal, actionName);
+    if (preAbort) return preAbort;
+
     /** 补充说明（例如 type 实际用了哪种写入方式），会一路带到调试区 */
     let detail: string | undefined;
     /** 第 17 步：动作做了但页面没动（点了几次都没反应时给「原因 + 下一步」） */
@@ -2179,8 +2261,35 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         break;
       }
       case 'wait': {
-        await sleep(Math.min(Math.max(action.seconds, 0), 30) * 1000);
-        detail = `等待了 ${action.seconds}s`;
+        /**
+         * P1-2 修复（2026-09-29）· **不再谎报等待时长**。
+         *
+         * 原状：detail 报的是**模型要求的**秒数（模板串里直接取 action.seconds），
+         * 而实际睡眠被上一行截到 30 秒。模型要 300 秒时，回执写"等待了 300s"，
+         * 实际只等了 30 秒 —— 这句假话直接进模型上下文，它会据此判断"已经等够了"，
+         * 于是在页面还没加载完时就去点下一步。
+         *
+         * 现在报**真实等了的**秒数，并且超过上限时如实说明被截断了。
+         */
+        const asked = action.seconds;
+        const actual = Math.min(Math.max(asked, 0), MAX_WAIT_SECONDS_CLAMPED);
+        // P1-2 补刀：等待本身可被中途叫停。被叫停时如实说"只等了这么多"，
+        // 不许继续说"等待了 Ns"（那又是一句对模型的假话）。
+        const startedAt = Date.now();
+        await sleep(actual * 1000, signal);
+        const waitedSec = (Date.now() - startedAt) / 1000;
+        if (signal?.aborted) {
+          return {
+            ok: false,
+            action: actionName,
+            outcome: 'unknown',
+            error: `等待被取消了：原定等 ${actual}s，实际只等了 ${waitedSec.toFixed(1)}s。不确定页面后来变成什么样，先 read_page 确认。`,
+          };
+        }
+        detail =
+          actual < asked
+            ? `等待了 ${actual}s（要求 ${asked}s，本机单次等待上限 ${MAX_WAIT_SECONDS_CLAMPED}s，已按上限执行）`
+            : `等待了 ${actual}s`;
         break;
       }
       case 'read_page': {

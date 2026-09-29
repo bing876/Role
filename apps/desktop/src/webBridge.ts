@@ -36,6 +36,12 @@ if (typeof window !== 'undefined' && !(window as any).workbench) {
   let activeApiBase = '';
   let activeLanes: number[] = [];
   const taskStates: Record<number, TaskState> = {};
+  /**
+   * P1-5 修（2026-09-29）：per-target 的"驾驶暂停门"镜像。
+   * Web 垫片里没有真 CDP，这份 Map 就是暂停门的全部真相 ——
+   * `pauseDriving` / `resumeDriving` 的返回值从它里面读，不再写死 true。
+   */
+  const drivingPaused: Record<number, boolean> = {};
 
   const makeState = (phase: TaskState['phase'], detail: string, wcId = 1001, pausedBy?: 'user' | 'agent'): TaskState => ({
     phase,
@@ -124,8 +130,39 @@ if (typeof window !== 'undefined' && !(window as any).workbench) {
       };
     },
 
-    pauseDriving: async () => true,
-    resumeDriving: async () => true,
+    /**
+     * P1-5 修（2026-09-29）：这两个以前是 `async () => true` ——
+     * **无条件返回成功，却什么都没做**。调用方拿到 `true` 会以为"暂停门已经按住了"，
+     * 于是在浏览器预览模式里点暂停，自动操作照旧跑。这是"撒谎式成功"。
+     *
+     * 现在与主进程的语义对齐：`setDrivingPaused(value, wcId)` 的返回值是
+     * **门此刻的真实状态**（`pausedOf(wcId)`），不是写死的 true。所以这里也
+     * 落一份 per-target 的暂停位、改状态、广播，然后**从状态里读出结果再返回** ——
+     * 万一没落成，返回的就是 false，不会骗人。
+     *
+     * 注意：Web 垫片里没有真的 CDP，所谓"暂停门"只是这份虚拟状态；
+     * 它的价值在于让预览/测试里的暂停行为与真机一致（状态行变、事件广播），
+     * 并且返回值可信。真正的拦截在 `apps/desktop/electron/driver.ts` 的
+     * `pausedOf(wcId) && PAUSED_BLOCKED.has(actionName)` 那一闸。
+     */
+    pauseDriving: async (targetWebContentsId?: number): Promise<boolean> => {
+      const wcId = targetWebContentsId ?? 1001;
+      drivingPaused[wcId] = true;
+      const st = makeState('paused', '已暂停 — 自动操作已停止，浏览器交还给你', wcId, 'user');
+      taskStates[wcId] = st;
+      emit('state', JSON.stringify(st));
+      // 从状态里读，不写死：没落成就会返回 false
+      return drivingPaused[wcId] === true && taskStates[wcId]?.phase === 'paused';
+    },
+
+    resumeDriving: async (targetWebContentsId?: number): Promise<boolean> => {
+      const wcId = targetWebContentsId ?? 1001;
+      drivingPaused[wcId] = false;
+      const st = makeState('running', '已恢复驾驶', wcId);
+      taskStates[wcId] = st;
+      emit('state', JSON.stringify(st));
+      return drivingPaused[wcId] === false && taskStates[wcId]?.phase === 'running';
+    },
 
     startTask: async (targetWebContentsId?: number): Promise<TaskState> => {
       const wcId = targetWebContentsId ?? 1001;

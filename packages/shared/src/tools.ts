@@ -16,7 +16,7 @@
  *   `apps/desktop/package.json` 的 electron-builder `files` 白名单里**没有**
  *   node_modules，打包后的应用在运行时根本没有 `@ai-workbench/shared`。
  *   桌面那份映射表是本地的，与本文件的 `toBrowserAction` 逐项等价，
- *   由 `scripts/verify/tool-registry-parity.mjs` 强制断言一致 ——
+ *   由 `scripts/verify/tool-registry-parity.mts` 强制断言一致 ——
  *   **不要**为了「合一」而给 Electron 主进程加运行时 import，那会让打包产物启动即崩。
  *
  * 阶段 0 范围（最小）：只注册化 5 个浏览器工具 + stop 这 6 个定义。
@@ -189,7 +189,7 @@ export const BROWSER_TOOL_TIMEOUT_MS = 20_000;
 // ---------------------------------------------------------------------------
 // 内建工具定义（6 个：5 个浏览器工具 open_url/read_page/click/type/scroll + stop）。
 // description / parameters 从旧 LOOP_TOOLS **逐字**迁移 ——
-// `scripts/verify/tool-registry-parity.mjs` 会断言 toOpenAITools 输出与旧字面量 deep-equal，
+// `scripts/verify/tool-registry-parity.mts` 会断言 toOpenAITools 输出与旧字面量 deep-equal，
 // 改任何一个字都会红。想改话术请走正常的提示词评审，不要在这里顺手改。
 // ---------------------------------------------------------------------------
 
