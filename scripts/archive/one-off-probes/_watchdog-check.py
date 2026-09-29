@@ -4,8 +4,8 @@
 `start "title" cmd /c ...` 起的**独立窗口**进程是唯一能活过调用边界的姿势。
 
 用法：
-  python scripts/verify/_watchdog-check.py            # 起看门狗 + 反证
-  python scripts/verify/_watchdog-check.py --no-kill  # 只起，不杀 PG
+  python scripts/archive/one-off-probes/_watchdog-check.py            # 起看门狗 + 反证
+  python scripts/archive/one-off-probes/_watchdog-check.py --no-kill  # 只起，不杀 PG
 """
 import os
 import subprocess

@@ -8,7 +8,7 @@
   4. 点发送前后 /health 的 llmCalls
   5. 有没有 chatNote（被本地闸拦下会写提示语）
 
-跑法：python scripts/verify/e2e-send-probe.py
+跑法：python scripts/archive/one-off-probes/e2e-send-probe.py
 """
 import json
 import os

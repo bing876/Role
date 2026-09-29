@@ -6,10 +6,18 @@
     "verify:csp-conformance",
     "verify:r7-page-state",
     "verify:shared-dist",
+    "verify:no-orphans",
+    "verify:sites-registry",
+    "verify:unknown-site",
+    "verify:routing-vs-browser",
+    "verify:sleep-policy",
+    "verify:sleep-wiring",
     "verify:p1-2-outcome",
+    "verify:p1-2-abort",
+    "verify:p1-5-pause",
     "verify:p1-done-hijack",
     "verify:p2-idle-scan",
     "verify:idx-messages"
   ],
-  "chainStepCount": 49
+  "chainStepCount": 57
 }

@@ -3,7 +3,7 @@
 
 判据不靠猜：用 React 的 __reactProps$ / __reactFiber$ 内部属性读出 props.value。
 
-跑法：python scripts/verify/react-input-probe.py
+跑法：python scripts/archive/one-off-probes/react-input-probe.py
 """
 import json
 import os

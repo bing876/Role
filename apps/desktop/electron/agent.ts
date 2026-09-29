@@ -44,7 +44,14 @@ export interface ToolLoopHooks {
    */
   next(loopId: string, result: LoopToolResult | null): Promise<AgentLoopDecision>;
   /** 现有 driver.ts 的单动作执行器（打到这一路自己的那张页上） */
-  exec(action: BrowserAction): Promise<DriveResult>;
+  /**
+   * 现有 driver.ts 的单动作执行器（打到这一路自己的那张页上）。
+   *
+   * @param signal 可选取消信号（P1-2 补刀，2026-09-29）。
+   *   实现方应在「派发前」和「自己发起的等待中」响应它。
+   *   ★ 它挡不住「已经派发出去的那一下」—— 见 driver.ts 的 abortIfRequested 注释。
+   */
+  exec(action: BrowserAction, signal?: AbortSignal): Promise<DriveResult>;
   /** 用户是否已接管（暂停标志）——每一格都查 */
   isPaused(): boolean;
   /** 这一路是否已作废（reset / stop / 被新任务顶掉） */
@@ -656,6 +663,23 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
     // 且超时要标成 outcome:'unknown' —— 见下面注释。
     const execTimeoutMs = execTimeoutFor(action);
     let timedOut = false;
+    /**
+     * P1-2 补刀（2026-09-29）· **超时之后真的去取消，而不是走开**。
+     *
+     * 原状只有 `Promise.race`：超时的那一秒，系统这边拿到一个 `{ok:false}`
+     * 就继续往下走了，而 `hooks.exec(action)` **仍在后台跑** ——
+     * 那一下点击照样会发出去。我把回执标成了 outcome:'unknown' 让模型别重试，
+     * 但**动作本身没有被止住**，用户侧该发生的事还是会发生。
+     *
+     * 现在：超时回调里 `execAbort.abort()`。执行方（driver.ts）收到后会
+     *   ① 不再派发任何新动作；② 中断自己发起的等待。
+     *
+     * ★ 仍然挡不住的（不夸大）：若那一下点击在 abort 之前已经通过 CDP 发给
+     *   浏览器了，**没有任何办法收回来**。所以这条机制的真实保证是
+     *   「决定放弃之后不再继续下手 + 不再傻等」，不是「撤销已发生的点击」。
+     *   这一点在 driver.ts 的 abortIfRequested 注释里也写了。
+     */
+    const execAbort = new AbortController();
     try {
       // 第 21 步：给「手」加超时 —— 任何一次执行挂住都不能把整条循环带走。
       //
@@ -665,10 +689,14 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
       //   模型看到失败就重试，于是点两次 = 下两单 / 发两条 / 提交两次。
       //   现在标 outcome:'unknown'，并在下面给人话 + 由驾驶循环决定怎么走。
       res = await Promise.race([
-        hooks.exec(action),
+        // P1-2 补刀：把取消信号交给执行方 —— 超时/停止时它真的会停手，
+        // 而不是像原状那样"系统这边先走了，动作还在后台跑完"。
+        hooks.exec(action, execAbort.signal),
         new Promise<DriveResult>((resolve) => {
           setTimeout(() => {
             timedOut = true;
+            // ★ 关键的一步：真的叫停执行方。少了这句，前面所有工作都只是"换个说法"。
+            execAbort.abort();
             resolve({
               ok: false,
               action: action.action,
@@ -682,7 +710,13 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
         }),
       ]);
     } catch (err) {
+      // 执行方抛错了：同样叫停，别让它在后台继续（例如抛错后还在跑 fill_form 剩下的字段）
+      execAbort.abort();
       res = { ok: false, action: action.action, error: (err as Error).message };
+    } finally {
+      // 正常跑完也要清掉 controller：否则 abort 监听器会一直挂在 signal 上
+      // （这一路循环可能还有成千上万步，攒下来就是无谓的内存/句柄占用）。
+      execAbort.abort();
     }
     if (hooks.aborted()) return 'aborted';
     if (res.pageSnapshot) lastSnapshot = res.pageSnapshot;

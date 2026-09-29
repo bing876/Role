@@ -8,7 +8,7 @@
  *   `@ai-workbench/shared` 这个包。本文件只允许 `import type`，任何运行时
  *   import（哪怕只是 tools.ts）都会让打包产物在用户机器上启动即崩。
  *   所以这份表是 deliberately duplicate（刻意重复）：它与 shared 内建定义的
- *   `toBrowserAction` 逐项等价，由 `scripts/verify/tool-registry-parity.mjs`
+ *   `toBrowserAction` 逐项等价，由 `scripts/verify/tool-registry-parity.mts`
  *   强制断言一致 —— 改了任何一侧的映射而不改另一侧，对照测试会红。
  *
  * 职责边界：

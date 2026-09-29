@@ -50,14 +50,24 @@ jobs:
       - run: npm run -s verify:csp-conformance
       - run: npm run -s verify:r7-page-state
       - run: npm run -s verify:shared-dist
+      - run: npm run -s verify:no-orphans
+      # 浏览器意图判定 + 休眠策略：纯函数/静态检查，几秒跑完，
+      # 但守着"认不出的站点要如实告知""该睡不睡/不该睡却睡"这类回归。
+      - run: npm run -s verify:sites-registry
+      - run: npm run -s verify:unknown-site
+      - run: npm run -s verify:routing-vs-browser
+      - run: npm run -s verify:sleep-policy
+      - run: npm run -s verify:sleep-wiring
       - run: npm run -s verify:p1-2-outcome
+      - run: npm run -s verify:p1-2-abort
+      - run: npm run -s verify:p1-5-pause
       - run: npm run -s verify:p1-done-hijack
       - run: npm run -s verify:p2-idle-scan
       - run: npm run -s verify:idx-messages
 
   # ---- 主链：46 步全跑 ----
   verify:
-    name: Verify chain (49 steps)
+    name: Verify chain (57 steps)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

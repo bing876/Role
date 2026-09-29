@@ -13,7 +13,7 @@
  *   B. 跨源 http  iframe   —— 播放器最常见（player.xxx.com）
  * 对每一种，测**真鼠标事件**能不能点中框架里的按钮。
  *
- * 用法：./node_modules/.bin/electron scripts/verify/iframe-click-http.mjs --no-sandbox
+ * 用法：./node_modules/.bin/electron scripts/archive/one-off-probes/iframe-click-http.mjs --no-sandbox
  */
 import { app, BrowserWindow } from 'electron';
 import { createServer } from 'node:http';

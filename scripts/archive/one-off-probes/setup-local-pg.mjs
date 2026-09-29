@@ -11,7 +11,7 @@
  *   1. 解压 pg16.zip 到 pg/；2. initdb 建数据目录；3. 起服务（5432）；
  *   4. 建 workbench 角色 + 库；5. 自检：用 DATABASE_URL 真连一次、看 users 表在不在。
  *
- * 跑法：node scripts/verify/setup-local-pg.mjs
+ * 跑法：node scripts/archive/one-off-probes/setup-local-pg.mjs
  */
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';

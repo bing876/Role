@@ -1097,7 +1097,7 @@ export type SanitizeOutcome =
  *
  * 阶段 0：默认走注册表（查定义 → JSON 解析 → 定义的 validate）。
  * `TOOL_REGISTRY_LEGACY=1` 时走下面的 sanitizeToolCallLegacy（旧 switch，逐字保留）。
- * 两条路的等价性由 `scripts/verify/tool-registry-parity.mjs` 逐用例断言。
+ * 两条路的等价性由 `scripts/verify/tool-registry-parity.mts` 逐用例断言。
  */
 export function sanitizeToolCall(raw: LlmToolCall, snapshot: PageSnapshot | null): SanitizeOutcome {
   if (useLegacyToolPath()) return sanitizeToolCallLegacy(raw, snapshot);

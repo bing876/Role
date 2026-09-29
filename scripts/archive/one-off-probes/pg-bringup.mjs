@@ -13,7 +13,7 @@
  *
  * 幂等：重复跑不会破坏已有数据目录。
  *
- * 跑法：node scripts/verify/pg-bringup.mjs [initdb|start|status|stop]
+ * 跑法：node scripts/archive/one-off-probes/pg-bringup.mjs [initdb|start|status|stop]
  */
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';

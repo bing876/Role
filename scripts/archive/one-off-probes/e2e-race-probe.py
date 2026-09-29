@@ -10,7 +10,7 @@
 
 关键：**不重启服务端**，看是不是"服务端重启把登录态打没了"。
 
-跑法：python scripts/verify/e2e-race-probe.py
+跑法：python scripts/archive/one-off-probes/e2e-race-probe.py
 """
 import json
 import os

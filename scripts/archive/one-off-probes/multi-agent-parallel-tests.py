@@ -16,7 +16,7 @@
   - 循环是否真的重叠 → 看假模型日志里每对 req/res 的 **时间区间有没有交集**。
 
 用法：
-  python scripts/verify/multi-agent-parallel-tests.py
+  python scripts/archive/one-off-probes/multi-agent-parallel-tests.py
 """
 import json
 import os

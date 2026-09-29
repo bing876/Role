@@ -13,7 +13,7 @@
 sendChat 在第 1712 行 `patchChat(... concat user)` 是无条件执行的（在 return 之前之后要分清），
 所以"用户消息有没有出现"能精确切分是"更早 return"还是"走到后面失败了"。
 
-跑法：python scripts/verify/send-gate-probe.py
+跑法：python scripts/archive/one-off-probes/send-gate-probe.py
 """
 import json
 import os

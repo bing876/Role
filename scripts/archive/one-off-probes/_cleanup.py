@@ -1,8 +1,8 @@
 """按用户确认的保守方案执行清理（走回收站，可恢复）。
 
 用法：
-    python scripts/verify/_cleanup.py --dry-run    # 只列清单，不动
-    python scripts/verify/_cleanup.py --go         # 真删（分批，每批核验）
+    python scripts/archive/one-off-probes/_cleanup.py --dry-run    # 只列清单，不动
+    python scripts/archive/one-off-probes/_cleanup.py --go         # 真删（分批，每批核验）
 
 ## 用户确认的方案（2026-09-20）
 删：A3+A4（备份里的两份 release 副本）、B（测试 Electron 用户目录）、

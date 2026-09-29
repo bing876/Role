@@ -1,5 +1,5 @@
 // show-sms-code.cjs —— 从库里反推某手机号最新验证码（开发期 mock 模式下用）
-// 用法：node scripts/verify/show-sms-code.cjs [手机号]
+// 用法：node scripts/archive/one-off-probes/show-sms-code.cjs [手机号]
 const crypto = require('crypto');
 const { Client } = require('pg');
 
