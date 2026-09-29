@@ -27,6 +27,7 @@ import type { JsonCipher } from '../crypto';
 import type { ServerEnv } from '../env';
 import { llmFetch } from '../llm';
 import { extractJsonLoose } from '../memoryShared';
+import { modelSettingForCall } from '../modelSettings';
 import { writeCollabToAgentChat } from './collabChat';
 
 export interface RouteDecision {
@@ -251,6 +252,27 @@ export function routeByFuzzy(task: string, roster: RosterEntry[]): RouteDecision
   };
 }
 
+/** 语义路由生产提示词的单一来源；20 题评测也用它，避免测试另写一份更容易的提示词。 */
+export function semanticRoutePrompt(task: string, candidates: RosterEntry[]): string {
+  const lines = candidates.map((r) => {
+    const desc = r.description || r.duty || '（无描述）';
+    const anti = r.antiJobs ? ` | 不干什么：${r.antiJobs}` : '';
+    return `- id=${r.id} | 名字：${r.name} | 描述：${desc}${anti}`;
+  });
+  return [
+    '你是项目调度员。下面这句话要交给一位最合适的智能体处理。',
+    '按「谁最懂这件事」来判断，不要被字面词是否出现误导（同义 / 相关领域也算）。',
+    '',
+    `用户这句话：${task.slice(0, 200)}`,
+    '',
+    '候选智能体：',
+    ...lines,
+    '',
+    '只回一个 JSON：{"choice": <选中的 id 或 "none">, "reason": "一句话理由"}。',
+    '都不合适就 "none"。不要输出 JSON 以外的任何字。',
+  ].join('\n');
+}
+
 /**
  * G3（2026-09-26）语义路由：把「用户这句话 + 每个智能体的名字+描述+不干什么」交给聊天 LLM，
  * 让它选最合适的（或「都不合」）。
@@ -268,28 +290,15 @@ export async function routeBySemantic(
   task: string,
   roster: RosterEntry[],
   env: ServerEnv,
+  userId?: number,
 ): Promise<RouteDecision | null> {
   const candidates = roster.filter((r) => !r.busy && !r.waiting);
   if (candidates.length < 2) return null;
-  if (!env.deepseekApiKey) return null; // 没配模型 → 直接回落
+  const modelSetting = await modelSettingForCall(userId);
+  if (modelSetting.kind === 'invalid' || (modelSetting.kind === 'missing' && !env.deepseekApiKey)) return null;
+  // 无可用模型/密文损坏 → 字面路由；绝不借共享 env key 越过坏密文。
 
-  const lines = candidates.map((r) => {
-    const desc = r.description || r.duty || '（无描述）';
-    const anti = r.antiJobs ? ` | 不干什么：${r.antiJobs}` : '';
-    return `- id=${r.id} | 名字：${r.name} | 描述：${desc}${anti}`;
-  });
-  const prompt = [
-    '你是项目调度员。下面这句话要交给一位最合适的智能体处理。',
-    '按「谁最懂这件事」来判断，不要被字面词是否出现误导（同义 / 相关领域也算）。',
-    '',
-    `用户这句话：${task.slice(0, 200)}`,
-    '',
-    '候选智能体：',
-    ...lines,
-    '',
-    '只回一个 JSON：{"choice": <选中的 id 或 "none">, "reason": "一句话理由"}。',
-    '都不合适就 "none"。不要输出 JSON 以外的任何字。',
-  ].join('\n');
+  const prompt = semanticRoutePrompt(task, candidates);
 
   try {
     const controller = new AbortController();
@@ -298,6 +307,7 @@ export async function routeBySemantic(
     try {
       res = await llmFetch(env, [{ role: 'user', content: prompt }], {
         tag: 'semantic-routing',
+        userId,
         json: true,
         temperature: 0,
         signal: controller.signal,
@@ -380,7 +390,7 @@ export async function routeTask(
   }
 
   if (opts?.env) {
-    const semantic = await routeBySemantic(task, roster, opts.env);
+    const semantic = await routeBySemantic(task, roster, opts.env, userId);
     if (semantic) return semantic;
   }
 

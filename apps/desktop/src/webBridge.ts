@@ -76,9 +76,12 @@ if (typeof window !== 'undefined' && !(window as any).workbench) {
 
   const bridgeImpl = {
     isElectron: false,
+    isPackaged: false,
     platform: 'web',
     appVersion: '0.1.0-web',
     ping: async () => 'pong',
+    serverStatus: async () => ({ reachable: true, ownedByUs: false, lastError: null }),
+    createLocalAccount: async (_password: string) => { throw new Error('本机首次建号仅在安装包中使用'); },
 
     openBrowser: async (_url?: string) => {},
     showBrowser: async () => {},

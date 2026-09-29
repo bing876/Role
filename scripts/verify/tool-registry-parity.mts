@@ -362,6 +362,16 @@ check('注册临时 server 工具成功', () => {
   assert.deepEqual(LOOP_TOOL_NAMES, EXPECTED_TOOL_NAMES);
 });
 
+// 真模型层上线后，生产 buildApp 会安装按 userId 查密文模型配置的 lookup。
+// 本脚本不经 buildApp 而直接调用 advance：补上相同的生产初始化（真 PGlite 空配置 → env 旧行为），
+// 不能把 llmFetch 的缺 lookup 硬闸关掉来迁就测试；下面三条动作断言完全不改。
+const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
+const { makeCipher } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
+const { installModelLookup } = req('../../apps/server/src/modelSettings') as typeof import('../../apps/server/src/modelSettings');
+const parityPool = await makePool('pglite://memory');
+await migrate(parityPool);
+installModelLookup(parityPool, makeCipher('verify-tool-parity-local-data-key'));
+
 const scriptedReplies = [
   [{ id: 'call_e1', type: 'function', function: { name: 'parity_echo', arguments: '{"text":"hi"}' } }],
   [{ id: 'call_r1', type: 'function', function: { name: 'read_page', arguments: '{}' } }],
@@ -426,6 +436,7 @@ try {
   log(`  ★FAIL §⑥ 执行异常  —— ${(err as Error)?.message ?? String(err)}`);
 } finally {
   globalThis.fetch = realFetch;
+  await parityPool.end();
 }
 
 // ---------------------------------------------------------------------------

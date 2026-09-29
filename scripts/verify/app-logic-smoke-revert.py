@@ -484,6 +484,58 @@ MUTATIONS = [
         'replace': '    if (live >= 1000000) {  // 反证注入：活页上限推到天上\n      note(\n        `已经开了 ${live} 张页，到上限 ${cap} 张了（这个数可以在设置里调大）。要开新的，先关掉一张。`,\n      );\n      return null;\n    }\n',
         'expect': '⑱-1',
     },
+    # ---- B1：设置抽屉（账号/密码/浏览器参数/保活 默认收起 = 降噪）----
+    {
+        'file': APP_TSX,
+        'id': 'B1',
+        'visible': True,
+        'name': '把设置抽屉打回「恒开」：拆掉默认收起的闸门，账号块又恒显在侧栏（降噪被打回）',
+        'anchor': '            {settingsOpen && (\n              <div className="settingsDrawer__panel">',
+        'replace': '            {true && (  // 反证注入：设置抽屉恒开（拆掉默认收起闸门）\n              <div className="settingsDrawer__panel">',
+        'expect': '设置抽屉默认就该收起',
+    },
+    # ---- B4：项目切换 = 原生 <select>（降噪：不再「按钮 + 展开列表 + 行」）----
+    #   注入一个残留的 .projectBox__row 旧行按钮：B4 该把「行」换成 <select>，
+    #   旧行还在 = 没换干净 → ⑤ 的 B4 验收（「旧项目行不该还在」）必红。
+    {
+        'file': APP_TSX,
+        'id': 'B4',
+        'visible': True,
+        'name': '把项目切换打回「旧项目行按钮」：<select> 旁边残留一个 .projectBox__row（没换成下拉）',
+        'anchor': '            </select>\n            <input\n              className="authInput projectBox__name"',
+        'replace': '            </select>\n            <button type="button" className="projectBox__row"></button>\n            <input\n              className="authInput projectBox__name"',
+        'expect': '旧的「项目行」按钮还在',
+    },
+    # ---- 形态片·真接管（①，2026-09-27）：拆掉「接管」键的暂停闸 → 点了不再真的暂停这一路 ----
+    {
+        'file': APP_TSX,
+        'id': 'TK1',
+        'visible': True,
+        'name': '「接管」键拆掉暂停闸：点了不再真的暂停这一路（形态① 反证：拆暂停闸必红）',
+        'anchor': "              className=\"inputbar-btn send inputbar-btn--stop\"\n              onClick={() => onSend('停')}\n",
+        'replace': "              className=\"inputbar-btn send inputbar-btn--stop\"\n              onClick={() => undefined} // 反证注入：拆掉暂停闸（点了不暂停）\n",
+        'expect': '点「接管」没有真的暂停这一路',
+    },
+    # ---- 形态片·头像六态（③，2026-09-27）：把六态映射打平（thinking 也变「空闲」）→ 六态塌成一态 ----
+    {
+        'file': APP_TSX,
+        'id': 'TK3',
+        'visible': True,
+        'name': '头像六态映射打平：thinking 也显示「空闲」（六态塌成一态,颜色和词都丢）',
+        'anchor': "  thinking: { color: '#5b9bd5', word: '思考' },\n",
+        'replace': "  thinking: { color: '#8b93a1', word: '空闲' }, // 反证注入：六态塌成空闲\n",
+        'expect': '状态 thinking 的词不对',
+    },
+    # ---- 形态片·Routines 管理（④，2026-09-27）：拆掉列表加载 → 面板永远空 ----
+    {
+        'file': APP_TSX,
+        'id': 'TK4',
+        'visible': True,
+        'name': '定时任务列表加载被拆：点「定时任务」不再拉 GET /routines（列表永远空）',
+        'anchor': "      const res = await fetch(`${API_BASE()}/routines`, { headers: { Authorization: `Bearer ${s.token}` } });\n",
+        'replace': "      return; // 反证注入：拆掉列表加载\n",
+        'expect': 'GET /routines 发出',
+    },
 ]
 
 

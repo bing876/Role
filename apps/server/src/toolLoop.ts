@@ -1217,6 +1217,7 @@ async function askModel(env: ServerEnv, session: LoopSession, tag: string): Prom
   session.abortCtl = ctl;
   const r = await llmFetch(env, session.messages, {
     tag,
+    userId: session.userId,
     temperature: 0.2,
     timeoutMs: 90_000,
     signal: AbortSignal.any([ctl.signal, AbortSignal.timeout(90_000)]),
@@ -1683,6 +1684,8 @@ function lastToolCall(session: LoopSession): LoopToolCall | null {
 // ---------------------------------------------------------------------------
 
 export interface DecideOnceInput {
+  /** 老的一步接口的登录账号号；测试/旧调用方可不传（退回旧 env 模型）。 */
+  userId?: number;
   goal: string;
   stepsSummary: string[];
   snapshot: PageSnapshot;
@@ -1714,7 +1717,7 @@ export async function decideOnce(env: ServerEnv, input: DecideOnceInput): Promis
   ];
   const fake: LoopSession = {
     id: 'oneshot',
-    userId: 0,
+    userId: input.userId ?? 0,
     agentId: null,
     conversationId: null,
     wcId: null,

@@ -11,6 +11,7 @@
  */
 import type { ServerEnv } from './env';
 import { getModelForTask, inferTaskKindFromTag } from './modelRouter';
+import { modelSettingForCall } from './modelSettings';
 
 export interface LlmToolCall {
   id: string;
@@ -29,6 +30,8 @@ export interface LlmMessage {
 export interface LlmCallOptions {
   /** 调用方标签，只用于日志（例如 chat/stream、agent/next-action） */
   tag: string;
+  /** 登录账号号：从该用户的本地密文模型设置读配置，不读取别人的 key；无账号时沿用 env。 */
+  userId?: number;
   stream?: boolean;
   /** 让模型只回一个 JSON 对象（DeepSeek 的 response_format） */
   json?: boolean;
@@ -71,10 +74,16 @@ export async function llmFetch(env: ServerEnv, messages: LlmMessage[], opts: Llm
   const taskKind = inferTaskKindFromTag(opts.tag);
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
   const routed = getModelForTask(env, taskKind, lastUserMsg);
-  const effectiveModel = routed.model;
-  const effectiveBaseUrl = routed.baseUrl;
-  const effectiveApiKey = routed.apiKey;
-  console.log(`[llm] #${calls} tag=${opts.tag} taskKind=${taskKind} model=${effectiveModel} reason=${routed.reason} stream=${opts.stream ? 'yes' : 'no'}`);
+  const setting = await modelSettingForCall(opts.userId);
+  // 有行但解不开/校验失败 → 拒绝，不回退进程级 env key（防换密钥后串回别人的模型）。
+  if (setting.kind === 'invalid') throw new Error('模型配置解密或校验失败，请在设置里重配');
+  const chosen = setting.kind === 'configured' ? setting.config : null;
+  const effectiveModel = chosen?.model ?? routed.model;
+  const effectiveBaseUrl = chosen?.baseUrl ?? routed.baseUrl;
+  const effectiveApiKey = chosen?.apiKey ?? routed.apiKey;
+  if (!effectiveApiKey) throw new Error('未配置模型，请在设置里填 DeepSeek API Key');
+  const reason = chosen ? '当前用户已配置模型' : routed.reason;
+  console.log(`[llm] #${calls} tag=${opts.tag} taskKind=${taskKind} model=${effectiveModel} reason=${reason} stream=${opts.stream ? 'yes' : 'no'}`);
 
   // 兼容旧日志：保留 env.deepseekModel 的引用，但实际使用路由后的模型
   const modelToUse = effectiveModel;
@@ -233,5 +242,6 @@ export async function llmFetch(env: ServerEnv, messages: LlmMessage[], opts: Llm
     headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKeyToUse}` },
     body: JSON.stringify(body),
     signal,
+    redirect: 'error', // 不能把用户的 Bearer key 随 3xx 带去另一域
   });
 }

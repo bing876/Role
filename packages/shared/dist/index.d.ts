@@ -38,7 +38,7 @@ export interface ChatSession {
  *            标题/地址变化不再有 DOM 元素事件，由主进程推过来
  *            （payload 是 { wcId, title?, url? } 的 JSON；wcId 就是 create 回执那份）。
  */
-export type BrowserEvent = 'open' | 'show' | 'hide' | 'focus' | 'state' | 'agent' | 'settings' | 'resources' | 'opentab' | 'pageinfo';
+export type BrowserEvent = 'open' | 'show' | 'hide' | 'focus' | 'state' | 'agent' | 'settings' | 'resources' | 'opentab' | 'pageinfo' | 'teachAction';
 /**
  * 第 23 步：「内嵌页想开新标签」的请求体。
  *
@@ -90,17 +90,58 @@ export interface TaskState {
  * `ask_user` / `done` 本步**只定类型、不接业务**（第 3 步不接大模型），
  * 执行器遇到它们只会返回“未实现”，留着给后面的步骤填。
  */
+/**
+ * ADR-0004 · 浏览器深度 第二片:稳健元素定位的**语义目标**。
+ *
+ * 全是**抗改版**维度(没有 class):稳定属性(id/aria-label/name/data-testid)优先,
+ * 文本 + tag + 结构兜底。站点换 class / 调 DOM 顺序后,同一语义目标照样解析到同一颗元素。
+ */
+export interface SemanticTarget {
+    /** 稳定属性(按此优先级,最抗改版):id */
+    id?: string;
+    /** data-testid */
+    testId?: string;
+    /** aria-label */
+    ariaLabel?: string;
+    /** name */
+    name?: string;
+    /** 兜底:可见文本(包含匹配)。 */
+    text?: string;
+    /** 兜底:标签名(如 'button'),收窄候选。 */
+    tag?: string;
+    /** 兜底:CSS 祖先选择器(结构约束,如 'form' / 'nav'),在同文案多元素时定位置。 */
+    within?: string;
+}
+/** 语义定位的解析结果(先解析,再操作)。 */
+export interface SemanticLocateResult {
+    found: boolean;
+    /** 命中方式:id / testid / aria / name / text / text+tag / text+within / text+tag+within / none */
+    via: 'id' | 'testid' | 'aria' | 'name' | 'text' | 'text+tag' | 'text+within' | 'text+tag+within' | 'none';
+    /** 人/模型可读的解析描述(进回执 detail,可诊断「这次凭什么找到的」)。 */
+    description: string;
+    /** 命中元素的可见文本(截断 60 字)。 */
+    label: string;
+    /** 元素中心坐标(最顶层视口,供 CDP 用);未命中为 null。 */
+    cx: number | null;
+    cy: number | null;
+    w: number;
+    h: number;
+    /** 页面侧解析异常(换页途中 document 为 null 等)——不抛,如实回。 */
+    error?: string;
+}
 export type BrowserAction = {
     action: 'open_url';
     url: string;
 } | {
     action: 'click';
     target: string;
+    semantic?: SemanticTarget;
 } | {
     action: 'type';
     target: string;
     text: string;
     submit?: boolean;
+    semantic?: SemanticTarget;
 } | {
     action: 'scroll';
     direction: 'up' | 'down';
@@ -284,8 +325,18 @@ export interface WorkbenchBridge {
      * 这个字段**必须存在** —— 缺失时 `!undefined` 为真，会被误判成 web 直测模式，桌面端将永远连不上后端。
      */
     isElectron: boolean;
+    /** 片⑤：仅 Electron 安装包为 true；可选字段，旧桥仍兼容。安装包不信任旧的自定义后端地址。 */
+    isPackaged?: boolean;
     /** 连通性自检：主进程返回 pong */
     ping: () => Promise<string>;
+    /** 片⑤：安装包后端守护状态；错误原因不含密钥、账号或请求正文。 */
+    serverStatus: () => Promise<{
+        reachable: boolean;
+        ownedByUs: boolean;
+        lastError: string | null;
+    }>;
+    /** 片⑤：仅安装包首次本地建号；renderer 只传密码，不会获得主进程的 bootstrap secret。 */
+    createLocalAccount: (password: string) => Promise<AuthSession>;
     /** 打开内嵌浏览器区域；url 省略时沿用当前地址 */
     openBrowser: (url?: string) => Promise<void>;
     /** 显示内嵌浏览器区域 */
@@ -905,7 +956,9 @@ export interface AgentView {
     /** 第 16 步：是否处于「启动并保活」监听态（挂在会话状态上；空闲不调模型） */
     listening?: boolean;
     /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户 */
-    status?: 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done';
+    /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户
+     * 形态③（2026-09-27）：补 failed（出错）/ sleeping（休眠）两态 → 六态齐（空闲/思考/执行/需你处理/出错/休眠） */
+    status?: 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done' | 'failed' | 'sleeping';
     /** 状态人话摘要（折叠一行，细节前端可展开） */
     statusDetail?: string;
     /** 状态对应的循环 id（调试/追踪用） */
@@ -970,7 +1023,7 @@ export interface ChatStateResult {
  *   加进来之后，桌面 `resolveBrowserAction` 查不到映射时**返回 null**（既有语义，
  *   不抛错），服务端则走 server 分支就地执行 —— 两侧都安全。
  */
-export type LoopToolName = 'open_url' | 'read_page' | 'click' | 'type' | 'scroll' | 'stop' | 'web_search' | 'spawn_workers' | 'delegate';
+export type LoopToolName = 'open_url' | 'read_page' | 'click' | 'type' | 'click_semantic' | 'type_semantic' | 'scroll' | 'stop' | 'web_search' | 'spawn_workers' | 'delegate';
 /** 模型选出来的一个工具调用 */
 export interface LoopToolCall {
     /** 上游给的调用 id（回执要用它对应） */
@@ -1609,7 +1662,109 @@ export interface WhiteboardPostResult {
     ok: boolean;
     whiteboard: WhiteboardView;
 }
+/** 真模型接入层：用户显式设置模型（默认 DeepSeek）；密钥只写本地密文，不进 WorkbenchSettings。 */
+export type ModelProviderName = 'deepseek' | 'openai' | 'custom';
+export interface ModelConfigView {
+    provider: ModelProviderName;
+    model: string;
+    baseUrl: string;
+    apiKeySet: boolean;
+    /** 只有两种值：**** 表示已有密钥，空串表示没有；不返回密钥正文。 */
+    apiKeyMasked: '****' | '';
+    /** local=本账号密文，env=存量 DEEPSEEK_API_KEY，none=未配置，invalid=密文损坏（不降级） */
+    source: 'local' | 'env' | 'none' | 'invalid';
+}
+export interface ModelConfigInput {
+    provider: ModelProviderName;
+    model?: string;
+    baseUrl?: string;
+    /** 新 key；留空只在当前用户、同供应商、同 baseUrl 的本地配置上保留旧值。 */
+    apiKey?: string;
+}
+export interface ModelTestResult {
+    ok: boolean;
+    detail: string;
+}
+/** 设置表单默认值；旧 DEEPSEEK_MODEL 环境变量保持其既有默认，不受此表影响。 */
+export declare const MODEL_PROVIDER_DEFAULTS: Record<ModelProviderName, {
+    model: string;
+    baseUrl: string;
+}>;
+export type PluginId = 'web_search' | 'image_gen' | 'github' | 'feishu' | `mcp_s${number}`;
+/** 当前登录用户对这个插件的配置状态：没配 / 配了 / 配了且测过 */
+export type PluginStatus = 'unconfigured' | 'configured' | 'tested';
+export interface PluginConfigField {
+    /** 配置字段名（进 config JSON 的 key） */
+    key: string;
+    /** 显示名 */
+    label: string;
+    /** 输入形态：文本 / 密文（打码） / 下拉 */
+    type: 'text' | 'secret' | 'select';
+    /** 是否必填 */
+    required?: boolean;
+    placeholder?: string;
+    /** select 的候选值 */
+    options?: string[];
+    /** 帮助文案 */
+    help?: string;
+}
+/** 一个字段读回后的展示状态（secret 字段 value 是打码后的，masked=true） */
+export interface PluginFieldView {
+    /** 有值（secret 也只看「设没设」，不看值） */
+    set: boolean;
+    /** 打码后的展示值（secret = ****；非 secret = 原值） */
+    masked: boolean;
+    value: string;
+}
+/** GET /plugins/:id/config 的读回（**绝不**含明文密钥） */
+export interface PluginConfigView {
+    pluginId: string;
+    configured: boolean;
+    /** key → 打码后的字段值 */
+    fields: Record<string, PluginFieldView>;
+}
+/** GET /plugins 的列表项（含当前登录用户的配置状态） */
+export interface PluginInfo {
+    id: PluginId;
+    name: string;
+    /** 给 AI 判断「何时用」的描述（也进循环引擎工具表的 description） */
+    description: string;
+    /** 这个能力提供的工具名（接进循环引擎当可调用工具） */
+    tools: string[];
+    /** 需要的配置字段（前端「填 key」表单依据） */
+    configFields: PluginConfigField[];
+    /** 当前登录用户的配置状态：灰(unconfigured) / 绿(configured) / 测过(tested) */
+    status: PluginStatus;
+    /** 是否已配齐可用（决定卡片绿/灰） */
+    enabled: boolean;
+}
+/** 片2 · MCP 通用桥。GET /mcp/servers 只回工具元数据/是否设过 token，绝不回 token。 */
+export interface McpToolView {
+    name: string;
+    description?: string;
+}
+export interface McpServerView {
+    id: number;
+    name: string;
+    url: string;
+    hasAuth: boolean;
+    tools: McpToolView[];
+}
+export interface McpAddServerInput {
+    name: string;
+    url: string;
+    auth?: {
+        bearerToken?: string;
+        headers?: Record<string, string>;
+    };
+}
+export interface McpTestView {
+    ok: boolean;
+    detail: string;
+    count?: number;
+}
 export * from './tools';
+export * from './semanticTools';
 /**
  * 批次 J（2026-09-24）：`@点名` 的确定性解析器。
  *

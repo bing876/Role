@@ -38,6 +38,7 @@ const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('
 const { registerLoopRoutes } = req('../../apps/server/src/routes/loop') as typeof import('../../apps/server/src/routes/loop');
 const { registerLoopSse } = req('../../apps/server/src/loopSse') as typeof import('../../apps/server/src/loopSse');
 const { startLoop, getLoop } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
+const { installModelLookup } = req('../../apps/server/src/modelSettings') as typeof import('../../apps/server/src/modelSettings');
 const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
 
 let fails = 0;
@@ -105,6 +106,8 @@ async function main(): Promise<void> {
        (102,10,'母鸡','hen','{"name":"母鸡","duty":"统筹与研究"}')
      ON CONFLICT (id) DO NOTHING`,
   );
+  // 和生产 buildApp 一样，给独立的循环验收安装每用户密文模型查询（不关闭缺失查询器的安全闸）。
+  installModelLookup(pool, cipher);
   initOrchestrator({ pool, env: ENV, cipher });
 
   const app = Fastify({ logger: false });

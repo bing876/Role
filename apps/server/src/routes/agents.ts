@@ -32,6 +32,7 @@ import type {
   MemoryLayerList,
 } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
+import { modelAvailableForUser } from '../modelSettings';
 import type { JsonCipher } from '../crypto';
 import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable, withTx } from '../db';
@@ -557,7 +558,7 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
         const out: AgentTidyResult = { userAdded: 0, projectAdded: 0, skipped: 'empty_transcript' };
         return out;
       }
-      if (!env.deepseekApiKey) {
+      if (!(await modelAvailableForUser(pool, cipher, claims.sub, env))) {
         const out: AgentTidyResult = { userAdded: 0, projectAdded: 0, skipped: 'llm_not_configured' };
         return out;
       }
@@ -572,7 +573,7 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
             { role: 'system', content: prompt },
             { role: 'user', content: `对话如下：\n${transcript.slice(-TRANSCRIPT_MAX)}` },
           ],
-          { tag: 'agents/tidy', json: true, temperature: 0.2 },
+          { tag: 'agents/tidy', userId: claims.sub, json: true, temperature: 0.2 },
         );
         if (!r.ok) {
           const out: AgentTidyResult = { userAdded: 0, projectAdded: 0, skipped: `upstream_http_${r.status}` };
@@ -588,7 +589,7 @@ export function registerMultiAgentRoutes(app: FastifyInstance, deps: AgentDeps):
               { role: 'system', content: TIDY_PROMPT },
               { role: 'user', content: `对话如下：\n${transcript.slice(-TRANSCRIPT_MAX)}` },
             ],
-            { tag: 'agents/tidy:fallback', json: true, temperature: 0.2 },
+            { tag: 'agents/tidy:fallback', userId: claims.sub, json: true, temperature: 0.2 },
           );
           if (r2.ok) {
             const data2 = (await r2.json()) as { choices?: { message?: { content?: string } }[] };

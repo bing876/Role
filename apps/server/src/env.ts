@@ -21,6 +21,9 @@ export interface ServerEnv {
   smsMock: boolean;
   smsHttpUrl: string;
   isProduction: boolean;
+  /** 仅安装包本地 PGlite：首跑一次性建号，不经渲染层暴露的每进程启动随机口令。 */
+  localMode?: boolean;
+  localBootstrapSecret?: string;
   /** 第 6 步：DeepSeek 流式聊天。key 只允许存在这里（apps/server/.env），缺失不拒启——/chat/stream 自己拒答 */
   deepseekApiKey: string;
   deepseekBaseUrl: string;
@@ -281,6 +284,15 @@ export function loadEnv(): ServerEnv {
 
   const isProduction = (process.env.NODE_ENV || 'development').trim() === 'production';
   const smsMock = process.env.SMS_MOCK === '1' || process.env.SMS_MOCK === 'true' || !isProduction;
+  const localMode = process.env.WORKBENCH_LOCAL_MODE === '1';
+  const localBootstrapSecret = (process.env.WORKBENCH_BOOTSTRAP_SECRET || '').trim();
+  // 本地一次性建号只供安装包生产态 + 本机 PGlite 使用。弱/缺密钥直接拒绝启动。
+  if (localMode && (!isProduction || !databaseUrl.startsWith('pglite://') || smsMock || !/^[0-9a-f]{64}$/.test(localBootstrapSecret))) {
+    throw new Error('安装包本地模式必须使用生产态 PGlite、关闭模拟短信并设置随机首跑口令');
+  }
+  const deepseekApiKey = (process.env.DEEPSEEK_API_KEY || (process.env.ENABLE_DEV_MOCK_LLM === '1' ? 'mock' : '')).trim();
+  if (localMode && (deepseekApiKey === 'mock' || deepseekApiKey.startsWith('mock:')))
+    throw new Error('安装包本地模式不能启用模拟模型；请在设置中配置真实密钥');
   const smsHttpUrl = (process.env.SMS_HTTP_URL || '').trim();
   if (isProduction && !smsMock && !smsHttpUrl) {
     console.warn(
@@ -298,7 +310,9 @@ export function loadEnv(): ServerEnv {
     smsMock,
     smsHttpUrl,
     isProduction,
-    deepseekApiKey: (process.env.DEEPSEEK_API_KEY || (process.env.ENABLE_DEV_MOCK_LLM === '1' ? 'mock' : '')).trim(),
+    localMode,
+    localBootstrapSecret: localMode ? localBootstrapSecret : undefined,
+    deepseekApiKey,
     deepseekBaseUrl: (process.env.DEEPSEEK_BASE_URL || '').trim() || 'https://api.deepseek.com',
     deepseekModel: (process.env.DEEPSEEK_MODEL || '').trim() || 'deepseek-chat',
     agentLoopMaxSteps: resolveAgentLoopMaxSteps(process.env.AGENT_LOOP_MAX_STEPS),

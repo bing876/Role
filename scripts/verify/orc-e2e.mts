@@ -31,6 +31,7 @@ const { ORCH_DEFAULTS, resolveOrchestratorEnv } = req('../../apps/server/src/env
 const { makeCipher } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
 const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
 const { advance, startLoop } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
+const { installModelLookup } = req('../../apps/server/src/modelSettings') as typeof import('../../apps/server/src/modelSettings');
 const { initOrchestrator, setOrchestratorDepsForTest } = req(
   '../../apps/server/src/orchestrator/tools',
 ) as typeof import('../../apps/server/src/orchestrator/tools');
@@ -240,6 +241,8 @@ async function main(): Promise<void> {
       aborted: 0,
     };
     installStub(stub);
+    // 和生产 buildApp 一样，给独立的循环验收安装每用户密文模型查询（不关闭缺失查询器的安全闸）。
+    installModelLookup(pool, cipher);
     initOrchestrator({ pool, env, cipher });
     resetRegistryForTest();
     initRegistry(env.orch);
@@ -328,6 +331,7 @@ async function main(): Promise<void> {
     resetRegistryForTest();
     // ★ 换依赖（不是 initOrchestrator —— 那个有「只装一次」的闸，重复调用是 no-op）。
     //   不换的话 `executeDelegate` 读到的还是 A 段那套 30s 的配置，熔断线就测不到。
+    installModelLookup(pool, cipher); // 同进程切换验收 DB，防模型仍查上一轮库
     setOrchestratorDepsForTest({ pool, env, cipher });
 
     const session = startLoop(env, { userId: 1, agentId: 101, conversationId: null, wcId: 802, goal: '再查一遍', pageUrl: 'https://example.com/' });

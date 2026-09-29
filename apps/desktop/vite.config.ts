@@ -22,12 +22,18 @@ export default defineConfig({
       '/agents': 'http://127.0.0.1:8787',
       '/memory': 'http://127.0.0.1:8787',
       '/knowledge': 'http://127.0.0.1:8787',
+      '/model': 'http://127.0.0.1:8787',
+      '/plugins': 'http://127.0.0.1:8787',
+      '/mcp': 'http://127.0.0.1:8787',
     },
   },
 
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // monorepo 的 @ai-workbench/shared 是 symlink；Rollup 看到真实路径在 packages/ 而非
+    // node_modules/，默认 CommonJS 转换会跳过它，生产包才报 MODEL_PROVIDER_DEFAULTS 未导出。
+    commonjsOptions: { include: [/node_modules/, /packages[/\\]shared[/\\]dist/] },
   },
 });
 

@@ -57,7 +57,7 @@
   一句话：**goal 加密 = 静态数据（at-rest）保护，不是端到端加密。**
 - **例外：交接文件是明文落盘**。`apps/server/data/handoffs/<项目>/<委派>.md` 与 `board.md` 直接写任务原文，既不加密也不脱敏（目录已 gitignore，但在服务器磁盘上可读）。见「已知缺口」。
 - 手机号只存 `HMAC(PHONE_PEPPER, phone)` + 密文副本；`PHONE_PEPPER` 与 `DATA_KEY` 必须是两把不同的钥匙，缺任何一个服务拒绝启动。
-- 模型 key 只在 `apps/server/.env`（不入库）；桌面安装包**不含**服务端、数据库或任何 key。
+- 开发态可在 `apps/server/.env` 配模型 key；片④ 的设置页也可按用户加密存到本机库，不写入安装包/仓库或日志。桌面安装包现**自带独立后端与本地 PGlite**，但不包含任何预置密钥：首跑才在当前用户的私有 userData 随机生成且与持久库分开存放。详见 ADR-0010。
 
 ---
 
@@ -90,7 +90,7 @@
 
 ## 本地运行
 
-需要 **Node ≥ 18**（在 Node 22 上验证）和 **PostgreSQL**（Docker：`npm run db:up`；Windows 也可用 `start-dev.cmd` 起便携版）。
+**开发源码**需要 Node ≥ 18（在 Node 22 上验证）和 PostgreSQL（Docker：`npm run db:up`；Windows 也可用 `start-dev.cmd` 起便携版）。**已安装的生产包**自带 Electron/后端/PGlite，不需要系统 Node、PostgreSQL 或 Docker；只有构建者需要先安装源码依赖。
 
 ```bash
 npm install                               # 首次会下载 Electron（约 100MB）
@@ -101,9 +101,9 @@ npm run dev:server                        # 服务端 :8787，启动后自动建
 npm run dev                               # 桌面端（Vite + Electron）
 ```
 
-- 服务端监听 `0.0.0.0:8787`；桌面端默认连 `http://127.0.0.1:8787`。
+- 开发服务端监听 `0.0.0.0:8787`；生产安装包的后端**仅**监听 `127.0.0.1:8787`；安装包忽略旧 `workbench.apiBase` 自定义地址，端口被其他进程占用时不接管、不发认证凭证、显示故障。
 - 表是启动时自动建的（`db.ts` 的 DDL 全部幂等）；库还在恢复中时会每 3 秒重试，最多约 2 分钟。
-- 桌面端发现后端没起，会在后台自己拉起一份（只管自己拉起的那份，不碰你手动起的）。
+- 桌面端发现后端没起，会在后台自己拉起一份（只管自己拉起的那份，不碰你手动起的）。生产包首跑自动建立私有 PGlite + 随机密钥，并显示一次性 XYZ+本机密码引导；请记住 XYZ，下次用它登录，模型密钥在登录后设置；安装包关闭开发假模型开关，**不会自动发送消息或假装有真实模型**。
 
 ### 常用命令
 
@@ -112,7 +112,9 @@ npm run dev                               # 桌面端（Vite + Electron）
 | `npm run dev` / `npm run dev:server` | 桌面端 / 服务端开发模式 |
 | `npm run typecheck` | shared + desktop + server 全量类型检查 |
 | `npm run build` | 构建三个 workspace |
-| `npm run package` / `package:dir` | 用 electron-builder 打当前系统的安装包 / 只出目录（产物在 `apps/desktop/release/`，不入库） |
+| `npm run package:win` / `package:mac` | 仅在对应 Windows/macOS 构建 NSIS `.exe` / DMG `.dmg`；签名/公证与真机安装、首次启动还须实测 |
+| `npm run verify:packaged-dir` | **先运行** `npm run package:dir`；从真实 unpacked 目录用包内 Electron 可执行文件（RunAsNode）起后端、首跑建 PGlite/XYZ、重启复登；不是 GUI 可视化验收。Windows/macOS 的 GitHub Actions 对应构建与该项验收见 `.github/workflows/package-desktop.yml`，检查 run 结果后才能计为通过 |
+| `npm run package` / `package:dir` | 先编译并独立 stage 带锁文件的生产后端（约 72 MB），再用 electron-builder 打当前系统安装包 / 只出目录（产物在 `apps/desktop/release/`，不入库）；需可访问 Electron 官方二进制下载地址 |
 | `npm run live` | 起整套桌面工作台并自动登录（Windows 验收用） |
 | `npm run clean` | 清理构建产物 |
 
@@ -141,6 +143,7 @@ npm run dev                               # 桌面端（Vite + Electron）
 | `npm run verify:batches` | 交接、白板、路由升级、重启恢复、前端引导、五项自查、Skills、电脑可见度、模型路由 | — |
 | `npm run verify:db` | **连真库**：checkpoint 加密（直接 SELECT + 漏传 cipher 变异）、board 落库锁（多进程 + kill -9 重启）、**收尾6 goal 加密**（真服务端 + 真登录 + 直连 SELECT `tasks`/`task_pauses` + 真重启验启动回填 + 幂等）、pglite 自检 | 真 PostgreSQL，`VERIFY_DATABASE_URL=postgres://…`（可写的测试库） |
 | `npm run verify:db:pglite` | 收尾6 goal 加密的快速自检：跑的是**生产代码本体**（`db.ts` / `routes/agent.ts` / `routes/loop.ts` + Fastify `inject()`），不是脚本里的副本 | PGlite（无需外部库） |
+| `npm run verify:release` | 片⑤：重新 stage 后端 → 用 electron-builder 自身 FileMatcher + copyFiles 真装配独立资源副本 → 子进程+持久 PGlite/HTTP（首跑/重启/拒假 secret/密钥损坏/端口占用）→ React 真首跑组件 jsdom → 负向代码变异 | Node、PGlite；**不**验证安装目录 Electron GUI / Win/mac 产物 |
 
 > 很多脚本是「读源码做结构检查」，只能证明代码长什么样，证明不了行为；涉及安全和并发的结论以 `verify:db` 这类真库 / 真进程的测试为准。
 > `scripts/verify/` 里还有大量 `.py` 与探针脚本是历史上在 Windows 真机上跑的 E2E / 性能取证，依赖本机环境，不在 `npm run verify` 里。

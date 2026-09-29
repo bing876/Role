@@ -1,0 +1,17 @@
+{
+  "name": "@ai-workbench/packaged-server-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production-only dependencies for the server copied into Electron extraResources/server. Keep in sync with apps/server/package.json.",
+  "main": "dist/index.js",
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@fastify/cors": "^11.0.0",
+    "@fastify/multipart": "^9.4.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.0",
+    "jsonwebtoken": "^9.0.2",
+    "pdf-parse": "^1.1.1",
+    "pg": "^8.13.1"
+  }
+}

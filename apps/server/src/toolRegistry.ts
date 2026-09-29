@@ -13,6 +13,7 @@
  */
 import {
   BROWSER_TOOL_DEFINITIONS,
+  SEMANTIC_BROWSER_TOOL_DEFINITIONS,
   createToolRegistry,
   type BaseExecutionContext,
   type LoopToolCall,
@@ -47,6 +48,14 @@ export const serverToolRegistry: ToolRegistry<ServerExecutionContext> = createTo
 
 for (const def of BROWSER_TOOL_DEFINITIONS) {
   serverToolRegistry.register(def);
+}
+/** 抗改版片：在 initOrchestrator(开关启用) 时注册版本化 v2 桌面工具。
+ * 不在模块加载时注册：ORCHESTRATION_TOOLS=0 / 未 init 的冻结 6 工具对照必须逐字节不变。
+ */
+export function registerSemanticBrowserTools(): void {
+  for (const def of SEMANTIC_BROWSER_TOOL_DEFINITIONS) {
+    if (!serverToolRegistry.get(def.name)) serverToolRegistry.register(def);
+  }
 }
 
 /** 发模型的工具名表（顺序 = BROWSER_TOOL_DEFINITIONS 顺序，与旧 LOOP_TOOLS 一致） */
@@ -90,9 +99,14 @@ export function browserToolNamesFor(
   const extra: string[] = [];
   // web_search：独立开关（默认开）
   if (orch.agentLoopWebSearch && serverToolRegistry.get('web_search')) extra.push('web_search');
-  // 编排两件套：总开关
+  // ★ `orch.enabled=0` 的原承诺：工具表退回冻结 6 工具（搜索按独立开关）。
+  // 语义工具属于新版模型表，只在启用态追加；不能破坏关闭态的逐字节回退对照。
   if (orch.enabled) {
-    for (const n of ['spawn_workers', 'delegate', 'teach_skill', 'revise_skill']) {
+    for (const n of ['click_semantic', 'type_semantic']) {
+      if (serverToolRegistry.get(n)) extra.push(n);
+    }
+    for (const n of ['spawn_workers', 'delegate', 'teach_skill', 'revise_skill', 'generate_image',
+      'github_list_issues', 'github_read_issue', 'feishu_list_files', 'feishu_read_doc']) {
       if (serverToolRegistry.get(n)) extra.push(n);
     }
   }

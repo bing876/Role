@@ -30,6 +30,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import type { MemoryExtractResult, MemoryItem, MemoryListResult } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
+import { modelAvailableForUser } from '../modelSettings';
 import type { JsonCipher } from '../crypto';
 import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
@@ -316,7 +317,7 @@ async function extractCore(
     if (oldestKey !== undefined) lastExtractAt.delete(oldestKey);
   }
   if (!transcript.trim()) return { extracted: 0, pending: [], skipped: 'empty_transcript' };
-  if (!env.deepseekApiKey) return { extracted: 0, pending: [], skipped: 'llm_not_configured' };
+  if (!(await modelAvailableForUser(pool, cipher, ownerId, env))) return { extracted: 0, pending: [], skipped: 'llm_not_configured' };
   const empty: CoreOutcome = { extracted: 0, pending: [] };
   let raw: { items?: unknown };
   try {
@@ -326,7 +327,7 @@ async function extractCore(
         { role: 'system', content: EXTRACT_PROMPT },
         { role: 'user', content: `记录如下：\n${transcript.slice(-6000)}` },
       ],
-      { tag: `memories/extract:${source}`, json: true, temperature: 0.2 },
+      { tag: `memories/extract:${source}`, userId: ownerId, json: true, temperature: 0.2 },
     );
     if (!r.ok) return { ...empty, skipped: `upstream_http_${r.status}` };
     const data = (await r.json()) as { choices?: { message?: { content?: string } }[] };

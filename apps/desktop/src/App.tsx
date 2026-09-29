@@ -40,6 +40,8 @@ import { API_BASE, TOKEN_KEY, authFetchJson } from './shared/api';
 import { SETTINGS_FALLBACK } from './shared/settings';
 import { useKnowledge } from './features/knowledge';
 import { MemoryConfirmCard, useMemory } from './features/memory';
+import { PluginsPanel, usePlugins } from './features/plugins';
+import { ModelSettingsPanel, useModelSettings } from './features/model';
 import {
   BrowserPanel,
   CONFIRM_ASK_RE,
@@ -72,7 +74,7 @@ import { useSidebarColumn } from './app/useSidebarColumn';
 import { useProjects } from './features/projects';
 import { AuthScreen, useAuth } from './features/auth';
 import { useTasks } from './features/tasks';
-import { CollabCard, PersonaChips, isCollabMessage, useChat } from './features/chat';
+import { CollabCard, MarkdownText, PersonaChips, isCollabMessage, useChat } from './features/chat';
 import type { AgentChat, Message, Role, PersonaChipsDraft, PersonaField } from './features/chat';
 import type { CurrentTask } from './features/tasks';
 
@@ -224,7 +226,7 @@ function driveStateView(
     return { cls: 'agent', icon: '🤖', text: `AI 主动求助 · 等你处理 — ${state.detail}` };
   }
   if (state.pausedBy === 'user') {
-    return { cls: 'user', icon: '✋', text: `你主动接管 · 页面归你 — ${state.detail}` };
+    return { cls: 'user', icon: '✋', text: `你在操作 · AI 已暂停，页面归你 — ${state.detail}` };
   }
   return { cls: 'none', icon: '⏸', text: `已暂停（未记录发起方）— ${state.detail}` };
 }
@@ -285,6 +287,38 @@ function agentStatusLine(a: AgentView): string {
   if (a.kind === 'assistant') return '在线';
   // 规格 C1 起新智能体建好即 ready（chips 只是可选精调）；'pending' 只剩旧数据兼容
   return a.personaStatus === 'pending' ? '等你定个样子' : '已就位';
+}
+
+/**
+ * 形态③ 头像六态（2026-09-27）：空闲 / 思考 / 执行 / 需你处理 / 出错 / 休眠 —— 全有颜色 + 一词。
+ * 服务端 status（含 waiting/done 归并）→ 六态；`sleeping`（休眠）由桌面从保活态推导（没在监听 = 睡着）。
+ */
+const AVATAR_STATE_MAP: Record<string, { color: string; word: string }> = {
+  idle: { color: '#8b93a1', word: '空闲' },
+  done: { color: '#8b93a1', word: '空闲' },
+  thinking: { color: '#5b9bd5', word: '思考' },
+  working: { color: '#46b57c', word: '执行' },
+  waiting: { color: '#46b57c', word: '执行' },
+  blocked: { color: '#e0a63a', word: '需你处理' },
+  failed: { color: '#e05c5c', word: '出错' },
+  sleeping: { color: '#9b7fd4', word: '休眠' },
+};
+export function avatarStateOf(a: AgentView, opts?: { sleeping?: boolean }): { color: string; word: string } {
+  const key = opts?.sleeping ? 'sleeping' : (a.status ?? 'idle');
+  return AVATAR_STATE_MAP[key] ?? AVATAR_STATE_MAP.idle;
+}
+/** 点头像弹的那句「它在干嘛」（人话）：优先服务端 statusDetail，否则按状态给一句 */
+function avatarDoing(a: AgentView, opts?: { sleeping?: boolean }): string {
+  if (opts?.sleeping) return '它在干嘛：歇着呢，没在监听';
+  if (a.statusDetail) return a.statusDetail;
+  switch (a.status) {
+    case 'thinking': return '它在干嘛：在想下一步怎么做';
+    case 'working': return '它在干嘛：正在动手干活';
+    case 'blocked': return '它在干嘛：卡住了，等你看一眼';
+    case 'failed': return '它在干嘛：上一步出错了，没走通';
+    case 'done': return '它在干嘛：刚干完一单';
+    default: return '它在干嘛：闲着，随时能派活';
+  }
 }
 
 export default function App() {
@@ -427,6 +461,15 @@ export default function App() {
   const [awaitResume, setAwaitResume] = useState(false);
   const [awaitResumeAgent, setAwaitResumeAgent] = useState<number | null>(null);
   const [awaitResumeWc, setAwaitResumeWc] = useState<number | null>(null);
+  /**
+   * 形态② 教一遍（2026-09-27）：用户在页上操作一遍 → 录动作序列 → 生成技能卡 → 之后一句话回放。
+   * `teaching` = 正在录制（点了「教」还没点「完成」）；`teachActions` = 录下来的动作序列（录制产物）。
+   * 动作序列由主进程从 webview 的键鼠事件里抓出来、经 `teachAction` 桥事件喂进来（真人操作，非写死假数据）。
+   */
+  const [teaching, setTeaching] = useState(false);
+  const [teachActions, setTeachActions] = useState<Array<{ type: string; detail: string }>>([]);
+  const teachingRef = useRef(false);
+  teachingRef.current = teaching;
   /** 当前这个智能体在等驾驶员提问吗（切到别的智能体就不提示） */
   const awaitHere = agentAwaitInfo && agentAwaitAgent === curAgentId;
   /** 第 15 步：左栏智能体列表（服务端为准）。personaStatus==='pending' 时聊天里摆引导表 */
@@ -466,6 +509,10 @@ export default function App() {
   agentStatesRef.current = agentStates;
   /** 保活开关正在请求中（防连点） */
   const [keepaliveBusy, setKeepaliveBusy] = useState(false);
+  /** 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话。服务端为准。 */
+  const [routines, setRoutines] = useState<Array<{ id: number; name: string; description: string; triggerType: string; enabled: boolean; nextRunAt: string | null }>>([]);
+  const [routinesOpen, setRoutinesOpen] = useState(false);
+  const [routinesBusyId, setRoutinesBusyId] = useState<number | null>(null);
   /** 第 11 步：知识库资料独立于 memories；只展示当前账号的文件元信息和已入库段数。 */
   /** 建完能改人设：编辑态 */
   const [personaEditOpen, setPersonaEditOpen] = useState(false);
@@ -475,6 +522,48 @@ export default function App() {
   /** 第 7 步：主进程 'agent' 事件的镜像（步摘要/文档结论），权威循环在主进程 */
 
 
+
+  /**
+   * 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话。
+   * 服务端为准（GET /routines / POST /routines/:id/enable / DELETE /routines/:id）。
+   */
+  const loadRoutines = useCallback(async () => {
+    const s = sessionRef.current;
+    if (!s) return;
+    try {
+      const res = await fetch(`${API_BASE()}/routines`, { headers: { Authorization: `Bearer ${s.token}` } });
+      if (res.ok) {
+        const data = (await res.json()) as { routines?: Array<{ id: number; name: string; description: string; triggerType: string; enabled: boolean; nextRunAt: string | null }> };
+        setRoutines(data.routines ?? []);
+      }
+    } catch { /* 网络错误不弹，下次再拉 */ }
+  }, []);
+  const toggleRoutine = useCallback(async (id: number, enable: boolean) => {
+    const s = sessionRef.current;
+    if (!s) return;
+    setRoutinesBusyId(id);
+    try {
+      const res = await fetch(`${API_BASE()}/routines/${id}/enable`, { method: 'POST', headers: { 'content-type': 'application/json', Authorization: `Bearer ${s.token}` }, body: JSON.stringify({ enabled: enable }) });
+      if (res.ok) {
+        setRoutines((prev) => prev.map((r) => (r.id === id ? { ...r, enabled: enable } : r)));
+      }
+    } finally {
+      setRoutinesBusyId(null);
+    }
+  }, []);
+  const deleteRoutine = useCallback(async (id: number) => {
+    const s = sessionRef.current;
+    if (!s) return;
+    setRoutinesBusyId(id);
+    try {
+      const res = await fetch(`${API_BASE()}/routines/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${s.token}` } });
+      if (res.ok) {
+        setRoutines((prev) => prev.filter((r) => r.id !== id));
+      }
+    } finally {
+      setRoutinesBusyId(null);
+    }
+  }, []);
 
   /**
    * 第 22 步：改可调配置（并发数 / 多实例上限）。
@@ -600,6 +689,51 @@ export default function App() {
   };
 
   /**
+   * UX 收尾（2026-09-26 用户拍板 A①/A③）· 执行中状态行的两件事：
+   *   A① 用户发「停」→ 界面切成**非执行态**：状态行「已暂停 · 说「继续」接上」+ 输入框回正常发送。
+   *       怎么接上：「等继续」复用**既有**的 `awaitResume` 三件套（原来只有步数上限在用），
+   *       下一句「继续」走已验收的 `resumeTask`（先读真实页 → 服务端解挂 → 原地接上），不新造第二条路。
+   *   A③ 补充注入成功 → 状态行**瞬态**「已收到补充」约 2.5 秒后自动消失，**不弹横幅**。
+   */
+  /**
+   * B3（降噪片·用户拍板）：**首进引导只出现一次**，标记落 localStorage（按项目）。
+   * 引导 = 聊天为空时那张欢迎卡（「欢迎使用 AI 自主浏览器工作台…立即打开内嵌浏览器」）。
+   * 判据：这个项目见过一次就不再出现；已经有历史消息的会话**立刻补标记**（老用户不会突然又看到）。
+   * localStorage 不可用（隐私模式）→ 退化成旧行为（每次都显示），**不挡用**。
+   */
+  const guideKey = (pid: number | null): string => `workbench.guided.${pid ?? 'none'}`;
+  const [guidedSeen, setGuidedSeen] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    const next: Record<string, boolean> = {};
+    try {
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('workbench.guided.')) next[k] = true;
+      }
+    } catch {
+      /* localStorage 不可用：退化成旧行为 */
+    }
+    setGuidedSeen(next);
+  }, []);
+  const guideShown = (pid: number | null): boolean => Boolean(guidedSeen[guideKey(pid)]);
+  const markGuideSeen = (pid: number | null): void => {
+    if (pid === null) return;
+    try {
+      localStorage.setItem(guideKey(pid), '1');
+    } catch {
+      /* 同上 */
+    }
+    setGuidedSeen((prev) => (prev[guideKey(pid)] ? prev : { ...prev, [guideKey(pid)]: true }));
+  };
+  const [supplementFlash, setSupplementFlash] = useState(false);
+  const supplementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSupplementAccepted = (): void => {
+    setSupplementFlash(true);
+    if (supplementTimerRef.current) clearTimeout(supplementTimerRef.current);
+    supplementTimerRef.current = setTimeout(() => setSupplementFlash(false), 2500);
+  };
+
+  /**
    * 批次 M · 逻辑抽离第 7a 片：**聊天这一侧的 state 与历史**搬进 `features/chat`。
    *
    * ★ 依旧**只换来源、不改名字** → 本文件 100 多处 `messages` / `setMessages` / `chatNote` /
@@ -628,6 +762,8 @@ export default function App() {
     setChatNote,
     agentSteps,
     setAgentSteps,
+    runTrace,
+    setRunTrace,
     agentDoc,
     setAgentDoc,
     pushChatLine,
@@ -680,6 +816,7 @@ export default function App() {
     shouldFallbackLaunch,
     /** 规格 C1：对话式建好新智能体（meta 帧 newAgent）→ 左栏现真名字 + 切到它 + 摆三问 chips */
     onNewAgent,
+    onSupplementAccepted,
     /** 纯本地判定（开页 / 停 / 继续…）：单一实现住在 `browser/`，注入进来用 */
     intent: {
       detectStopIntent,
@@ -692,6 +829,18 @@ export default function App() {
       HOME_URL,
     },
   });
+
+  /**
+   * B3：这个项目的对话**已经有内容** ⇒ 引导期早过了，立刻补标记（不必等用户做什么）。
+   * 放在这里而不是 hooks 区，是因为要等 `useChat` 把 `messages` 交出来。
+   */
+  useEffect(() => {
+    if (messages.length > 0 && curProjectId !== null && !guidedSeen[guideKey(curProjectId)]) {
+      markGuideSeen(curProjectId);
+    }
+    // guidedSeen / markGuideSeen 都是稳定派生；这里只看「有没有内容」与「哪个项目」
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages.length, curProjectId]);
 
   const {
     user: userMem,
@@ -1128,6 +1277,35 @@ export default function App() {
   };
 
   /**
+   * 形态② 教一遍（2026-09-27）：点「完成」→ 把录下来的动作序列落库成技能卡（POST /skills/teach）。
+   * 名字/触发词从动作推导一个可回放的默认（真实产品会让用户命名，这里给个不挡回放的占位）。
+   */
+  const finishTeaching = async (): Promise<void> => {
+    const sess = sessionRef.current;
+    const agentId = curAgentRef.current;
+    const actions = teachActions;
+    setTeaching(false);
+    setTeachActions([]);
+    if (!sess) return;
+    if (actions.length === 0) {
+      setChatNote('没录到动作 —— 先在这一页操作一遍，再点「完成」。');
+      return;
+    }
+    const name = `教一遍 · ${actions[0].detail.slice(0, 40)}`.slice(0, 60);
+    const trigger = actions.slice(0, 4).map((a) => a.detail).join('，').slice(0, 500);
+    try {
+      const r = await authFetchJson<{ skill: { id: number; name: string }; recorded: number }>('/skills/teach', {
+        method: 'POST',
+        body: JSON.stringify({ agentId: agentId ?? undefined, name, triggerCondition: trigger, actions }),
+        headers: { authorization: `Bearer ${sess.token}` },
+      });
+      setChatNote(`技能卡「${r.skill.name}」已生成（录了 ${r.recorded} 个动作），之后一句话就能回放。`);
+    } catch (e) {
+      setChatNote(`技能卡没存上：${(e as Error).message}`);
+    }
+  };
+
+  /**
    * 记忆的 5 个写操作（忘掉 / 确认 / 拒绝 / 批量确认 / 批量拒绝）也搬进 `features/memory`，
    * 见上面的 useMemory 解构 —— 本文件只留调用点。
    */
@@ -1287,6 +1465,30 @@ export default function App() {
   const col = useBrowserColumn();
 
   /**
+   * ★★ 2026-09-26 修「浏览器空白」· ADR-0005:列的可见性以 `browser.view` 为**单一真相**。
+   *
+   * 症状(用户报的):聊天里说「打开抖音」→ 标签建了、页也真加载了,右侧却看不见。
+   * 根因:第四列的可见性 = `col.colOpen && browser.view === 'fullscreen'`(见下方层 class),
+   * 而 `browser.openUrl` 只写了 `setView('fullscreen')`(它自己的语义就是「用户明确要看浏览器」),
+   * **没有任何人把这件事告诉外壳的列** —— 于是层落进 `--hidden`(transform 移出视野),
+   * 页成了「已创建、已加载、但不在视野里」。
+   *
+   * 为什么在这里兜而不是在 `openUrl` 里补一句 `col.openColumn()`:
+   *   · `browser/` 是 feature 层,不许反向依赖外壳的列状态(分层规则,见 app/browserGlue.ts 头注释);
+   *   · 逐个调用点补 = 以后每加一个开页入口就再踩一次(真机上 `openFromMain` 那条就同样漏了)。
+   * 所以:**任何让 view 变成 fullscreen 的路径,列自动打开** —— 一条 effect 兜住全部入口。
+   *
+   * 反向不受影响:「💬 对话」走 `exitFullscreen()`(view→background)+ `hideColumn()`,
+   * 两者同进同退;`openFromPage`(AI 自己开页 / target=_blank)不碰 view,
+   * 「AI 开页不抢用户视线」的第 28 步拍板原样保留。
+   */
+  useEffect(() => {
+    if (browser.view === 'fullscreen') col.openColumn();
+    // col.openColumn 是稳定引用(useCallback + setState),不参与依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [browser.view]);
+
+  /**
    * 批次 M-2':第二列宽度的拖动/记忆(app/useSidebarColumn),与第四列互不引用。
    * 侧栏三个纯 UI state:搜索词(真名单过滤)、＋弹层开合、刚创建脉冲(真事件驱动)。
    */
@@ -1294,6 +1496,21 @@ export default function App() {
   const [agentQuery, setAgentQuery] = useState('');
   const [showAgentPopup, setShowAgentPopup] = useState(false);
   const [justAddedAgentId, setJustAddedAgentId] = useState<number | null>(null);
+  /** B1 设置抽屉：账号/密码/浏览器参数/保活 收进可开合抽屉（默认收起 = 降噪） */
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 真模型接入层：只在设置展开且已登录时按账号读取打码视图；key 不进 Electron settings。 */
+  const modelSettings = useModelSettings(settingsOpen, session?.token ?? null);
+  /** 能力与连接（2026-09-27）：外部能力卡片（搜索/生图/GitHub/飞书 + MCP）。只在抽屉打开时拉。 */
+  const plugins = usePlugins(settingsOpen);
+  const pluginsPanelProps = {
+    plugins: plugins.plugins,
+    loaded: plugins.loaded,
+    err: plugins.err,
+    getConfig: plugins.getConfig,
+    saveConfig: plugins.saveConfig,
+    clearConfig: plugins.clearConfig,
+    testConfig: plugins.testConfig,
+  };
   const justAddedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /** 第四列触发 ①:点会话内链接/HTML 卡片 → 内嵌浏览器打开 + 列弹出 */
@@ -1358,6 +1575,15 @@ export default function App() {
    */
   const visAgent = agents.find((a) => a.id === curAgentId) ?? null;
   const visLastStep = agentSteps.length > 0 ? agentSteps[agentSteps.length - 1] : null;
+  /**
+   * UX 收尾 A①②：状态行的**唯一形态来源**（一处派生，避免"两个 state 同进同退"那类 bug）：
+   *   · `running` = 循环在跑 → 旋转 + 当前动作 + 轨迹抽屉；
+   *   · `paused`  = 用户「停」过、正等「继续」 → ⏸ + 已暂停 + 轨迹抽屉；
+   *   · null      = 都不显示（正常聊天/空闲时状态行整条不渲染）。
+   */
+  const pausedHere = awaitResume && awaitResumeAgent === curAgentId;
+  const runBarMode: 'running' | 'paused' | null =
+    runningLoopId && streaming ? 'running' : pausedHere ? 'paused' : null;
   const visPage = browser.active ? browser.active.title || browser.active.url || null : null;
 
   /**
@@ -1447,6 +1673,21 @@ export default function App() {
       }
     });
 
+    // 形态② 教一遍：主进程从 webview 键鼠事件里抓出的动作，经 `teachAction` 喂进来。
+    // 只在「正在录制」（teachingRef.current）时才收 —— 平时用户的操作不该被记进技能卡。
+    const offTeachAction = bridge.on('teachAction', (payload) => {
+      if (!teachingRef.current || !payload) return;
+      try {
+        const a: unknown = JSON.parse(payload);
+        const detail = a && typeof (a as { detail?: unknown }).detail === 'string' ? (a as { detail: string }).detail.trim() : '';
+        const type = a && typeof (a as { type?: unknown }).type === 'string' ? (a as { type: string }).type.trim() : '';
+        if (!detail) return;
+        setTeachActions((list) => (list.length >= 20 ? list : [...list, { type, detail }]));
+      } catch {
+        /* 坏负载忽略 */
+      }
+    });
+
     // 第 22 步：可调配置同样「初始拉一次 + 跟随广播」，主进程是权威
     bridge
       .getSettings()
@@ -1503,6 +1744,7 @@ export default function App() {
       offFocus();
       offState();
       offSettings();
+      offTeachAction();
     };
   }, []);
 
@@ -1532,12 +1774,28 @@ export default function App() {
       const say = (text: string) => {
         if (ownerAgent !== null && ownerAgent !== undefined) pushChatLineFor(ownerAgent, text);
       };
+      /**
+       * 交互对齐片(2026-09-26):**过程轨迹只进抽屉,绝不进主对话流**。
+       *
+       * 用户定的目标态:执行中主对话流只有「用户气泡 + 一条轻量状态」,
+       * 完整轨迹放「可点开、默认收起」的抽屉。所以 `step` / `note` 一律走这里,
+       * 不再 `say(...)` 成聊天行 —— 那正是「步骤墙」,也是「同一段出现两次」的一半
+       * (另一半是服务端把这些也写进了聊天的 delta,已在 loop.ts 删掉)。
+       */
+      const trace = (line: string) => {
+        setRunTrace((prev) => prev.concat(line).slice(-200));
+      };
       const here = ownerAgent === curAgentRef.current;
       if (p.kind === 'step') {
-        setAgentSteps((prev) => prev.concat(`${p.summary}${p.ok ? '' : ' ❌'}`).slice(-6));
+        const line = `${p.summary}${p.ok ? '' : ' ❌'}`;
+        setAgentSteps((prev) => prev.concat(line).slice(-6));
+        // 交互对齐片：步骤**只**进轨迹抽屉，绝不 say() 成聊天行（那正是「步骤墙」）。
+        trace(`· ${line}`);
       } else if (p.kind === 'ask') {
         setAgentSteps([]);
+        // 求助/等待是**要用户知道的**,保留一行;轨迹里也留一条
         say(`⚠️ ${p.question}`);
+        trace(`⚠️ ${p.question}`);
         const needInfo = p.reason === 'need_info';
         setAgentAwaitInfo(needInfo);
         // 第 15 步：记下「是哪个智能体在等这句话」，答复才不会串到别的智能体
@@ -1563,6 +1821,7 @@ export default function App() {
         void browser.refreshDriving();
       } else if (p.kind === 'sensitive') {
         say(`🔒 ${p.message}`);
+        trace(`🔒 ${p.message}`);
         void browser.refreshDriving();
       } else if (p.kind === 'help') {
         /**
@@ -1621,13 +1880,19 @@ export default function App() {
         setAwaitResumeAgent(null);
         setAwaitResumeWc(null);
         say(`✅ 任务完成：${p.summary}${p.docReady ? ` · ${p.unreadHint ?? '结果文档已生成'}` : '（文档未就绪：后端未配置模型或库未起，见后端日志）'}`);
+        trace(`✅ 任务完成：${p.summary}`);
         setAgentDoc({ title: p.documentTitle, outline: p.documentOutline });
         // 第 8 步：红点由服务端确认（finish 已置 unread=true），这里点亮并刷新卡片
         setHasUnread(true);
         void refreshTask();
         void browser.refreshDriving();
       } else if (p.kind === 'note') {
-        say(`${p.level === 'error' ? '⚠️' : 'ℹ️'} ${p.text}`);
+        /**
+         * ★ 交互对齐片(2026-09-26):**过程提示不再进主对话流**。
+         * 原来这里 `say('ℹ️ ...')` —— 与聊天的 delta 各渲染一遍 ⇒ 同一段出现两次(用户报的重复 bug)。
+         * 现在只进轨迹抽屉;但**状态清理照旧**(「继续/恢复驾驶」要清掉等待态)。
+         */
+        trace(`${p.level === 'error' ? '⚠️' : 'ℹ️'} ${p.text}`);
         if (/继续|恢复驾驶/.test(p.text)) {
           setAgentAwaitInfo(false);
           setAgentAwaitAgent(null);
@@ -1697,7 +1962,14 @@ export default function App() {
     persona: null,
     conversationId: null,
   }));
-  const sidebarAgents: AgentView[] = agents.length > 0 ? agents : curProjectId !== null ? [] : loginAgentsFallback;
+  /**
+   * B5（降噪片·用户拍板）：**占位名「新智能体」的行不显示**。
+   * 「＋ 添加」会先用占位名建出来（随后靠 chips 改名），在改名之前它在左栏就是一条
+   * 没有任何信息的空占位行 —— 用户要的是"看不到它"，而不是"看到一条叫『新智能体』的家伙"。
+   * 改完名（chips 答完 / 跳过但自己写了名）名字一变，那一行自然就回来了。
+   */
+  const namedAgents = agents.filter((a) => a.name !== '新智能体');
+  const sidebarAgents: AgentView[] = namedAgents.length > 0 ? namedAgents : curProjectId !== null ? [] : loginAgentsFallback;
   const curAgent = sidebarAgents.find((a) => a.id === curAgentId) ?? null;
   /**
    * G1（2026-09-25,规格 C1 收紧）：「＋ 添加」只在小助（管家）上下文生效。
@@ -1886,60 +2158,46 @@ export default function App() {
             这里只在功能上把「项目层」跑通，用既有的 .contact / .btn / .authInput 拼出来，不加新视觉。
             切换只换「看不见的项目视角 + 名单 + 资料列表」，**浏览器一张页都不动**（见 enterProject）。
           */}
+          {/*
+            B4 项目下拉：项目切换 = 原生 <select>（降噪：不再「按钮 + 展开列表 + 行」）。
+            选中即 switchProject（换项目视角 + 重拉名单/资料，浏览器一张页都不动）。
+            「新建项目」入口保留（常显）；F2-③ 成功/失败两槽照旧。
+          */}
           <div className="projectBox">
             <div className="small projectBox__cur">
               当前项目：{projects.find((p) => p.id === curProjectId)?.name ?? '（还没读到）'}
             </div>
+            <select
+              className="projectBox__select"
+              value={curProjectId ?? ''}
+              disabled={projectBusy}
+              aria-label="切换项目"
+              onChange={(e) => void switchProject(Number(e.target.value))}
+            >
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.id === curProjectId ? '（使用中）' : ''}
+                </option>
+              ))}
+            </select>
+            <input
+              className="authInput projectBox__name"
+              placeholder="新项目名字（≤24 字）"
+              value={newProjectName}
+              maxLength={24}
+              onChange={(e) => setNewProjectName(e.target.value)}
+            />
             <div className="buttons-row">
               <button
                 type="button"
-                className="btn projectBox__toggle"
-                disabled={projectBusy}
-                onClick={() => setProjectsOpen((v) => !v)}
+                className="btn projectBox__create"
+                disabled={projectBusy || !newProjectName.trim()}
+                onClick={() => void createProject()}
               >
-                {projectsOpen ? '收起项目' : `切换项目（${projects.length}）`}
+                {projectBusy ? '处理中…' : '新建项目'}
               </button>
             </div>
-            {projectsOpen && (
-              <div className="projectBox__list" role="list" aria-label="我的项目">
-                {projects.map((p) => (
-                  <button
-                    type="button"
-                    role="listitem"
-                    key={p.id}
-                    data-project-id={p.id}
-                    disabled={projectBusy}
-                    className={p.id === curProjectId ? 'contact projectBox__row contact--on' : 'contact projectBox__row'}
-                    onClick={() => void switchProject(p.id)}
-                  >
-                    <div className="contact__meta">
-                      <div className="contact__name">{p.name}</div>
-                      <div className="small">
-                        {p.id === curProjectId ? '使用中' : '点击切到这里'}
-                        {p.henAgentId ? ' · 有母鸡' : ' · 默认项目'}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-                <input
-                  className="authInput projectBox__name"
-                  placeholder="新项目名字（≤24 字）"
-                  value={newProjectName}
-                  maxLength={24}
-                  onChange={(e) => setNewProjectName(e.target.value)}
-                />
-                <div className="buttons-row">
-                  <button
-                    type="button"
-                    className="btn projectBox__create"
-                    disabled={projectBusy || !newProjectName.trim()}
-                    onClick={() => void createProject()}
-                  >
-                    {projectBusy ? '处理中…' : '新建项目'}
-                  </button>
-                </div>
-              </div>
-            )}
             {/* F2-③：成功/失败两个槽 + 两套样式（失败槽 = 红，一眼看出坏没坏） */}
             {projectNote && <div className="small projectBox__note">{projectNote}</div>}
             {projectErr && <div className="small projectBox__note projectBox__note--err">{projectErr}</div>}
@@ -1949,7 +2207,12 @@ export default function App() {
             {/* M2':行结构换设计基准 .contact-item(头像块/名字/真实状态行),数据仍是真名单;
                 新建/删除收进顶栏「＋」弹层(真操作),不再摆两个按钮 */}
             <div className="contact-list" role="list" aria-label="我的智能体">
-              {filteredAgents.map((a) => (
+              {filteredAgents.map((a) => {
+                // 形态③ 头像六态：休眠 = 没在监听（idle 且保活关）；其余走服务端 status
+                const sleeping = (a.status ?? 'idle') === 'idle' && !agentStates[a.id]?.keepalive;
+                const st = avatarStateOf(a, { sleeping });
+                const doing = avatarDoing(a, { sleeping });
+                return (
                 <button
                   type="button"
                   role="listitem"
@@ -1958,12 +2221,15 @@ export default function App() {
                   className={`contact-item${a.id === curAgentId ? ' active' : ''}${justAddedAgentId === a.id ? ' just-added' : ''}`}
                   onClick={() => selectAgent(a)}
                 >
+                  {/* 形态③：头像即状态 —— 颜色环 + 一个词；悬停/点头像弹「它在干嘛」一行（title 气泡） */}
                   <span
                     className="contact-avatar"
-                    style={{ '--c1': agentColor(a) } as React.CSSProperties}
-                    aria-hidden="true"
+                    title={doing}
+                    aria-label={`${a.name}：${st.word}`}
+                    style={{ '--c1': agentColor(a), '--state-c': st.color } as React.CSSProperties}
                   >
                     {agentGlyph(a)}
+                    <span className="contact-avatar__state" aria-hidden="true">{st.word}</span>
                     {a.kind === 'assistant' && hasUnread && (
                       <span className="red-dot" title={curTask?.unreadHint || '任务结果待查看'} />
                     )}
@@ -1977,7 +2243,8 @@ export default function App() {
                     </span>
                   </span>
                 </button>
-              ))}
+                );
+              })}
               {filteredAgents.length === 0 && (
                 <div className="small contact-list__empty">没有匹配「{agentQuery}」的智能体</div>
               )}
@@ -1986,12 +2253,20 @@ export default function App() {
           </div>
 
           {/*
-            第 16 步「启动并保活」最小闭环：
-            只把这个智能体的会话标成监听态（仍在这一个窗口里，不新开窗口、不起新进程）。
-            空闲时服务端一次模型都不调——有新消息才走 /chat/stream。
+            B1 设置抽屉：账号 / 密码 / 浏览器参数 / 保活 收进可开合抽屉（默认收起 = 降噪）。
+            记忆 / 知识库不在此抽屉（查阅 ≠ 设置），留在侧栏常显入口。
           */}
-          {curAgent && (
-            <div className="keepalive">
+          <div className="settingsDrawer">
+            <div className="buttons-row">
+              <button type="button" className="btn settingsDrawer__toggle" aria-expanded={settingsOpen} onClick={() => setSettingsOpen((v) => !v)}>
+                {settingsOpen ? '收起设置' : '设置'}
+              </button>
+            </div>
+            {settingsOpen && (
+              <div className="settingsDrawer__panel">
+                {/* 第 16 步「启动并保活」最小闭环：当前智能体的监听态开关（不新开窗口/进程） */}
+                {curAgent && (
+                  <div className="keepalive">
               <button type="button" className="btn keepalive__btn" disabled={keepaliveBusy} onClick={() => void toggleKeepalive()}>
                 {keepaliveBusy ? '切换中…' : curState?.keepalive ? '停止保活' : '启动并保活'}
               </button>
@@ -2060,9 +2335,18 @@ export default function App() {
               并发默认 20：调小可临时限流、调大即解锁更多并行（状态本就按页独立存储，改这个数不用动数据结构）。
               开页上限默认 4：到顶只拒绝新开，绝不关掉已有页。
             </div>
-            {/* 第 15 步：两层记忆分开展示——上面那份是「这个人」的，下面那份是当前智能体的 */}
-            {/* 规格 C4（2026-09-25）：待确认记忆不再走侧栏面板 —— 确认卡进对话流（见聊天区 <MemoryConfirmCard/>）。
-                这里只留两层记忆的**只读**查阅（用户记忆 / 项目记忆）。 */}
+                </div>
+
+          {/* 真模型：每账号密文配置与真连通测试，不额外加仪表盘或会话发送动作 */}
+          <ModelSettingsPanel key={session.user.id} {...modelSettings} />
+          {/* 能力与连接（2026-09-27）：搜索/图片/GitHub/飞书 + MCP 连接，配置加密存本机 */}
+          <PluginsPanel {...pluginsPanelProps} />
+              </div>
+            )}
+          </div>
+
+          {/* 第 15 步：两层记忆（只读查阅，留在侧栏常显 —— 查阅 ≠ 设置，不进抽屉） */}
+          {/* 规格 C4（2026-09-25）：待确认记忆确认卡进对话流（聊天区 <MemoryConfirmCard/>）。 */}
             <div className="buttons-row">
               <button type="button" className="btn" onClick={() => setUserMemOpen((v) => !v)}>
                 用户记忆（{userMem.length}）
@@ -2163,7 +2447,46 @@ export default function App() {
                 </div>
               </div>
             )}
-          </div>
+
+            {/* 形态④ Routines 管理（2026-09-27）：看看定时任务→列表；暂停/恢复/删第N个→一句话 */}
+            <div className="buttons-row">
+              <button
+                type="button"
+                className="btn routinesToggle"
+                onClick={() => { setRoutinesOpen((v) => !v); if (!routinesOpen) void loadRoutines(); }}
+              >
+                定时任务（{routines.length}）
+              </button>
+            </div>
+            {routinesOpen && (
+              <div className="routinesPanel" role="list" aria-label="定时任务">
+                {routines.length === 0 && <div className="small">还没有定时任务。</div>}
+                {routines.map((r) => (
+                  <div className="routinesPanel__row" key={r.id} role="listitem">
+                    <span className="routinesPanel__name">{r.name}</span>
+                    <span className={`routinesPanel__state${r.enabled ? '' : ' routinesPanel__state--off'}`}>
+                      {r.enabled ? '运行中' : '已暂停'}
+                    </span>
+                    <button
+                      type="button"
+                      className="routinesPanel__btn"
+                      disabled={routinesBusyId !== null}
+                      onClick={() => void toggleRoutine(r.id, !r.enabled)}
+                    >
+                      {r.enabled ? '暂停' : '恢复'}
+                    </button>
+                    <button
+                      type="button"
+                      className="routinesPanel__del"
+                      disabled={routinesBusyId !== null}
+                      onClick={() => void deleteRoutine(r.id)}
+                    >
+                      删除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
 
           {/* 第 18 步：左栏这两个是纯演示 / 自检痕迹，用样式藏掉（.demoOnly，DOM 保留） */}
           <div className="buttons-row demoOnly">
@@ -2262,15 +2585,6 @@ export default function App() {
 
         <div className="chat">
           {/*
-            任务进行中明确状态指示：贯穿前后端状态机
-          */}
-          {runningLoopId && streaming && (
-            <div className="taskState" style={{ background: '#e6f7ff', borderColor: '#91d5ff', color: '#0050b3' }}>
-              <span>🚀 <b>AI 任务执行中</b> · 正在自主操作浏览器</span>
-              <span className="small" style={{ marginLeft: 8 }}>（可在下方输入补充指令或问答注入上下文，或输入「停」暂停任务）</span>
-            </div>
-          )}
-          {/*
             第 16 步：会话状态行（服务端 conversations 表为准）。
             进程重启后靠它把「当前任务」恢复出来，而不是假装任务从未开始；
             保活态也在这里标出来，让人一眼看出「挂着监听但没在烧模型」。
@@ -2342,7 +2656,8 @@ export default function App() {
             输入框上方一行 chips（见下方 .inputbar 前的 <PersonaChips/>）。建好即 ready
             （默认人设），chips 只是可选精调：可点 / 可自己写 / 可跳过,打字/跳过/答完即消失。
           */}
-          {messages.length === 0 && !streaming && (
+          {/* B3：首进引导（欢迎卡）**只出现一次**（标记落 localStorage，按项目） */}
+          {messages.length === 0 && !streaming && !guideShown(curProjectId) && (
             <div className="welcomeCard">
               <h4 className="welcomeCard__title">
                 <span>🤖</span> 欢迎使用 AI 自主浏览器工作台
@@ -2425,6 +2740,15 @@ export default function App() {
               */}
               {m.role === 'assistant' && isCollabMessage(m.text) ? (
                 <CollabCard text={m.text} />
+              ) : m.role === 'assistant' ? (
+                /*
+                 * 交互对齐片(2026-09-26):助手最终回答渲染成**干净 markdown**。
+                 * 原来这里是 `{m.text}` 纯文本 —— 模型的 `**加粗**`/`- 列表` 会原样露出(用户报的 raw **)。
+                 * 用户消息保持纯文本(用户写什么就显示什么,不替他解释)。
+                 */
+                <div className="msg assistant">
+                  <MarkdownText text={m.text} />
+                </div>
               ) : (
                 <div className={`msg ${m.role}`}>{m.text}</div>
               )}
@@ -2559,10 +2883,14 @@ export default function App() {
           {/* 第 15 步：只在「发起这轮流式的那个智能体」里显示打字气泡，切走就不显示 */}
           {streaming && streamingAgentId === curAgentId && (
             <div className="msg assistant">
-              {streamText || <span className="small">正在想…</span>}
-              <span className="caret" aria-hidden="true">
-                ▍
-              </span>
+              {/* 交互对齐片：流式也走 markdown（半截的 `**` 不会抛错，见 MarkdownText 的注释） */}
+              {streamText ? <MarkdownText text={streamText} /> : <span className="small">正在想…</span>}
+              {/* A①：暂停态不画打字光标 —— 光标 = "还在长"，而挂起时它并没有在长 */}
+              {!pausedHere && (
+                <span className="caret" aria-hidden="true">
+                  ▍
+                </span>
+              )}
             </div>
           )}
           {chatNote && (
@@ -2592,20 +2920,68 @@ export default function App() {
              input / onSend（useChat → /chat/stream SSE）/ tidyCurrentAgent。
              data-state 由真状态推导（empty / typing / thinking=streaming）。
              基准的假功能（CL 额度环 / 模型弹层 / 附件弹层 / 语音）不搬。 */}
+        {/*
+          UX 收尾（2026-09-26 用户拍板 A②/A①/A③）· **状态行钉在输入框正上方**（紧凑一条）：
+            · 执行中:旋转图标 + 一句当前动作;完整轨迹进「可点开、默认收起」的 `<details>`;
+            · 已暂停(A①):换 ⏸ + 「已暂停 · 说「继续」接上」,输入框回正常发送;
+            · 补充注入成功(A③):同一行瞬态多一句「已收到补充」,2.5 秒自动消失(**不弹横幅**)。
+          为什么挪出 `.chat`:用户要的是「钉在输入框上方」——它在对话流里会被消息推着走。
+        */}
+        {runBarMode && (
+          <div className={`runStatus${runBarMode === 'paused' ? ' runStatus--paused' : ''}`} role="status" aria-live="polite">
+            <div className="runStatus__row">
+              {runBarMode === 'running' ? (
+                <span className="runStatus__spin" aria-hidden="true" />
+              ) : (
+                <span className="runStatus__pauseIco" aria-hidden="true">
+                  ⏸
+                </span>
+              )}
+              <span className="runStatus__text">
+                {runBarMode === 'running'
+                  ? visLastStep
+                    ? `正在：${visLastStep}`
+                    : '正在操作浏览器…'
+                  : '已暂停 · 说「继续」接上'}
+              </span>
+              {supplementFlash && <span className="runStatus__ok">已收到补充</span>}
+            </div>
+            {/* 轨迹抽屉放在状态行**下面**（同一块里），点开才占地方；默认收起 */}
+            {runTrace.length > 0 && (
+              <details className="runTrace">
+                <summary className="runTrace__sum">轨迹 · {runTrace.length} 步（点开看）</summary>
+                <ol className="runTrace__list">
+                  {runTrace.map((t, i) => (
+                    <li key={i}>{t}</li>
+                  ))}
+                </ol>
+              </details>
+            )}
+          </div>
+        )}
         <div
           className="inputbar"
           data-state={streaming ? 'thinking' : input ? 'typing' : 'empty'}
         >
+          {/* 形态② 教一遍：录制中横幅（用户看得见「正在录」，操作完点「完成」） */}
+          {teaching && (
+            <div className="teachBanner" role="status">
+              正在录制你的操作（已录 {teachActions.length} 个动作），操作完点「完成」生成技能卡
+            </div>
+          )}
           <input
             className="inputbar-field"
+            /**
+             * 交互对齐片(2026-09-26)：**输入框永远是正常输入框**。
+             * 原来执行中会把它换成「任务进行中：输入补充指令/追问注入上下文，或输入「停」暂停任务…」——
+             * 那是把「系统状态」塞进输入框、还教用户做事。现在只有两种特例：
+             *   · 等用户回答 AI 的提问（那是真的要他说话）；
+             *   · 其余一律就是正常那句。
+             */
             placeholder={
-              runningLoopId && streaming
-                ? '任务进行中：输入补充指令/追问注入上下文，或输入「停」暂停任务…'
-                : streaming
-                  ? '正在打字…'
-                  : awaitHere
-                    ? '回复小助的提问即可，发出后自动继续…'
-                    : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“创建小美”立刻建好,不挡你）`
+              awaitHere
+                ? '回复小助的提问即可，发出后自动继续…'
+                : `和${curAgent ? `「${curAgent.name}」` : '小助'}聊聊（说“创建小美”立刻建好,不挡你）`
             }
             value={input}
             onChange={(e) => {
@@ -2615,22 +2991,78 @@ export default function App() {
               if (v && chipsDraft) void finishChips(null);
             }}
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
-            disabled={streaming && !runningLoopId}
+            /* A①：暂停态（等「继续」）必须能打字，否则用户没法输入那句「继续」 */
+            disabled={streaming && !runningLoopId && !pausedHere}
           />
-          {/* 真文案（不是基准的 sparkle 图标）：桌面没有真「停止」按钮
-               （停 = 输入「停」走 detectStopIntent），文字态永远要保留 */}
-          <button type="button" className="inputbar-btn send" onClick={onSend} disabled={streaming && !runningLoopId}>
-            {runningLoopId && streaming ? '发送补充' : streaming ? '打字中…' : '发送'}
-          </button>
-          {/* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */}
-          <button
-            type="button"
-            className="inputbar-btn end"
-            title="结束这轮聊天，把这段总结进两层记忆"
-            onClick={() => void tidyCurrentAgent()}
-          >
-            结束
-          </button>
+          {/*
+            形态① 真接管（2026-09-27）：执行中**发送键变「接管」**（带旋转图标）。
+            它走的就是「发一句『停』」那条路（detectStopIntent → pauseTask/stopDriving），
+            AI 真的暂停这一路、页面归你（driveStateView 显示「你在操作 · AI 已暂停」）。
+            不是第二套机制；想补充要求直接按回车（Enter 照旧 = 发送）。
+          */}
+          {runningLoopId && streaming ? (
+            <button
+              type="button"
+              className="inputbar-btn send inputbar-btn--stop"
+              onClick={() => onSend('停')}
+              title="接管这一路（AI 暂停，页面归你；想补充要求直接按回车）"
+            >
+              <span className="inputbar__spin" aria-hidden="true" />
+              接管
+            </button>
+          ) : pausedHere ? (
+            /**
+             * ★ 形态① 真接管：暂停态（等「交还」）→ **发送键变「交还」**（= 发一句「继续」）。
+             *   为什么必须单列:挂起时 `streaming` 仍是 true（那条 SSE 还开着），
+             *   照原样会落进「打字中…」并**禁用** —— 用户根本点不了「交还」。
+             */
+            <button type="button" className="inputbar-btn send" onClick={() => onSend('继续')} title="交还：AI 恢复这一路">
+              交还
+            </button>
+          ) : (
+            <button type="button" className="inputbar-btn send" onClick={() => onSend()} disabled={streaming}>
+              {streaming ? '打字中…' : '发送'}
+            </button>
+          )}
+          {/*
+            形态② 教一遍（2026-09-27）：有活页时给「教」—— 你键鼠操作一遍，主进程把动作序列
+            经 teachAction 喂进来（teachActions）；点「完成」落库成技能卡，之后一句话就能回放。
+          */}
+          {browser.active && !teaching && (
+            <button
+              type="button"
+              className="inputbar-btn teach"
+              title="教一遍：你在这一页操作一遍，我录下动作，之后一句话就能回放"
+              onClick={() => { setTeachActions([]); setTeaching(true); }}
+            >
+              教
+            </button>
+          )}
+          {teaching && (
+            <button
+              type="button"
+              className="inputbar-btn teach inputbar-btn--finish"
+              title={`完成教学（已录 ${teachActions.length} 个动作）→ 生成技能卡`}
+              onClick={finishTeaching}
+            >
+              完成{teachActions.length > 0 ? `（${teachActions.length}）` : ''}
+            </button>
+          )}
+          {/*
+            B6（降噪片·用户拍板）：**「结束」键条件显示** —— 只有"这段对话真的有内容可整理"时才给。
+            空对话（还没说过话）摆一个「结束」没有任何意义，只会让输入栏看着更挤。
+          */}
+          {messages.length > 0 && (
+            /* 第 15 步：结束这轮 → 把这段聊天**总结**进两层记忆（用户库 + 本项目记忆） */
+            <button
+              type="button"
+              className="inputbar-btn end"
+              title="结束这轮聊天，把这段总结进两层记忆"
+              onClick={() => void tidyCurrentAgent()}
+            >
+              结束
+            </button>
+          )}
         </div>
       </main>
       {/*
@@ -2650,6 +3082,8 @@ export default function App() {
           className={
             // 可见性 = colOpen(外壳侧) 且 view==='fullscreen'(browser/ 内部态):
             // 面板自己的「退出全屏」按钮走 view→background,同样把列收走 —— 两条路同归隐藏,不绕状态。
+            // ★ 两个状态同进同退由上面那条 effect 兜住(ADR-0005:view→fullscreen ⇒ 列必开),
+            //   否则「view 说要给人看、列没开」= 层被移出视野 = 页已加载却空白。
             browser.view === 'embed'
               ? 'browserLayer browserLayer--embed'
               : col.colOpen && browser.view === 'fullscreen'

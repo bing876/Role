@@ -19,7 +19,7 @@ import type { Pool } from 'pg';
 import type { ServerEnv } from '../env';
 import type { JsonCipher } from '../crypto';
 import { deliverJobResult, onLoopStopped } from '../toolLoop';
-import { registerServerTool, type ServerExecutionContext } from '../toolRegistry';
+import { registerServerTool, registerSemanticBrowserTools, type ServerExecutionContext } from '../toolRegistry';
 import { detectSensitive, sensitiveLabel } from './redact';
 import {
   cancelJobsOfLoop,
@@ -30,7 +30,10 @@ import {
   markResultReady,
 } from './registry';
 import { resolveLoop } from './subLoops';
-import { WEB_SEARCH_SERVER_TOOL, executeWebSearchTool } from './search';
+import { WEB_SEARCH_SERVER_TOOL, executeWebSearchViaProvider } from './search';
+import { resolveSearchProviderForUser } from '../plugins/resolve';
+import { GENERATE_IMAGE_TOOL, executeGenerateImageTool } from './imageTool';
+import { registerConnectorTools } from './connectorTools';
 import { runWorkerPool } from './workers';
 import { registerDelegationTool } from './delegation';
 import { registerSkillTools } from './skillTools';
@@ -231,6 +234,7 @@ async function executeSpawnWorkers(
   // 后台跑：**不 await**
   void runWorkerPool({
     env,
+    userId: ctx.userId,
     jobId: job.id,
     tasks,
     allowSearch: args.allow_search !== false,
@@ -320,15 +324,26 @@ export function initOrchestrator(next: OrchestratorDeps): void {
     return;
   }
 
+  // 抗改版片：旧工具表冻结，只有启用编排后才注册可供新版桌面调用的语义 v2 工具。
+  registerSemanticBrowserTools();
+  // 能力与连接（2026-09-27）：web_search 走**按用户解析的供应商**（本地加密配置优先、env 兜底）
   registerServerTool(WEB_SEARCH_SERVER_TOOL, {
-    execute: async (args) => executeWebSearchTool(next.env, args),
+    execute: async (args, ctx) => {
+      const provider = await resolveSearchProviderForUser(next.pool, next.cipher, ctx.userId, next.env);
+      return executeWebSearchViaProvider(provider, args);
+    },
   });
+  registerServerTool(GENERATE_IMAGE_TOOL, {
+    execute: async (args, ctx) => executeGenerateImageTool(next, ctx, args),
+  });
+  // 片3 · GitHub + 飞书原生只读连接器：按用户密文配置执行（缺配置即 not_configured）
+  registerConnectorTools(next.pool, next.cipher);
   registerServerTool(SPAWN_WORKERS_TOOL, { execute: executeSpawnWorkers });
   registerDelegationTool();
   registerSkillTools();
 
   console.log(
-    `[orc] 已注册 web_search / spawn_workers / delegate —— ` +
+    `[orc] 已注册 web_search / generate_image / spawn_workers / delegate —— ` +
       `委派超时 ${Math.round(next.env.orch.delegateTimeoutMs / 1000)}s，` +
       `临时工并发 ${next.env.orch.workerConcurrency}（单次 ≤${next.env.orch.workerMaxPerCall}），` +
       `主循环搜索=${next.env.orch.agentLoopWebSearch ? '开' : '关'}`,

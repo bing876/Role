@@ -34,6 +34,7 @@ import { connect } from 'node:net';
 import os from 'node:os';
 import type * as fs from 'node:fs';
 import path from 'node:path';
+import type { PackagedRuntime } from './packaged-runtime';
 
 /** 默认后端地址（与渲染层 `API_BASE()` 的默认值保持一致）。 */
 const DEFAULT_API_BASE = 'http://127.0.0.1:8787';
@@ -109,7 +110,12 @@ function setState(patch: Partial<ServerState>): void {
 }
 
 export function getServerState(): ServerState {
-  return state;
+  return { ...state };
+}
+
+/** 安装包密钥/资源损坏时不重生成、不退回开发仓库；把可操作的故障留给登录页。 */
+export function markLocalRuntimeUnavailable(message: string): void {
+  setState({ reachable: false, ownedByUs: false, lastError: message });
 }
 
 export function onServerState(fn: StateListener): () => void {
@@ -343,6 +349,7 @@ function findNodeBinary(serverDir: string, repoRoot: string): string | null {
 function pickCommand(
   serverDir: string,
   repoRoot: string,
+  packaged = false,
 ): { cmd: string; args: string[]; why: string; extraEnv: Record<string, string> } | null {
   const distEntry = path.join(serverDir, 'dist', 'index.js');
   if (existsSync(distEntry)) {
@@ -360,6 +367,8 @@ function pickCommand(
     }
   }
 
+  // 已安装应用只许用包内 dist；绝不退回开发机 tsx 或扫描仓库。
+  if (packaged) return null;
   const srcEntry = path.join(serverDir, 'src', 'index.ts');
   if (!existsSync(srcEntry)) return null;
 
@@ -389,6 +398,7 @@ function pickCommand(
 export async function ensureServer(
   apiBase: string = DEFAULT_API_BASE,
   log: (msg: string) => void = () => {},
+  runtime?: PackagedRuntime,
 ): Promise<boolean> {
   // ① 我们自己拉起来的那个还活着且刚就绪过 → 直接返回，不再探测、不再 spawn。
   //    （这一条是安全的短路：`ownedServer` 是我们自己的 child 句柄，
@@ -400,7 +410,7 @@ export async function ensureServer(
   // ② 并发去重：多个调用方同时进来时共享第一次的结果。
   //    没有这一步，探测 → 拉起之间会有竞态，可能起出两份服务端。
   if (inflight) return inflight;
-  inflight = doEnsureServer(apiBase, log).finally(() => {
+  inflight = doEnsureServer(apiBase, log, runtime).finally(() => {
     inflight = null;
   });
   return inflight;
@@ -409,6 +419,7 @@ export async function ensureServer(
 async function doEnsureServer(
   apiBase: string,
   log: (msg: string) => void,
+  runtime?: PackagedRuntime,
 ): Promise<boolean> {
   // ★★ 每次都要**真的探一次**，不能因为"以前见过外部服务端"就跳过。
   //
@@ -417,6 +428,18 @@ async function doEnsureServer(
   // 那个进程一死，应用仍报 reachable=true，不自愈也不报错，用户登录一律失败。
   // 现在 probe 是无条件的，`externalServerSeen` 退化成纯粹的日志/状态区分用。
   if (await probe(apiBase)) {
+    // 安装包不能把别的开发/旧安装进程当自己的 PGlite 库：不接管也不偷偷连错账户。
+    if (runtime) {
+      if (!ownedServer) {
+        const msg = '8787 已有其他工作台服务在运行；请先退出原服务，再重新打开本安装包';
+        log(`[server-supervisor] ${msg}`);
+        setState({ reachable: false, ownedByUs: false, lastError: msg });
+        return false;
+      }
+      lastReadyAt = Date.now();
+      setState({ reachable: true, ownedByUs: true, lastError: null });
+      return true;
+    }
     if (!externalServerSeen) {
       log('[server-supervisor] 8787 已有服务端在跑，直接用（不接管、退出时也不动它）。');
     }
@@ -438,18 +461,20 @@ async function doEnsureServer(
     return false;
   }
 
-  const dirs = findDirs();
+  const dirs = runtime
+    ? { serverDir: runtime.serverDir, repoRoot: path.dirname(runtime.serverDir) }
+    : findDirs();
   if (!dirs) {
-    const msg = '找不到 apps/server 目录（打包环境？）—— 无法自动拉起，请手动启动服务端。';
+    const msg = '找不到 apps/server 目录 —— 无法自动拉起，请手动启动服务端。';
     log(`[server-supervisor] ${msg}`);
     setState({ reachable: false, ownedByUs: false, lastError: msg });
     return false;
   }
   const { serverDir, repoRoot } = dirs;
 
-  const picked = pickCommand(serverDir, repoRoot);
+  const picked = pickCommand(serverDir, repoRoot, Boolean(runtime));
   if (!picked) {
-    const msg = 'apps/server 下既没有 dist/index.js 也没有可用的 tsx —— 无法自动拉起。';
+    const msg = runtime ? '安装包内缺少可执行的服务端 dist/index.js' : 'apps/server 下既没有 dist/index.js 也没有可用的 tsx —— 无法自动拉起。';
     log(`[server-supervisor] ${msg}`);
     setState({ reachable: false, ownedByUs: false, lastError: msg });
     return false;
@@ -466,7 +491,7 @@ async function doEnsureServer(
       // 否则又起一个 Electron、必崩）。见 findNodeBinary 的注释。
       // ★ 同时**必须清掉** VITE_DEV_SERVER_URL：那是给渲染层指向 vite 的，
       //   服务端拿到它没有意义，但继承下去会让某些路径误判"这是 dev 桌面进程"。
-      env: { ...process.env, ...picked.extraEnv, VITE_DEV_SERVER_URL: '' },
+      env: { ...process.env, ...picked.extraEnv, ...(runtime ? { NODE_OPTIONS: '', NODE_PATH: '', ...runtime.serverEnv } : {}), VITE_DEV_SERVER_URL: '' },
       windowsHide: true,
     });
     ownedServer = child;

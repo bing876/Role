@@ -35,7 +35,7 @@ MUTATIONS = [
         'name': '关掉语义层（routeTask 不再调 routeBySemantic）',
         'repls': [
             (
-                "    const semantic = await routeBySemantic(task, roster, opts.env);\n",
+                "    const semantic = await routeBySemantic(task, roster, opts.env, userId);\n",
                 "    const semantic = null as RouteDecision | null; // 反证注入：语义层关闭\n",
             ),
         ],

@@ -17,7 +17,7 @@ import type { ServerEnv } from '../env';
 import type { JsonCipher } from '../crypto';
 import { bearerFrom, verifyToken } from '../crypto';
 import { isDbUnreachable } from '../db';
-import { createSkill, listSkills, reviseSkill, archiveSkill, decidePendingSkill } from '../orchestrator/skills';
+import { createSkill, listSkills, reviseSkill, archiveSkill, decidePendingSkill, recordTeaching } from '../orchestrator/skills';
 
 export interface SkillsDeps {
   pool: Pool;
@@ -109,6 +109,66 @@ export function registerSkillsRoutes(app: FastifyInstance, { pool, env, cipher }
       });
       if (!skill) return errJson(reply, 500, '创建失败');
       return { skill };
+    } catch (err) {
+      return dbErr(reply, err);
+    }
+  });
+
+  /**
+   * POST /skills/teach —— 形态② 教一遍：把「用户在页上操作一遍」录下来的动作序列
+   * 录成一张**直接生效**（active）的技能卡，之后一句话命中触发条件就回放。
+   * 与 POST /skills（通用教学）的区别：入参是**动作序列 actions**（录制产物），
+   * 由 recordTeaching 把它们落成可回放的 steps（拆掉录制 → 卡没有步骤 → 回放不出东西）。
+   */
+  app.post('/skills/teach', async (req: FastifyRequest, reply: FastifyReply) => {
+    const claims = authed(req, env);
+    if (!claims) return errJson(reply, 401, '未登录');
+    const body = req.body as {
+      projectId?: unknown;
+      agentId?: unknown;
+      name?: unknown;
+      triggerCondition?: unknown;
+      actions?: unknown;
+    } | null;
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    const trigger = typeof body?.triggerCondition === 'string' ? body.triggerCondition.trim() : '';
+    if (!name || !trigger) return errJson(reply, 400, 'name 和 triggerCondition 必填');
+    if (name.length > 60) return errJson(reply, 400, 'name 最长 60 字');
+    if (trigger.length > 500) return errJson(reply, 400, 'triggerCondition 最长 500 字');
+    let actions: Array<{ type: string; detail: string }> = [];
+    if (Array.isArray(body?.actions)) {
+      actions = body.actions
+        .map((a) => {
+          const o = (a ?? {}) as Record<string, unknown>;
+          const type = typeof o.type === 'string' ? o.type : '';
+          const detail = typeof o.detail === 'string' ? o.detail : '';
+          return { type, detail };
+        })
+        .filter((a) => a.detail.trim() !== '');
+    }
+    if (actions.length === 0) return errJson(reply, 400, '没录到任何动作（actions 至少 1 条）');
+    if (actions.length > 20) return errJson(reply, 400, '动作最多 20 条');
+    let projectId: number | null = null;
+    if (body?.projectId !== undefined && body?.projectId !== '') {
+      const n = Number(body.projectId);
+      if (Number.isInteger(n) && n > 0) projectId = n;
+    }
+    let agentId: number | null = null;
+    if (body?.agentId !== undefined && body?.agentId !== '') {
+      const n = Number(body.agentId);
+      if (Number.isInteger(n) && n > 0) agentId = n;
+    }
+    try {
+      const skill = await recordTeaching(pool, cipher, {
+        userId: claims.sub,
+        projectId,
+        agentId,
+        name,
+        triggerCondition: trigger,
+        actions,
+      });
+      if (!skill) return errJson(reply, 400, '录制失败：动作序列没有落成步骤');
+      return { skill, recorded: skill.steps.length };
     } catch (err) {
       return dbErr(reply, err);
     }

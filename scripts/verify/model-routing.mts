@@ -288,27 +288,34 @@ withEnv({ DEEPSEEK_MODEL_CHAT: 'fast-chat', DEEPSEEK_MODEL_CHAT_COMPLEX: 'deep-r
 
 // ------------------------------------------------------------------ ⑧ 接线：llm.ts 真的用路由结果
 log('');
-log('--- ⑧ 接线：llm.ts 用的是路由**返回的**那三格，不是 env.deepseekModel（防「路由存在但没接上」）---');
+log('--- ⑧ 接线：无用户设置走真路由，有密文设置走当前账号配置；两条都到真实请求（不空转/不串号）---');
 {
   const llm = read('apps/server/src/llm.ts');
   /**
-   * 这两条只能验源码文本 —— 「谁调谁」这件事没有别的可执行出口（跑一次真 llm 要外部模型）。
-   * 但它们验的不是「出现过某个名字」，而是**赋值链**：路由结果必须真的流到发请求用的那三个变量上。
+   * 本段静态守着赋值链（防路由空转）；片④另外用真库 + 本地 HTTP 上游的
+   * model-settings.mts 动态验了 A/B 密文配置、缺行回落与坏密文 fail-closed。
+   * 两种形态缺一不可：无行时 routed 的三格、已配置时当前账号的三格都必须流到请求。
    */
-  check('⑧-1：llm.ts 把 routed.model / baseUrl / apiKey 赋给实际发请求用的那三个变量', () => {
+  check('⑧-1：无配置时路由三格到请求，有配置时当前用户三格到请求；坏配置拒绝回落', () => {
     assert.ok(/const taskKind = inferTaskKindFromTag\(opts\.tag\);/.test(llm), '没有从 tag 推 taskKind');
     assert.ok(/const routed = getModelForTask\(env, taskKind, lastUserMsg\);/.test(llm), '没有调路由');
-    assert.ok(/const effectiveModel = routed\.model;/.test(llm), 'effectiveModel 不是路由给的');
-    assert.ok(/const effectiveBaseUrl = routed\.baseUrl;/.test(llm), 'baseUrl 不是路由给的');
-    assert.ok(/const effectiveApiKey = routed\.apiKey;/.test(llm), 'apiKey 不是路由给的');
-    assert.ok(/const modelToUse = effectiveModel;/.test(llm), '发请求那一步没接上路由结果');
+    assert.ok(/const setting = await modelSettingForCall\(opts\.userId\);/.test(llm), '没有按请求用户查密文设置');
+    assert.ok(/if \(setting\.kind === 'invalid'\) throw/.test(llm), '坏密文必须拒绝，不能回落 env');
+    assert.ok(/const chosen = setting\.kind === 'configured' \? setting\.config : null;/.test(llm), '没有只在已配置时覆盖路由');
+    assert.ok(/const effectiveModel = chosen\?\.model \?\? routed\.model;/.test(llm), '模型覆盖或无配置路由没有接上');
+    assert.ok(/const effectiveBaseUrl = chosen\?\.baseUrl \?\? routed\.baseUrl;/.test(llm), '地址覆盖或无配置路由没有接上');
+    assert.ok(/const effectiveApiKey = chosen\?\.apiKey \?\? routed\.apiKey;/.test(llm), '密钥覆盖或无配置路由没有接上');
+    assert.ok(/const modelToUse = effectiveModel;/.test(llm), '请求没有使用有效模型');
+    assert.ok(/const baseUrlToUse = effectiveBaseUrl;/.test(llm), '请求没有使用有效地址');
+    assert.ok(/const apiKeyToUse = effectiveApiKey;/.test(llm), '请求没有使用有效密钥');
   });
   check('⑧-2：判定复杂/简单用的正文是**最后一条 user 消息**（不是整段历史，也不是 tag）', () => {
     assert.ok(/const lastUserMsg = \[\.\.\.messages\]\.reverse\(\)\.find\(\(m\) => m\.role === 'user'\)\?\.content \?\? '';/.test(llm));
     assert.ok(/getModelForTask\(env, taskKind, lastUserMsg\)/.test(llm));
   });
-  check('⑧-3：日志里带 taskKind + model + reason（这条路由唯一的可观测出口，缺一个就没法排查「为什么走了这个模型」）', () => {
-    assert.ok(/taskKind=\$\{taskKind\}/.test(llm) && /model=\$\{effectiveModel\}/.test(llm) && /reason=\$\{routed\.reason\}/.test(llm));
+  check('⑧-3：日志里的 reason 反映实际选择：当前用户设置或无配置时的路由原因', () => {
+    assert.ok(/const reason = chosen \? '当前用户已配置模型' : routed\.reason;/.test(llm));
+    assert.ok(/taskKind=\$\{taskKind\}/.test(llm) && /model=\$\{effectiveModel\}/.test(llm) && /reason=\$\{reason\}/.test(llm));
   });
   check('⑧-4：★不许有「拿 env.deepseekModel 覆盖路由结果」的回头路（那等于把路由架空）', () => {
     assert.ok(!/const modelToUse = env\.deepseekModel/.test(llm), 'modelToUse 又指回 env.deepseekModel 了');

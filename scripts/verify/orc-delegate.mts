@@ -30,6 +30,7 @@ const { ORCH_DEFAULTS } = req('../../apps/server/src/env') as typeof import('../
 const { makeCipher } = req('../../apps/server/src/crypto') as typeof import('../../apps/server/src/crypto');
 const { makePool, migrate } = req('../../apps/server/src/db') as typeof import('../../apps/server/src/db');
 const { startLoop, sanitizeToolCall } = req('../../apps/server/src/toolLoop') as typeof import('../../apps/server/src/toolLoop');
+const { installModelLookup } = req('../../apps/server/src/modelSettings') as typeof import('../../apps/server/src/modelSettings');
 const { initOrchestrator } = req('../../apps/server/src/orchestrator/tools') as typeof import('../../apps/server/src/orchestrator/tools');
 const { executeDelegate } = req('../../apps/server/src/orchestrator/delegation') as typeof import('../../apps/server/src/orchestrator/delegation');
 const { resetRegistryForTest, initRegistry, markAgentBusy, markAgentWaiting } = req(
@@ -120,6 +121,10 @@ async function main(): Promise<void> {
        (201, 20, '外人', 'custom', NULL)
      ON CONFLICT (id) DO NOTHING`,
   );
+
+  // 和生产 buildApp 一样，给独立的循环验收安装每用户密文模型查询（不关闭缺失查询器的安全闸）。
+
+  installModelLookup(pool, cipher);
 
   initOrchestrator({ pool, env: ENV, cipher });
   resetRegistryForTest();
