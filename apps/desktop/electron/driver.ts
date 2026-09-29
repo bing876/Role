@@ -87,6 +87,14 @@ const MAX_REASON_LEN = 1_000;
 const MAX_OUTLINE_ITEMS = 100;
 const MAX_FORM_FIELDS = 100;
 const MAX_WAIT_SECONDS = 300;
+/**
+ * P1-2（2026-09-29）· **实际睡眠上限**。
+ *
+ * 原来这里是个散落在 `case 'wait'` 里的字面量 30，而校验用的上限是
+ * MAX_WAIT_SECONDS=300 —— 两个数不一致，导致"模型要 300 秒、实际睡 30 秒、
+ * 回执还说等了 300 秒"。提成常量并让回执按真实值报。
+ */
+const MAX_WAIT_SECONDS_CLAMPED = 30;
 
 export type ActionShapeCheck =
   | { ok: true; action: BrowserAction }
@@ -2179,8 +2187,23 @@ export async function drive(action: BrowserAction, targetWebContentsId?: number)
         break;
       }
       case 'wait': {
-        await sleep(Math.min(Math.max(action.seconds, 0), 30) * 1000);
-        detail = `等待了 ${action.seconds}s`;
+        /**
+         * P1-2 修复（2026-09-29）· **不再谎报等待时长**。
+         *
+         * 原状：detail 报的是**模型要求的**秒数（模板串里直接取 action.seconds），
+         * 而实际睡眠被上一行截到 30 秒。模型要 300 秒时，回执写"等待了 300s"，
+         * 实际只等了 30 秒 —— 这句假话直接进模型上下文，它会据此判断"已经等够了"，
+         * 于是在页面还没加载完时就去点下一步。
+         *
+         * 现在报**真实等了的**秒数，并且超过上限时如实说明被截断了。
+         */
+        const asked = action.seconds;
+        const actual = Math.min(Math.max(asked, 0), MAX_WAIT_SECONDS_CLAMPED);
+        await sleep(actual * 1000);
+        detail =
+          actual < asked
+            ? `等待了 ${actual}s（要求 ${asked}s，本机单次等待上限 ${MAX_WAIT_SECONDS_CLAMPED}s，已按上限执行）`
+            : `等待了 ${actual}s`;
         break;
       }
       case 'read_page': {
