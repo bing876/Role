@@ -25,6 +25,7 @@
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { createUserInputTracker } from '../../apps/desktop/electron/user-input';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..');
 const read = (p: string): string => readFileSync(path.join(ROOT, p), 'utf8');
@@ -141,21 +142,35 @@ log('--- ③ 渲染层暂停入口：BUG_LIST 说"零调用"，实测是有 ---'
   );
 }
 
-// ---- ④ 诚实的边界：本轮没做什么 -----------------------------------------
+// ---- ④ P1 第一片：主进程真正接到 guest 原生键鼠事件，记录按页时间戳 --------
 log('');
-log('--- ④ 没做的部分（别让测试看起来像全修完了） ---');
+log('--- ④ P1 输入计时：唯一 guest 接线口 + 按页精确窗口（不冒充真机）---');
 {
-  ok(
-    !/最近一次用户真实输入|userActivity|lastUserInput/.test(drv),
-    '★ 主进程仍没有"用户正在用鼠标就自动停"的检测 —— 那是 Q5 的新功能，需拍板',
-  );
-  ok(
-    /pauseDriving/.test(wb) && /pauseTask/.test(wb),
-    '两套接口仍并存（pauseDriving 与 pauseTask）—— 收敛要拍板，本轮只修撒谎',
-  );
+  const main = read('apps/desktop/electron/main.ts');
+  const wire = main.slice(main.indexOf('function wireBrowserGuest(contents: WebContents)'), main.indexOf('contents.setWindowOpenHandler('));
+  ok(/contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/.test(wire),
+    '唯一 WebContentsView guest 入口监听移动/按下/滚轮，并按真实 wcId 记录');
+  ok(/contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/.test(wire),
+    '同一入口监听键盘按下，而非网页内的 JS 事件');
+  ok(/contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/.test(wire),
+    '页销毁丢掉时间戳，wcId 重用不会误继承');
+
+  let now = 1_000;
+  const input = createUserInputTracker(() => now);
+  input.record(101);
+  ok(input.remaining(101) === 3_000 && input.remaining(202) === 0, 'A 页输入不拦 B 页');
+  now += 2_999;
+  ok(input.remaining(101) === 1, '2999ms 仍有 1ms 剩余');
+  input.record(101);
+  now += 3_000;
+  ok(input.remaining(101) === 0, '最后一次输入后恰好 3000ms 到期（连续输入刷新窗口）');
+  input.record(101);
+  input.forget(101);
+  ok(input.remaining(101) === 0, '页销毁后立刻清零');
+  ok(/pauseDriving/.test(wb) && /pauseTask/.test(wb), '手动暂停的两套既有接口仍在，不被临时计时器改写');
 }
 
 log('');
 log(`=== 结论：${bad} 个问题 ===`);
-log('  （本测试证明"返回值不再撒谎"；不证明"用户能被自动检测到并停下来" —— 见 ④）');
+log('  （本测试仅证明原生 guest 接线源码 + 实际按页计时；同类 CDP/真人来源需后续真机检验。）');
 process.exit(bad > 0 ? 1 : 0);

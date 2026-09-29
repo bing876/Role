@@ -20,6 +20,7 @@ import {
 } from './driver';
 import type { WaitForSpec, WatchHandle, WatchEvent } from './wait-watch';
 import { runToolLoop } from './agent';
+import { recordUserInput, forgetUserInput } from './user-input';
 import { startSensitiveAutoResume } from './driver';
 // 第 27 步：人工介入（求助卡片）的状态机 —— 不 import electron，可单测
 import { createHelpHub } from './helpState';
@@ -217,9 +218,22 @@ function wireBrowserGuest(contents: WebContents): void {
   // Phase 3：这个内嵌页属于哪个项目，它的下载就落到那个项目自己的目录（记录里仍标 agentId）
   hookProjectDownloads(contents);
 
-  // 页没了就把 owner 登记清掉，别让 wcId 被复用后认错人
+  // P1：唯一的 WebContentsView guest 接线口；只记本页最近一次键鼠事件的单调时间。
+  // 不采集键名、坐标、输入内容。Electron 不提供可靠来源位，同页同类 CDP/真人
+  // 交错的区分不能靠“AI 正在输入”猜；另有 P1 同页同类验收专门守这一边界。
+  contents.on('before-mouse-event', (_event, mouse) => {
+    if (mouse.type === 'mouseMove' || mouse.type === 'mouseDown' || mouse.type === 'mouseWheel') {
+      recordUserInput(contents.id);
+    }
+  });
+  contents.on('before-input-event', (_event, input) => {
+    if (input.type === 'keyDown') recordUserInput(contents.id);
+  });
+
+  // 页没了就把 owner 和键鼠时间戳清掉，别让 wcId 被复用后认错人
   contents.once('destroyed', () => {
     guestOwner.delete(contents.id);
+    forgetUserInput(contents.id);
   });
 
   /**
