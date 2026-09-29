@@ -43,10 +43,14 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - run: npm run -s verify:typecheck
+      # 安全闸单独拎出来放快反馈 job：它只要 ~4 秒，却守住三个真实漏洞
+      # （CORS 回显任意来源 / 无 Host 头校验 / 登录无失败锁定）。
+      # 全链里也有它，但放这里是为了"改坏了 10 秒内就知道"，不用等 11 分钟。
+      - run: npm run -s verify:security-guards
 
-  # ---- 主链：41 步全跑 ----
+  # ---- 主链：42 步全跑 ----
   verify:
-    name: Verify chain (41 steps)
+    name: Verify chain (42 steps)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

@@ -163,6 +163,108 @@ function ipRateLimited(ip: string): boolean {
   return ipLimiter.limited(ip);
 }
 
+/**
+ * ★ 2026-09-29 对抗性审查新增：**按 XYZ 号的登录失败计数 + 冷却**。
+ *
+ * 为什么单开一个（不复用 ipLimiter）：
+ *   ipLimiter 的口径是"每 IP 每分钟最多 N 次**请求**"，它对"分布式慢速试密码"没有保护力 ——
+ *   攻击者每 IP 每分钟只发 5 次，永远碰不到 20 的线，但累积起来就是无限次尝试。
+ *   而 `/auth/login/xyz` 此前的状况是：**没有任何按账号的失败计数，没有锁定**。
+ *   配合 CORS/Host 收紧前的全开状态，用户浏览器里的任意网页都能来试。
+ *
+ * 设计口径（与 ipLimiter 同源的教训，别重犯）：
+ *   · **永远不整表 clear()** —— 清空等于把所有正在冷却的账号一起放掉，是绕过不是清理；
+ *   · 淘汰按条做，且避开"正在冷却中"的条目（count >= maxFails），否则最旧的那条
+ *     （往往正是攻击者第一个试的号）会优先被踢掉、计数归零；
+ *   · 做成工厂 + 可注入时钟/阈值，为了能**确定性测试**（拿真实时间等 15 分钟不现实）。
+ *
+ * 文案口径：**不泄露账号存在性**。冷却提示与"号或密码不对"是两种不同的失败，
+ * 但都不说"这个号存在/不存在"—— 原实现的同文案原则继续有效。
+ */
+export interface LoginFailLimiter {
+  /** true = 这个号当前处于冷却中，应直接拒绝 */
+  cooling(key: string): boolean;
+  /** 记一次失败；返回本次失败后的累计次数 */
+  fail(key: string): number;
+  /** 登录成功时清零 */
+  reset(key: string): void;
+  /** 诊断/断言用 */
+  size(): number;
+  countOf(key: string): number | null;
+}
+
+export function makeLoginFailLimiter(
+  opts: { maxFails?: number; cooldownMs?: number; softCap?: number; now?: () => number } = {},
+): LoginFailLimiter {
+  const maxFails = opts.maxFails ?? 10; // 连续失败 10 次进冷却
+  const cooldownMs = opts.cooldownMs ?? 15 * 60_000; // 冷却 15 分钟
+  const softCap = opts.softCap ?? 50_000;
+  const now = opts.now ?? Date.now;
+  const hits = new Map<string, { fails: number; until: number; lastAt: number }>();
+
+  const maintain = (): void => {
+    if (hits.size <= softCap) return;
+    const t = now();
+    // ① 已过冷却期的先删 —— 保护力已经用完，删掉不损失任何东西
+    for (const [k, v] of hits) {
+      if (v.until > 0 && v.until <= t) hits.delete(k);
+    }
+    // ② 仍超：淘汰"没在冷却中"的，从最旧开始（Map 保序即插入序）
+    if (hits.size > softCap) {
+      let toDrop = hits.size - softCap;
+      for (const [k, v] of hits) {
+        if (toDrop <= 0) break;
+        if (v.until === 0 || v.until > t) {
+          hits.delete(k);
+          toDrop -= 1;
+        }
+      }
+    }
+  };
+
+  return {
+    cooling(key) {
+      maintain();
+      const v = hits.get(key);
+      return !!v && v.until > now();
+    },
+    fail(key) {
+      maintain();
+      const t = now();
+      const v = hits.get(key);
+      // 已过冷却期：上一轮计数作废，这一轮从 1 重新开始
+      if (v && v.until > 0 && v.until <= t) {
+        hits.set(key, { fails: 1, until: 0, lastAt: t });
+        return 1;
+      }
+      // 从未失败过、或距上次失败已超过冷却窗（长时间没再试 = 新的一轮）
+      // ★ 这里必须是 `t - v.lastAt > cooldownMs`，**不能**用 `v.until <= t` 判断：
+      //   `until` 的 0 是"未进冷却"的哨兵值，拿它比时间会把每一次失败都判成"已过期"，
+      //   计数永远停在 1，闸形同不存在（2026-09-29 首版就踩了这个坑）。
+      if (!v || t - v.lastAt > cooldownMs) {
+        hits.set(key, { fails: 1, until: 0, lastAt: t });
+        return 1;
+      }
+      v.fails += 1;
+      v.lastAt = t;
+      // 只设一次，**不续期**：否则攻击者只要在冷却期内继续失败就能无限延长锁定，
+      // 把"防爆破"变成"可被利用的 DoS"。
+      if (v.fails >= maxFails && v.until === 0) v.until = t + cooldownMs;
+      return v.fails;
+    },
+    reset(key) {
+      hits.delete(key);
+    },
+    size: () => hits.size,
+    countOf: (key) => hits.get(key)?.fails ?? null,
+  };
+}
+
+/**
+ * ★ 这里**没有**模块级的限流器实例。真正的实例建在 `registerAuthRoutes` 里，
+ *   因为阈值来自 `env`（LOGIN_MAX_FAILS / LOGIN_COOLDOWN_MS），而 env 只有进了
+ *   那个函数才拿得到。模块级写死默认值会让"改配置"不生效 —— 正是本次要消除的。
+ */
 function dbError(reply: FastifyReply, err: unknown): FastifyReply {
   if (isDbUnreachable(err)) {
     return reply.code(503).send({
@@ -216,6 +318,17 @@ async function buildSession(pool: Pool, env: ServerEnv, cipher: JsonCipher, user
 }
 
 export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: AuthDeps): void {
+  /**
+   * 按账号的登录失败冷却器（2026-09-29 对抗性审查新增）。
+   *
+   * ★ 建在 `registerAuthRoutes` 里而不是模块级：阈值来自 `env`
+   *   （LOGIN_MAX_FAILS / LOGIN_COOLDOWN_MS），而 env 只有进了这个函数才拿得到。
+   *   模块级那份是"写死的默认值"，改配置不生效 —— 那正是本次要消除的东西。
+   */
+  const loginFailLimiter = makeLoginFailLimiter({
+    maxFails: env.loginMaxFails,
+    cooldownMs: env.loginCooldownMs,
+  });
   // 片⑤ · 新装本地库的一次性引导（不能用生产环境的 SMS_MOCK 假装真实短信）。
   // 只有打包态注入的高熵 secret 可创建；渲染层拿不到这个值，只能经主进程 IPC。
   const local = (req: FastifyRequest) => Boolean(env.localMode && env.localBootstrapSecret &&
@@ -477,9 +590,21 @@ export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: 
     const password = typeof body?.password === 'string' ? body.password : '';
     if (!xyz) return reply.code(400).send({ error: 'XYZ 号格式不对：XYZ 后跟 5~7 位数字（也支持只输数字）' });
     if (!password) return reply.code(400).send({ error: '需要密码' });
+    // ★ 2026-09-29 对抗性审查：按账号的失败冷却（此前完全没有）。
+    //   放在**查库之前**：冷却中的号连 scrypt 都不该跑，省算力也让爆破成本升高。
+    //   文案与"号或密码不对"刻意分开，但两者都不泄露账号是否存在。
+    if (loginFailLimiter.cooling(xyz)) {
+      return reply.code(429).send({
+        code: 'too_many_attempts',
+        error: '这个 XYZ 号登录失败次数太多了，已暂时锁定。过一会儿再试，或用手机号验证码登录。',
+      });
+    }
     try {
       const user = await loadUser(pool, 'xyz_id', xyz);
-      if (!user) return reply.code(401).send({ error: 'XYZ 号或密码不对' });
+      if (!user) {
+        loginFailLimiter.fail(xyz); // 号不存在也计数 —— 否则"号不存在"本身就是免费探测口
+        return reply.code(401).send({ error: 'XYZ 号或密码不对' });
+      }
       if (!user.password_hash) {
         // 说明书要求：未设密码要**明确失败**，并说清下一步怎么走
         return reply.code(400).send({
@@ -488,8 +613,14 @@ export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: 
         });
       }
       if (!verifyPassword(password, user.password_hash)) {
-        return reply.code(401).send({ error: 'XYZ 号或密码不对' }); // 与“用户不存在”同文案，不泄露存在性
+        const fails = loginFailLimiter.fail(xyz);
+        const left = Math.max(0, 10 - fails);
+        // 与"用户不存在"同文案，不泄露存在性；只在快锁定时补一句剩余次数（仍是同一条文案体系）
+        return reply.code(401).send({
+          error: left > 0 && left <= 3 ? `XYZ 号或密码不对（再错 ${left} 次将暂时锁定）` : 'XYZ 号或密码不对',
+        });
       }
+      loginFailLimiter.reset(xyz); // 登录成功即清零
       return await buildSession(pool, env, cipher, user.id);
     } catch (err) {
       return dbError(reply, err);

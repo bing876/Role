@@ -41,6 +41,22 @@ export interface ServerEnv {
    */
   agentLoopMaxSteps: number;
   /**
+   * 2026-09-29 对抗性审查新增：XYZ 号 + 密码登录的**失败锁定**口径。
+   *
+   * 为什么需要可配：这两个值是拍脑袋定的（10 次 / 15 分钟），没有真实数据支撑。
+   *   而它们的副作用是**真用户连错 N 次会被锁 cooldownMs**。配歪了要么形同虚设、
+   *   要么把自己锁在门外。做成配置项，运维/用户能按自己的承受度调，不用改代码重打包。
+   *
+   * 区间（用 intIn 夹住，配成 0/负数/天文数字都回退默认）：
+   *   · maxFails   1~100，默认 10
+   *   · cooldownMs 1000~3600000（1 秒~1 小时），默认 900000（15 分钟）
+   *   配 cooldownMs = 1000 相当于「几乎不锁」——允许，但那是用户自己的选择。
+   *
+   * 配置项：LOGIN_MAX_FAILS / LOGIN_COOLDOWN_MS。
+   */
+  loginMaxFails: number;
+  loginCooldownMs: number;
+  /**
    * 第 26 步：联网搜索（Tavily）。key 只允许存在这里（apps/server/.env）。
    *
    * ★ 与 DeepSeek 完全无关：搜索能力**不绑定任何模型**，任何模型都能调它。
@@ -316,6 +332,8 @@ export function loadEnv(): ServerEnv {
     deepseekBaseUrl: (process.env.DEEPSEEK_BASE_URL || '').trim() || 'https://api.deepseek.com',
     deepseekModel: (process.env.DEEPSEEK_MODEL || '').trim() || 'deepseek-chat',
     agentLoopMaxSteps: resolveAgentLoopMaxSteps(process.env.AGENT_LOOP_MAX_STEPS),
+    loginMaxFails: intIn(process.env.LOGIN_MAX_FAILS, 10, 1, 100),
+    loginCooldownMs: intIn(process.env.LOGIN_COOLDOWN_MS, 15 * 60_000, 1_000, 60 * 60_000),
     tavilyApiKey: (process.env.TAVILY_API_KEY || '').trim(),
     tavilyBaseUrl: (process.env.TAVILY_BASE_URL || '').trim() || 'https://api.tavily.com',
     orch: resolveOrchestratorEnv(process.env),
