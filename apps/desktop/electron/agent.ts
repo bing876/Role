@@ -52,6 +52,8 @@ export interface ToolLoopHooks {
    *   ★ 它挡不住「已经派发出去的那一下」—— 见 driver.ts 的 abortIfRequested 注释。
    */
   exec(action: BrowserAction, signal?: AbortSignal): Promise<DriveResult>;
+  /** P1：这张页距安静满 3 秒还差多久；可选以兼容既有测试钩子。 */
+  userInputIdleMs?(): number;
   /** 用户是否已接管（暂停标志）——每一格都查 */
   isPaused(): boolean;
   /** 这一路是否已作废（reset / stop / 被新任务顶掉） */
@@ -720,6 +722,57 @@ export async function runToolLoop(loopId: string, goal: string, hooks: ToolLoopH
     }
     if (hooks.aborted()) return 'aborted';
     if (res.pageSnapshot) lastSnapshot = res.pageSnapshot;
+
+    // P1：这格因用户正在操作而**没有派发**，不记失败步骤/unknown/连续失败。
+    // 即便 fill_form 前几项已经尝试，也如实保留 driver 的部分执行详情；
+    // 同页安静满 3 秒后先读当前页，再让服务端/模型决定下一步（绝不盲重试）。
+    if (res.outcome === 'blocked') {
+      result = toResult(res);
+      hooks.emit({ kind: 'note', level: 'info', text: res.detail ?? '你在操作，我停下了：后续动作未派发。' });
+      while ((hooks.userInputIdleMs?.() ?? 0) > 0) {
+        if (hooks.aborted()) return 'aborted';
+        if (hooks.isPaused()) {
+          hooks.phase('paused', '已暂停 — 浏览器交还给你（点「继续」先读当前页）', 'user');
+          return pauseOut({ result });
+        }
+        await hooks.sleep(Math.min(150, Math.max(1, hooks.userInputIdleMs?.() ?? 1)));
+      }
+      if (hooks.aborted()) return 'aborted';
+      if (hooks.isPaused()) {
+        hooks.phase('paused', '已暂停 — 浏览器交还给你（点「继续」先读当前页）', 'user');
+        return pauseOut({ result });
+      }
+      // 与普通 read_page 一样设上限；原生 CDP 偶尔不回包，不能因“先读页”把循环挂死。
+      // 读页只读，不会反过来派发之前被挡的那次点击。超时只表示读不到快照，
+      // 不改变**原动作**确定未派发的 blocked 语义。
+      const readAbort = new AbortController();
+      let readTimer: ReturnType<typeof setTimeout> | undefined;
+      let probe: DriveResult;
+      try {
+        probe = await Promise.race([
+          hooks.exec({ action: 'read_page' }, readAbort.signal),
+          new Promise<DriveResult>((resolve) => {
+            readTimer = setTimeout(() => {
+              readAbort.abort();
+              resolve({ ok: false, action: 'read_page', outcome: 'unknown', error: '读当前页超时' });
+            }, execTimeoutFor({ action: 'read_page' }));
+          }),
+        ]);
+      } catch (err) {
+        probe = { ok: false, action: 'read_page', error: (err as Error).message };
+      } finally {
+        if (readTimer) clearTimeout(readTimer);
+        readAbort.abort();
+      }
+      if (hooks.aborted()) return 'aborted';
+      if (probe.pageSnapshot) lastSnapshot = probe.pageSnapshot;
+      result = {
+        ...result,
+        ...(probe.ok && probe.pageSnapshot ? { page: probe.pageSnapshot } : {}),
+        detail: `${res.detail ?? '用户正在操作，本步未派发。'}${probe.ok && probe.pageSnapshot ? ' 已重新读取当前页面。' : ' 当前页暂时读不到；下一步先 read_page。'}`,
+      };
+      continue;
+    }
 
     step += 1;
     const summary = `步 ${step}：${label(action)}${res.detail ? ` —— ${res.detail}` : ''}${

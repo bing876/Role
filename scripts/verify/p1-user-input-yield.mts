@@ -9,6 +9,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
+import { runToolLoop } from '../../apps/desktop/electron/agent';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const source = readFileSync(path.join(root, 'apps/desktop/electron/driver.ts'), 'utf8');
@@ -172,6 +173,55 @@ await check('已发清空但未写字：回执如实说可能部分执行，不�
   assert.match(result.detail ?? '', /输入框可能已聚焦\/清空.*文字尚未派发/);
   assert.equal(commands.filter((x) => x.method.startsWith('Input.')).length, beforeInput);
   driver.forgetUserInput(101);
+});
+
+await check('真实桌面循环：挡下不算失败/unknown、不记失败步；安静后先读页才送 blocked 回执', async () => {
+  let left = 3_000;
+  const receipts: Array<null | Record<string, unknown>> = [];
+  const execActions: string[] = [];
+  const stepResults: boolean[] = [];
+  const notes: string[] = [];
+  // 既有普通 exec Promise.race 超时 timer 不清，这里 unref 而非让测试白等 20 秒。
+  const nativeTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((fn: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+    const handle = nativeTimeout(fn, ms, ...args);
+    handle.unref();
+    return handle;
+  }) as typeof setTimeout;
+  try {
+    const reason = await runToolLoop('p1-test-loop', '点下一步', {
+      next: async (_loop, result) => {
+        receipts.push(result);
+        if (receipts.length === 1) return { kind: 'tool', call: { id: 'p1-click', name: 'click', args: { target: '下一步' } } };
+        assert.equal(left, 0, '用户还没停满 3 秒就去问服务端下一步');
+        return { kind: 'done', summary: '验证完成', document_title: '验证', document_outline: [] };
+      },
+      exec: async (action) => {
+        execActions.push(action.action);
+        return action.action === 'click'
+          ? { ok: false, action: 'click', outcome: 'blocked', detail: '你在操作，我停下了：点击未派发。' }
+          : { ok: true, action: 'read_page', pageSnapshot: page };
+      },
+      userInputIdleMs: () => left,
+      sleep: async (ms) => { left = Math.max(0, left - ms); },
+      isPaused: () => false, aborted: () => false,
+      emit: (event) => { if (event.kind === 'note') notes.push(event.text); },
+      phase: () => undefined,
+      taskStart: async () => 17,
+      taskStep: async (_id, _summary, ok) => { stepResults.push(ok); },
+      taskStatus: async () => undefined,
+    });
+    assert.equal(reason, 'done');
+  } finally {
+    globalThis.setTimeout = nativeTimeout;
+  }
+  assert.deepEqual(execActions, ['click', 'read_page']);
+  assert.equal(receipts.length, 2, '等用户时不能空转问模型');
+  assert.equal(receipts[1]?.outcome, 'blocked');
+  assert.equal(receipts[1]?.ok, false);
+  assert.deepEqual(receipts[1]?.page, page, '先读当前页再交给服务端，不能拿旧快照盲重试');
+  assert.ok(stepResults.every(Boolean), '挡下的动作不能作为失败步骤记账');
+  assert.ok(notes.some((note) => note.includes('未派发')), '界面通知必须说清让路原因');
 });
 
 console.log(`=== P1 分片验收：${passed} PASS / 0 FAIL（非真机）===\n`);

@@ -20,7 +20,7 @@ import {
 } from './driver';
 import type { WaitForSpec, WatchHandle, WatchEvent } from './wait-watch';
 import { runToolLoop } from './agent';
-import { recordUserInput, forgetUserInput } from './user-input';
+import { recordUserInput, forgetUserInput, userInputRemainingMs } from './user-input';
 import { startSensitiveAutoResume } from './driver';
 // 第 27 步：人工介入（求助卡片）的状态机 —— 不 import electron，可单测
 import { createHelpHub } from './helpState';
@@ -1412,8 +1412,10 @@ function startAgentLoop(
           }
           return r.decision;
         }),
-      // 第 17 步：动作一律打到**这一路自己的那张页**上（两路并行时绝不能盲选 guest）
-      exec: (action) => drive(action, wcId),
+      // 第 17 步：动作只打到本路自己的页；P1-2 取消信号透传给唯一执行口。
+      exec: (action, signal) => drive(action, wcId, signal),
+      // P1：临时让路不置手动暂停位，等本页最后一次键鼠事件安静满 3 秒。
+      userInputIdleMs: () => userInputRemainingMs(wcId),
       // 第 22 步：暂停门按 target 判 —— 只问**这一路自己那张页**有没有被按住
       isPaused: () => isDrivingPaused(wcId),
       aborted: () => lane.aborted,
