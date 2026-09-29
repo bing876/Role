@@ -2,7 +2,7 @@
 
 ## 背景与决定
 
-用户已定：同一张内嵌页最近一次键鼠操作后 **3000ms** 内不派发尚未发出的 `click/type/fill_form`；输入框上方现有状态行显示 **「你在操作，我停下了」**。不用新状态机或 IPC：唯一 `wireBrowserGuest` 建页口把原生 `WebContents.webContents` 的 `before-mouse-event`（移动/按下/滚轮）与 `before-input-event`（按下）接到主进程按 `wcId` 的单调钟；销毁清理。`drive()` 的新闸紧邻既有手动暂停门，使用同一组三动作；继续前等本页安静 3 秒、读当前页，`outcome:'blocked'` 与失败/unknown 独立，部分派发如实标出，手动暂停优先。
+用户已定：同一张内嵌页最近一次键鼠操作后 **3000ms** 内不派发尚未发出的 `click/type/fill_form`；输入框上方现有状态行显示 **「你在操作，我停下了」**。不用新状态机或 IPC：唯一 `wireBrowserGuest` 建页口把原生 `WebContents.webContents` 的 `before-mouse-event`（移动/按下/抬起/滚轮）与 `before-input-event`（`rawKeyDown`/`keyDown`/`char`/`keyUp`，兼容输入法只送文字事件）接到主进程按 `wcId` 的单调钟；销毁清理。`drive()` 的新闸紧邻既有手动暂停门，使用同一组三动作；继续前等本页安静 3 秒、读当前页，`outcome:'blocked'` 与失败/unknown 独立，部分派发如实标出，手动暂停优先。
 
 ### 同页同类的冲突：优先不漏真人，代价是可能多让路
 

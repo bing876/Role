@@ -63,12 +63,15 @@ export function wireGuestInput(contents: WebContents): void {
   // 这里不以“AI 的 CDP 正在输入同类键”为理由吞事件；代价是 CDP 回声可能也会
   // 触发保守让路。须在 Win/mac 真机确认 before-input-event 的具体触发路径。
   contents.on('before-mouse-event', (_event, mouse) => {
-    if (mouse.type === 'mouseMove' || mouse.type === 'mouseDown' || mouse.type === 'mouseWheel') {
+    if (mouse.type === 'mouseMove' || mouse.type === 'mouseDown' || mouse.type === 'mouseUp' || mouse.type === 'mouseWheel') {
       recordUserInput(contents.id);
     }
   });
   contents.on('before-input-event', (_event, input) => {
-    if (input.type === 'keyDown') recordUserInput(contents.id);
+    // 输入法可能只送 char，物理按键也可能送 rawKeyDown；不能只记 keyDown。
+    if (input.type === 'rawKeyDown' || input.type === 'keyDown' || input.type === 'char' || input.type === 'keyUp') {
+      recordUserInput(contents.id);
+    }
   });
   contents.once('destroyed', () => { forgetUserInput(contents.id); });
 }

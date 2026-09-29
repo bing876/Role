@@ -28,8 +28,8 @@ await check('唯一 WebContentsView guest 接线口真实监听键鼠事件并�
   const wire = main.slice(main.indexOf('function wireBrowserGuest(contents: WebContents)'), main.indexOf('contents.setWindowOpenHandler('));
   const inputSource = readFileSync(path.join(root, 'apps/desktop/electron/user-input.ts'), 'utf8');
   assert.match(wire, /wireGuestInput\(contents\)/);
-  assert.match(inputSource, /contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/);
-  assert.match(inputSource, /contents\.on\('before-input-event',[\s\S]*?keyDown[\s\S]*?recordUserInput\(contents\.id\)/);
+  assert.match(inputSource, /contents\.on\('before-mouse-event',[\s\S]*?mouseMove[\s\S]*?mouseDown[\s\S]*?mouseUp[\s\S]*?mouseWheel[\s\S]*?recordUserInput\(contents\.id\)/);
+  assert.match(inputSource, /contents\.on\('before-input-event',[\s\S]*?rawKeyDown[\s\S]*?keyDown[\s\S]*?char[\s\S]*?keyUp[\s\S]*?recordUserInput\(contents\.id\)/);
   assert.match(inputSource, /contents\.once\('destroyed',[\s\S]*?forgetUserInput\(contents\.id\)/);
 });
 await check('旧手动暂停门紧邻新闸，锚定 if (，不能用 false && 虚晃过关', () => {
@@ -235,6 +235,12 @@ await check('同页同类（模拟 guest 原生回调）：AI type 的 CDP keyDo
   advance(10);
   guest.emit('before-input-event', {}, { type: 'keyDown', key: 'x' }); // 同页、同类、同键、同一焦点框的真人事件
   assert.equal(driver.userInputRemainingMs(101), 3_000, '真人的第二次按键必须刷新时间戳，不能被在途 CDP 键吞掉');
+  advance(10);
+  guest.emit('before-input-event', {}, { type: 'rawKeyDown', key: 'x' }); // 物理键可能报 rawKeyDown
+  assert.equal(driver.userInputRemainingMs(101), 3_000, 'CDP 同类命令在途时 rawKeyDown 也不能被漏掉');
+  advance(10);
+  guest.emit('before-input-event', {}, { type: 'char', key: 'x' }); // 输入法可能只送 char
+  assert.equal(driver.userInputRemainingMs(101), 3_000, '输入法文字事件也必须算最近一次输入');
   const before = commands.filter((x) => x.method.startsWith('Input.')).length;
   for (const action of [
     { action: 'click', target: '下一步' },
@@ -282,6 +288,25 @@ await check('真实状态广播：本页首次输入立刻显示原文，3 秒�
   assert.equal(driver.getTaskState(101).blocked, true);
   assert.notEqual(driver.getTaskState(101).detail, '你在操作，我停下了', '临时让路不能假扮/解除手动暂停');
   driver.forgetUserInput(101);
+});
+
+await check('原生键鼠事件形态：rawKeyDown/keyDown/char/keyUp + 鼠标释放均更新本页，销毁立即清理', () => {
+  const guest = guests.get(202) as { emit: (name: string, event: object, input: object) => void };
+  assert.ok(guest);
+  driver.forgetUserInput(202);
+  for (const type of ['rawKeyDown', 'keyDown', 'char', 'keyUp']) {
+    advance(1);
+    guest.emit('before-input-event', {}, { type });
+    assert.equal(driver.userInputRemainingMs(202), 3_000, `${type} 属于真人键盘/输入法，不得忽略`);
+    assert.equal(driver.userInputRemainingMs(101), 0, '本页事件不能误挡别页');
+  }
+  for (const type of ['mouseMove', 'mouseDown', 'mouseUp', 'mouseWheel']) {
+    advance(1);
+    guest.emit('before-mouse-event', {}, { type });
+    assert.equal(driver.userInputRemainingMs(202), 3_000, `${type} 属于用户鼠标操作`);
+  }
+  guest.emit('destroyed', {}, {});
+  assert.equal(driver.userInputRemainingMs(202), 0, '页销毁必须清掉所有事件时间戳');
 });
 
 await check('真实桌面循环：挡下不算失败/unknown、不记失败步；安静后先读页才送 blocked 回执', async () => {
