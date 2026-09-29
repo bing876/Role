@@ -14,7 +14,7 @@
 ## 子阶段 2-A（项目层 / 母鸡 / 知识库归属）
 
 三个 mjs 都是**自包含**的：自己起后端、自己收尾、自己删临时库/临时账号。
-默认端口特意避开用户的 8787（验收用 8799 / 8798）。报告见 `docs/acceptance/substage-2a/验收报告.md`。
+默认端口特意避开用户的 8787（验收用 8799 / 8798）。报告见 `docs/archive/2026-09/acceptance/substage-2a/验收报告.md`。
 
 | 文件 | 干什么 |
 |---|---|
@@ -27,7 +27,7 @@
 
 `2b-desktop-tests.py` **一条命令跑完全部四条验收**：自己起假模型+假页面(8899) / 验收后端(8799) /
 vite(5273) / 真 Electron(9333)，用 CDP 真点真敲，跑完自删测试账号、断言活库零污染、杀进程、删临时 profile。
-报告见 `docs/acceptance/substage-2b/验收报告.md`。
+报告见 `docs/archive/2026-09/acceptance/substage-2b/验收报告.md`。
 
 | 文件 | 干什么 |
 |---|---|
@@ -62,7 +62,7 @@ PYTHONIOENCODING=utf-8 C:/Users/bing/.workbuddy/binaries/python/envs/default/Scr
 
 **只动「登录态 / cookie 存储」这一层**：同项目的多个智能体共用一套 cookie/localStorage/session；
 **标签页、任务执行状态、暂停继续仍然按 agentId 隔离**（桶键没动）。不迁移旧的 `agent-*` 分区，允许自然作废。
-报告见 `docs/acceptance/substage-3/验收报告.md`。
+报告见 `docs/archive/2026-09/acceptance/substage-3/验收报告.md`。
 
 | 文件 | 干什么 |
 |---|---|
@@ -130,7 +130,7 @@ node scripts/verify/partitions-snapshot.mjs "C:/Users/bing/AppData/Roaming/@ai-w
 **只加"看"，不加"管"**：持续采集 Electron 应用整体的内存/CPU，两档阈值（健康线内完全不打扰、
 警戒线发一条人话提示并附「最久未使用实例」排序）——**不设写死数量上限、不自动强制关页、
 提示也不阻止任何操作**；监控自身的落盘只留 60s 汇总，默认不落 5s 原始点。
-报告见 `docs/acceptance/substage-4/验收报告.md`。
+报告见 `docs/archive/2026-09/acceptance/substage-4/验收报告.md`。
 
 | 文件 | 干什么 |
 |---|---|
@@ -412,7 +412,7 @@ node scripts/verify/db-snapshot.mjs docs/acceptance/substage-2a/db-before.json
 
 ## R4 发车判定收紧（2026-09-22）
 
-两个脚本**都要跑**，各测一层，缺一不可。报告见 `docs/acceptance-r4发车收紧-真服务端复验-20260922.md`。
+两个脚本**都要跑**，各测一层，缺一不可。报告见 `docs/archive/2026-09/docs-root/acceptance-r4发车收紧-真服务端复验-20260922.md`。
 
 | 文件 | 干什么 |
 |---|---|
@@ -464,4 +464,4 @@ git worktree remove /tmp/wb-main --force
   同理 `6-2`「帮我下单」防短句被漏掉。（照 `TOOLBOX.md` 的 E-2/E-3 成对规矩。）
 - **R4 的残留已立待办**：有活页 + 明确页面指代、但动词不在词表（「当前页面上的价格帮我记下来」）
   **不发车**。这是「宁可漏发不误发」的有意取舍，已按现状固化在 parity 脚本 D 段，
-  见 `docs/待办-R4残留-页面指代无动作词-20260922.md`。
+  见 `docs/archive/2026-09/docs-root/待办-R4残留-页面指代无动作词-20260922.md`。
