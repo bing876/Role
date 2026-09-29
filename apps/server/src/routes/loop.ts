@@ -248,6 +248,9 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
           ok: Boolean(raw.ok),
           detail: typeof raw.detail === 'string' ? raw.detail.slice(0, 500) : undefined,
           error: typeof raw.error === 'string' ? raw.error.slice(0, 500) : undefined,
+          // 这层是入站白名单：blocked 不能在这里被丢掉、被降级成失败/unknown。
+          outcome: raw.ok === false && (raw.outcome === 'blocked' || raw.outcome === 'failed' || raw.outcome === 'unknown')
+            ? raw.outcome : raw.ok === true && raw.outcome === 'done' ? 'done' : undefined,
           noChange: Boolean(raw.noChange),
           refused: typeof raw.refused === 'string' ? raw.refused.slice(0, 300) : undefined,
           userAnswer: typeof raw.userAnswer === 'string' ? raw.userAnswer.slice(0, 300) : undefined,
@@ -257,7 +260,9 @@ export function registerLoopRoutes(app: FastifyInstance, { pool, env, cipher }: 
 
     try {
       if (result) {
-        if (result.ok) {
+        if (result.outcome === 'blocked') {
+          broadcastLoopEvent(loopId, 'note', { level: 'info', text: `已让路：${result.detail ?? '用户正在操作，后续动作未派发'}` });
+        } else if (result.ok) {
           broadcastLoopEvent(loopId, 'note', { level: 'info', text: `步骤已执行完成${result.detail ? `：${result.detail}` : ''}` });
         } else {
           broadcastLoopEvent(loopId, 'note', { level: 'warn', text: `上一步未达成预期${result.error ? `：${result.error}` : ''}` });

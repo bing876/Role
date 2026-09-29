@@ -1055,14 +1055,16 @@ function describeToolData(data: unknown): string {
 
 /** 桌面回执 → 塞回模型的 tool 消息（短、只有人话摘要） */
 export function describeToolResult(call: LoopToolCall, r: LoopToolResult): string {
-  const head = `工具 ${call.name} 回执：${r.ok ? '成功' : '失败'}`;
+  const yielded = r.outcome === 'blocked';
+  const head = `工具 ${call.name} 回执：${yielded ? '已让路（用户正在操作，后续动作未派发）' : r.ok ? '成功' : '失败'}`;
   const bits: string[] = [];
   if (r.detail) bits.push(r.detail.slice(0, 400));
-  if (r.error) bits.push(`失败原因：${r.error.slice(0, 400)}`);
+  if (yielded) bits.push('这不是执行失败或未知结果。已读/请先读当前页，再基于用户改动决定下一步，不能盲重试旧目标。');
+  if (r.error && !yielded) bits.push(`失败原因：${r.error.slice(0, 400)}`);
   if (r.refused) bits.push(`本机安全闸拦下：${r.refused.slice(0, 300)}`);
-  if (r.noChange) bits.push('动作执行了，但页面看不出任何变化（地址/标题/节点数都没动）——多半没点中、被弹层挡住，或这颗按钮只是唤起手机 App');
+  if (r.noChange && !yielded) bits.push('动作执行了，但页面看不出任何变化（地址/标题/节点数都没动）——多半没点中、被弹层挡住，或这颗按钮只是唤起手机 App');
   if (r.userAnswer) bits.push(`用户补了一句：${r.userAnswer.slice(0, 300)}`);
-  const page = r.page ? `\n执行后的当前页：\n${snapshotBrief(r.page)}` : '';
+  const page = r.page ? `\n${yielded ? '用户操作后重新读取的当前页' : '执行后的当前页'}：\n${snapshotBrief(r.page)}` : '';
   /**
    * 多智能体编排 · **结构化结果必须进上下文**。
    *

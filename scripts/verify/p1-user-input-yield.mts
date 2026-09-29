@@ -10,6 +10,7 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { runToolLoop } from '../../apps/desktop/electron/agent';
+import { describeToolResult } from '../../apps/server/src/toolLoop';
 
 const root = path.resolve(import.meta.dirname, '../..');
 const source = readFileSync(path.join(root, 'apps/desktop/electron/driver.ts'), 'utf8');
@@ -258,6 +259,22 @@ await check('真实桌面循环：挡下不算失败/unknown、不记失败步�
   assert.deepEqual(receipts[1]?.page, page, '先读当前页再交给服务端，不能拿旧快照盲重试');
   assert.ok(stepResults.every(Boolean), '挡下的动作不能作为失败步骤记账');
   assert.ok(notes.some((note) => note.includes('未派发')), '界面通知必须说清让路原因');
+});
+
+await check('服务端入站白名单保留 blocked，SSE info 不报失败；模型回执明说用户操作未派发', () => {
+  const route = readFileSync(path.join(root, 'apps/server/src/routes/loop.ts'), 'utf8');
+  assert.match(route, /outcome: raw\.ok === false && \(raw\.outcome === 'blocked'/,
+    '入站不能默默丢掉第四种 outcome');
+  assert.match(route, /if \(result\.outcome === 'blocked'\) \{\s*broadcastLoopEvent\(loopId, 'note', \{ level: 'info'/,
+    'blocked 不能经 SSE 当作 warning/失败广播');
+  const text = describeToolResult(
+    { id: 'p1', name: 'click', args: { target: '下一步' } },
+    { ok: false, outcome: 'blocked', detail: '你在操作，我停下了：点击未派发。', page },
+  );
+  assert.match(text, /回执：已让路（用户正在操作，后续动作未派发）/);
+  assert.match(text, /先读当前页/);
+  assert.match(text, /用户操作后重新读取的当前页/);
+  assert.doesNotMatch(text, /回执：失败|失败原因|回执：成功|回执：unknown/);
 });
 
 console.log(`=== P1 分片验收：${passed} PASS / 0 FAIL（非真机）===\n`);
