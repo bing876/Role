@@ -85,6 +85,9 @@ const handlers = new Map<string, (payload?: unknown) => void>();
 const bridgeCalls: string[] = [];
 /** ADR-0002：create 桩用的 wcId 发号器（真主进程里就是 guest 的 webContentsId） */
 let wcIdSeq = 0;
+/** P1：状态广播必须用当前 tab 的真实 create 回执 wcId，不能借用 SSE 固定 7777 桩。 */
+const wcIdByTabKey = new Map<number, number>();
+let orderedTabKey: number | null = null;
 /** 送一个**桥事件**（非 agent 通道，例如主进程要求开页）：返回是否有人接住 */
 const emitBridge = (channel: string, payload?: unknown): number => {
   const h = handlers.get(channel);
@@ -154,10 +157,12 @@ const bridge = new Proxy(
      * 走 Proxy 兜底的话回执是 undefined → 发送被 25×120ms 的重试拖满 3 秒，
      * 流式那一段全部等不到 /chat/stream（片 7b 就是这么红掉的）。
      */
-    browserViewCreate: (_req: { tabKey: number; projectId: number | null; url: string }) => {
+    browserViewCreate: (req: { tabKey: number; projectId: number | null; url: string }) => {
       wcIdSeq += 1;
+      wcIdByTabKey.set(req.tabKey, wcIdSeq);
       return Promise.resolve({ wcId: wcIdSeq });
     },
+    browserViewOrder: async (tabKey: number) => { orderedTabKey = tabKey; },
     /** 会话：登出/静默登录都要把凭证同步给主进程（不记就看不见这条清场动作） */
     syncSession: async (_apiBase: string, token: string) => {
       bridgeCalls.push(`syncSession('${token}')`);
@@ -2418,6 +2423,33 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     const kids = Array.from(bar!.parentElement!.children);
     assert.ok(kids.indexOf(bar!) < kids.indexOf(ib!), '状态行没有排在输入框**之前**（"正上方"）');
     assert.ok(q('.runStatus__spin') !== null, '执行中状态行应有旋转图标');
+  });
+
+  await check('P1 · 真渲染：本页真人输入状态行原文；恢复/别页不会残留文案', async () => {
+    const state = (wcId: number, detail: string) => JSON.stringify({
+      wcId, phase: 'running', detail, step: 1, blocked: false,
+    });
+    assert.ok(q('.runStatus') !== null, '前置：必须正有一条运行中的任务状态行');
+    const activeWcId = wcIdByTabKey.get(orderedTabKey ?? -1) ?? -1;
+    assert.ok(activeWcId > 0, '测试桩没拿到当前 tab 的 create 回执 wcId（不能拿 SSE 桩 7777 假装）');
+    await act(async () => {
+      assert.equal(emitBridge('state', state(activeWcId, '你在操作，我停下了')), 1, 'App 没有接上主进程 state 广播');
+    });
+    await flush(2);
+    const renderedStatusText = q('.runStatus__text')?.textContent?.trim();
+    assert.equal(renderedStatusText, '你在操作，我停下了', '用户操作时输入框上方没显示拍板原文');
+    assert.ok(q('.runStatus--paused') !== null && q('.runStatus__spin') === null, '让路时不应继续画「AI 正在操作」的转圈');
+
+    await act(async () => { emitBridge('state', state(activeWcId, 'AI 正在下一步')); });
+    await flush(2);
+    assert.ok(!(q('.runStatus__text')?.textContent ?? '').includes('你在操作，我停下了'), '安静期结束后状态行没还原');
+    assert.ok(q('.runStatus__spin') !== null, '恢复运行后旋转图标应回来');
+
+    await act(async () => { emitBridge('state', state(activeWcId + 10_000, '你在操作，我停下了')); });
+    await flush(2);
+    assert.ok(!(q('.runStatus__text')?.textContent ?? '').includes('你在操作，我停下了'), '别页的真人输入串到了当前页的状态行');
+    await act(async () => { emitBridge('state', state(activeWcId, 'AI 正在下一步')); });
+    await flush(2);
   });
 
   await check('⑲-9（A①）发「停」→ 非执行态（已暂停 + 输入框回正常发送）；说「继续」→ 接回执行中', async () => {

@@ -1584,6 +1584,10 @@ export default function App() {
   const pausedHere = awaitResume && awaitResumeAgent === curAgentId;
   const runBarMode: 'running' | 'paused' | null =
     runningLoopId && streaming ? 'running' : pausedHere ? 'paused' : null;
+  // P1：仅在当前智能体正在看的**这张**原生页显示临时让路；不是手动暂停。
+  // 主进程安静满 3 秒会通过原有 state 广播恢复 detail，切页不得串别页。
+  const userInputYieldHere = runBarMode === 'running' && browser.active !== null &&
+    task.wcId === browser.webContentsIdOf(browser.active.id) && task.detail === '你在操作，我停下了';
   const visPage = browser.active ? browser.active.title || browser.active.url || null : null;
 
   /**
@@ -2928,9 +2932,9 @@ export default function App() {
           为什么挪出 `.chat`:用户要的是「钉在输入框上方」——它在对话流里会被消息推着走。
         */}
         {runBarMode && (
-          <div className={`runStatus${runBarMode === 'paused' ? ' runStatus--paused' : ''}`} role="status" aria-live="polite">
+          <div className={`runStatus${runBarMode === 'paused' || userInputYieldHere ? ' runStatus--paused' : ''}`} role="status" aria-live="polite">
             <div className="runStatus__row">
-              {runBarMode === 'running' ? (
+              {runBarMode === 'running' && !userInputYieldHere ? (
                 <span className="runStatus__spin" aria-hidden="true" />
               ) : (
                 <span className="runStatus__pauseIco" aria-hidden="true">
@@ -2938,11 +2942,13 @@ export default function App() {
                 </span>
               )}
               <span className="runStatus__text">
-                {runBarMode === 'running'
-                  ? visLastStep
-                    ? `正在：${visLastStep}`
-                    : '正在操作浏览器…'
-                  : '已暂停 · 说「继续」接上'}
+                {userInputYieldHere
+                  ? '你在操作，我停下了'
+                  : runBarMode === 'running'
+                    ? visLastStep
+                      ? `正在：${visLastStep}`
+                      : '正在操作浏览器…'
+                    : '已暂停 · 说「继续」接上'}
               </span>
               {supplementFlash && <span className="runStatus__ok">已收到补充</span>}
             </div>

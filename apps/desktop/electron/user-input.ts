@@ -22,6 +22,34 @@ export function createUserInputTracker(now: () => number = () => performance.now
 }
 
 const guestInput = createUserInputTracker();
-export const recordUserInput = (wcId: number): void => guestInput.record(wcId);
+const expiryTimers = new Map<number, ReturnType<typeof setTimeout>>();
+type InputChange = 'first' | 'renewed' | 'expired' | 'forgotten';
+let listener: ((wcId: number, change: InputChange) => void) | null = null;
+/** driver.ts 的状态镜像只有这一位订阅者；输入内容始终不进入广播。 */
+export function setUserInputListener(fn: ((wcId: number, change: InputChange) => void) | null): void {
+  listener = fn;
+}
 export const userInputRemainingMs = (wcId: number): number => guestInput.remaining(wcId);
-export const forgetUserInput = (wcId: number): void => guestInput.forget(wcId);
+
+export function recordUserInput(wcId: number): void {
+  const wasActive = guestInput.remaining(wcId) > 0;
+  guestInput.record(wcId);
+  const old = expiryTimers.get(wcId);
+  if (old) clearTimeout(old);
+  expiryTimers.set(wcId, setTimeout(() => {
+    expiryTimers.delete(wcId);
+    if (guestInput.remaining(wcId) === 0) {
+      guestInput.forget(wcId);
+      listener?.(wcId, 'expired'); // 3 秒后把状态行还给先前的 running 详情
+    }
+  }, USER_INPUT_QUIET_MS + 1));
+  listener?.(wcId, wasActive ? 'renewed' : 'first');
+}
+
+export function forgetUserInput(wcId: number): void {
+  const old = expiryTimers.get(wcId);
+  if (old) clearTimeout(old);
+  expiryTimers.delete(wcId);
+  guestInput.forget(wcId);
+  listener?.(wcId, 'forgotten');
+}

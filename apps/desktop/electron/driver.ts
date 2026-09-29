@@ -1,6 +1,6 @@
 import { webContents } from 'electron';
 import { viewHostRegistry } from './view-host';
-import { userInputRemainingMs } from './user-input';
+import { setUserInputListener, userInputRemainingMs } from './user-input';
 import { classifyField, FIELD_REASON_CN, isPaymentConfirmAction, type FieldDescriptor } from './fieldClass';
 // ADR-0003 · 浏览器深度 第一片:wait-for / watch 原语的纯 core(不 import electron,可单测);
 // 这里只做「wcId → 真实 debugger」的薄包装。
@@ -367,12 +367,13 @@ function pausedOf(wcId: number): boolean {
   return tasks.get(wcId)?.paused ?? false;
 }
 
-/** 某个 target 的状态快照 */
+/** 某个 target 的状态快照：临时让路只覆盖 detail，不伪造手动暂停相位。 */
 function snapshotOf(wcId: number): TaskState {
   const t = tasks.get(wcId);
   return {
     phase: t?.phase ?? 'idle',
-    detail: t?.detail ?? IDLE_DETAIL,
+    detail: t?.phase === 'running' && !t.paused && userInputRemainingMs(wcId) > 0
+      ? '你在操作，我停下了' : t?.detail ?? IDLE_DETAIL,
     step: t?.step ?? 0,
     blocked: t?.paused ?? false,
     wcId,
@@ -445,6 +446,19 @@ export function setTaskListener(fn: ((s: TaskState) => void) | null): void {
 function broadcast(): void {
   stateListener?.(aggregateState());
 }
+
+// P1：由唯一 guest 计时器告知首次键鼠输入与安静期到期；只镜像既有 TaskState。
+// 持续移动刷新 3 秒窗口但不每个像素都推广播；手动暂停位永不被临时让路清掉。
+setUserInputListener((wcId, change) => {
+  const t = tasks.get(wcId);
+  if (change === 'first' && t?.phase === 'running' && !t.paused) {
+    t.seq = ++seqCounter;
+    lastTouchedWcId = wcId;
+    broadcast();
+  } else if ((change === 'expired' || change === 'forgotten') && t?.phase === 'running') {
+    broadcast();
+  }
+});
 
 /**
  * 读状态。

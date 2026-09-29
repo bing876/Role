@@ -31,6 +31,23 @@ await check('旧手动暂停门紧邻新闸，锚定 if (，不能用 false && �
 });
 
 let now = 1_000_000;
+// 与生产 guestInput 的 setTimeout 共用假单调钟：状态恢复不是直接手工删时间戳。
+const timers = new Map<number, { at: number; fn: () => void }>();
+let timerSeq = 0;
+const fakeSetTimeout = (fn: () => void, ms: number): number => {
+  const id = ++timerSeq;
+  timers.set(id, { at: now + ms, fn });
+  return id;
+};
+const advance = (ms: number): void => {
+  now += ms;
+  for (;;) {
+    const due = [...timers].filter(([, timer]) => timer.at <= now).sort((a, b) => a[1].at - b[1].at)[0];
+    if (!due) break;
+    timers.delete(due[0]);
+    due[1].fn();
+  }
+};
 const page = { url: 'https://example.test/', title: '当前页', buttons: [], fields: [], text: '当前页' };
 const commands: Array<{ method: string; expression?: string }> = [];
 const guests = new Map<number, object>();
@@ -104,12 +121,7 @@ const sandbox: Record<string, unknown> = {
   module: moduleRef, exports: moduleRef.exports, require: createRequire(import.meta.url),
   process, console, Buffer, URL, AbortController, Date,
   performance: { now: () => now },
-  setTimeout: (fn: () => void, ms: number) => {
-    const timer = setTimeout(fn, ms);
-    timer.unref(); // driver 的 CDP 8s 超时兜底不让定向验收空等
-    return timer;
-  },
-  clearTimeout,
+  setTimeout: fakeSetTimeout, clearTimeout: (id: number) => { timers.delete(id); },
   __p1WebContents: { fromId: (id: number) => guests.get(id) ?? null },
   __p1Registry: viewHostRegistry,
 };
@@ -172,6 +184,30 @@ await check('已发清空但未写字：回执如实说可能部分执行，不�
   assert.equal(result.outcome, 'blocked');
   assert.match(result.detail ?? '', /输入框可能已聚焦\/清空.*文字尚未派发/);
   assert.equal(commands.filter((x) => x.method.startsWith('Input.')).length, beforeInput);
+  driver.forgetUserInput(101);
+});
+
+await check('真实状态广播：本页首次输入立刻显示原文，3 秒后还原；手动暂停优先/别页不串', () => {
+  const states: Array<{ wcId?: number; detail: string; phase: string; blocked: boolean }> = [];
+  driver.setTaskListener((state) => {
+    states.push({ wcId: state.wcId, detail: state.detail, phase: state.phase, blocked: state.blocked });
+  });
+  driver.takeoverRun(101, 'AI 在这页继续运行');
+  driver.recordUserInput(101);
+  assert.deepEqual(states.at(-1), { wcId: 101, detail: '你在操作，我停下了', phase: 'running', blocked: false });
+  assert.equal(driver.getTaskState(101).detail, '你在操作，我停下了');
+  advance(3_000);
+  assert.equal(driver.userInputRemainingMs(101), 0);
+  advance(1); // 定时器在 3001ms 推送恢复，而动作闸在 3000ms 精确放行
+  assert.deepEqual(states.at(-1), { wcId: 101, detail: 'AI 在这页继续运行', phase: 'running', blocked: false });
+  driver.recordUserInput(202);
+  assert.equal(driver.getTaskState(101).detail, 'AI 在这页继续运行', '别页状态不得污染当前页');
+  driver.forgetUserInput(202);
+  driver.setDrivingPaused(true, 101);
+  driver.recordUserInput(101);
+  assert.equal(driver.getTaskState(101).phase, 'paused');
+  assert.equal(driver.getTaskState(101).blocked, true);
+  assert.notEqual(driver.getTaskState(101).detail, '你在操作，我停下了', '临时让路不能假扮/解除手动暂停');
   driver.forgetUserInput(101);
 });
 
