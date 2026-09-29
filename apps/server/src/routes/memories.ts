@@ -27,6 +27,7 @@
  */
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { DONE_MAX, makeDoneLedger, markDone, sweepDoneLedger } from '../doneLedger';
 import type { Pool } from 'pg';
 import type { MemoryExtractResult, MemoryItem, MemoryListResult } from '@ai-workbench/shared';
 import type { ServerEnv } from '../env';
@@ -479,11 +480,24 @@ export function triggerTaskExtract(
 }
 
 /**
+ * #7 修复（2026-09-29）· 闲置扫描只回看这么久。
+ *
+ * 原状：每分钟那条 GROUP BY **不设时间上界**，把全部历史消息 join 一遍。
+ * 消息表只增不减 ⇒ 查询成本随上线时间线性增长，而它每分钟都跑。
+ *
+ * 取值依据：资格窗口是「最后一条消息在 15~60 分钟前」，所以只需要这 60 分钟内
+ * 的 last_at 准确。这里留 **6 倍余量**（6 小时）—— 漏掉一个本该整理的会话是
+ * **静默的行为变更**，比多扫几行严重得多；顺带容忍库与应用之间的时钟差。
+ */
+export const IDLE_SCAN_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/**
  * 闲置 15 分钟自动提取：每分钟扫一轮（进程内记“处理到哪个消息号”，同一切点不重抽）。
  * 记忆卫生：挂到此调度器旁，每 5 分钟扫一次超限（账号 30 / 智能体 20），喂模型合并同类，旧条改 merged 不删原文。
  */
 export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJS.Timeout {
-  const done = new Set<string>();
+  // #6 修复（2026-09-29）：超上限时**绝不整体清空**，改为逐条淘汰（见 doneLedger.ts）
+  const done = makeDoneLedger();
   let hygieneRunning = false;
   let lastHygieneAt = 0;
   const HYGIENE_INTERVAL_MS = 5 * 60 * 1000;
@@ -491,23 +505,49 @@ export function startIdleScheduler(deps: MemoryDeps, intervalMs = 60_000): NodeJ
   const timer = setInterval(() => {
     void (async () => {
       const { pool } = deps;
+      // #7 修复（2026-09-29）：给每分钟的扫描加**时间上界**。
+      //
+      // 原状这条 SQL 每个分钟都把**全部历史消息**join 一遍再分组。消息表只增不减，
+      // 于是这条查询的成本随上线时间**线性增长**，而且它每分钟都跑。
+      //
+      // 上界放在 **JOIN 条件**里而不是 WHERE 里：放在 WHERE 会把 LEFT JOIN
+      // 实质变成 INNER JOIN（语义没变——那些行本来就被下面的 `!row.last_id` 跳过，
+      // 但写成 JOIN 条件更诚实，读代码的人不用去推）。
+      //
+      // 为什么上界取 6 小时（远大于 60 分钟的资格窗口）：资格判定是
+      // `ago < 15min || ago > 60min → 跳过`，所以只需要 last_at 在 60 分钟内的
+      // 会话准确。**漏掉一个本该处理的会话是静默的行为变更，比多扫几行严重得多**，
+      // 所以这里故意留 6 倍余量（也顺带容忍库与应用的时钟差）。
+      // 先取 now，再算扫描下界（顺序不能反：scanFrom 依赖 now）
+      const now = Date.now();
+      const scanFrom = new Date(now - IDLE_SCAN_WINDOW_MS);
       const r = await pool.query<{ conv_id: string; user_id: string; agent_id: string | null; last_id: string | null; last_at: string | null }>(
         `SELECT c.id AS conv_id, p.user_id, c.agent_id, MAX(m.id) AS last_id, MAX(m.created_at) AS last_at
            FROM conversations c
            JOIN projects p ON p.id = c.project_id
-           LEFT JOIN messages m ON m.conversation_id = c.id
+           LEFT JOIN messages m ON m.conversation_id = c.id AND m.created_at >= $1
           WHERE COALESCE(c.keepalive, false) = false
           GROUP BY c.id, p.user_id, c.agent_id`,
+        [scanFrom],
       );
-      const now = Date.now();
       for (const row of r.rows) {
         if (!row.last_id || !row.last_at) continue;
         const ago = now - new Date(row.last_at).getTime();
         if (ago < 15 * 60_000 || ago > 60 * 60_000) continue;
         const key = `c${row.conv_id}:${row.last_id}`;
-        if (done.has(key)) continue;
-        done.add(key);
-        if (done.size > 800) done.clear();
+        if (!markDone(done, key, now)) continue;
+        // #6：逐条淘汰，不整体清空。正常情况下这里淘汰的都是**已过期**的切点
+        // （早就过了 60 分钟窗口、永远扫不到），所以不会把还热着的切点抹掉。
+        const sweep = sweepDoneLedger(done, now);
+        // 只在**容量兜底**真的被走到时才打日志：expired 是常态（每分钟都有），
+        // 拿它打日志就是刷屏；capped 一出现说明"热切点数顶到上限"这个假设被打破了，
+        // 那是要留痕的信号（可能要调 DONE_MAX，或查为什么有这么多并发会话）。
+        if (sweep.capped > 0) {
+          console.log(
+            `[memories] 已处理切点账本顶到上限：按最旧淘汰 ${sweep.capped} 条（现存 ${done.size} / 上限 ${DONE_MAX}）` +
+              ' —— 若频繁出现，考虑调大 DONE_MAX',
+          );
+        }
         const msgs = await pool.query<{ role: string; content_enc: string }>(
           'SELECT role, content_enc FROM messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT 40',
           [Number(row.conv_id)],

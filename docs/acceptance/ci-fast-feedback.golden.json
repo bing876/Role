@@ -1,0 +1,15 @@
+{
+  "_comment": "CI 快反馈 job（typecheck）必须跑的步骤 + 全链 job 自称步数。由 scripts/verify/p2-idle-scan-bounded.mts 的 ⑦ 守着。为什么要有它：2026-09-29 的 6bb7502 漏提交了 .github/workflows/verify.yml（沙箱重置打回旧版，恢复时只捞了源码），推送成功、CI 全绿，但新测试一步都没进 CI，本地完全看不出来。要故意加/减步骤：改完跑 npx tsx scripts/verify/p2-idle-scan-bounded.mts -- --update-ci-golden",
+  "fastFeedbackSteps": [
+    "verify:typecheck",
+    "verify:security-guards",
+    "verify:csp-conformance",
+    "verify:r7-page-state",
+    "verify:shared-dist",
+    "verify:p1-2-outcome",
+    "verify:p1-done-hijack",
+    "verify:p2-idle-scan",
+    "verify:idx-messages"
+  ],
+  "chainStepCount": 49
+}

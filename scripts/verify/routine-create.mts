@@ -193,8 +193,24 @@ async function main(): Promise<void> {
   });
   await check('not-a-routine 不劫持:只有 rc.kind !== "not-a-routine" 才 hijack', () => {
     const block = chatSrc.slice(chatSrc.indexOf('批次 L 片 2'));
-    assert.ok(block.includes('rc.kind !== \'not-a-routine\''));
-    assert.ok(block.indexOf('rc.kind !== \'not-a-routine\'') < block.indexOf('reply.hijack()'));
+    const guardAt = block.indexOf('rc.kind !== \'not-a-routine\'');
+    assert.ok(guardAt >= 0, '本 block 里找不到 not-a-routine 守卫');
+    /**
+     * 2026-09-29 修：这里原先只搜 `reply.hijack()`，而劫持动作已收口成
+     * 带标志的 helper `hijackOnce()`（chat.ts 的「怀疑 4」修复：hijack 之后
+     * 绝不碰 reply）。字面搜索于是**假红**过一次 —— 整条验证链在
+     * verify:routines-lifecycle 处中断，而代码其实是对的。
+     *
+     * 改成认「劫持调用点」：`hijackOnce()` 或 `reply.hijack()` 都算，
+     * 取本 block 内**第一个**。这样以后再改名也不会假红。
+     * （不会误匹配 helper 定义：定义在 handler 开头，早于本 block 的起点。）
+     */
+    const m = block.match(/hijackOnce\(\)|reply\.hijack\(\)/);
+    assert.ok(m, '本 block 内找不到劫持调用（hijackOnce() 或 reply.hijack()）');
+    assert.ok(
+      guardAt < (m.index ?? -1),
+      `守卫必须出现在劫持之前：guard@${guardAt} hijack@${m.index}`,
+    );
   });
 
   await pool.end().catch(() => undefined);

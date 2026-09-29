@@ -51,10 +51,13 @@ jobs:
       - run: npm run -s verify:r7-page-state
       - run: npm run -s verify:shared-dist
       - run: npm run -s verify:p1-2-outcome
+      - run: npm run -s verify:p1-done-hijack
+      - run: npm run -s verify:p2-idle-scan
+      - run: npm run -s verify:idx-messages
 
   # ---- 主链：46 步全跑 ----
   verify:
-    name: Verify chain (46 steps)
+    name: Verify chain (49 steps)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
