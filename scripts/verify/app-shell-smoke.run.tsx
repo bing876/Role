@@ -1160,14 +1160,15 @@ await check('⑭-2 任务表面 + 侧栏家族在场;死代码（DOM 零引用�
   assert.ok(/\.taskState\s*\{/.test(surf) && /\.driveState\s*\{/.test(surf) && /\.loopGone\s*\{/.test(surf), '10-surface.css 缺任务表面规则');
   assert.ok(/\.taskResult \.buttons-row\s*\{/.test(surf), '必查后代选择器 .taskResult .buttons-row 没随组件搬走');
   const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
-  assert.ok(/\.projectBox\s*\{/.test(side) && /\.memList\s*\{/.test(side) && /\.knowledgePanel\s*\{/.test(side) && /\.contact--on\s*\{/.test(side), '06-sidebar.css 缺左栏家族规则');
+  assert.ok(/\.workspaceError\s*\{/.test(side) && /\.memList\s*\{/.test(side) && /\.knowledgePanel\s*\{/.test(side), '06-sidebar.css 缺工作区错误 / 记忆 / 知识库规则');
+  assert.ok(!/\.projectBox(?:__|\b)/.test(side), '项目入口死样式复活了');
   // M9'：文件级红线（死代码 M7' 已删,承载它们的 styles.css M9' 已删）
   const styles = legacyStyles();
   assert.ok(styles === null, 'styles.css 又出现了（M9\' 已删;.driveBar/.memCard 等死代码不许回来）');
 });
-await check('⑭-3 F2-③ 两槽在场:成功槽朴素 + 失败槽红;演示行只藏不删（DOM 还在）', () => {
+await check('⑭-3 默认工作区失败有可见错误槽；演示行只藏不删（DOM 还在）', () => {
   const side = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '06-sidebar.css'), 'utf8');
-  assert.ok(/\.projectBox__note\s*\{/.test(side) && /\.projectBox__note--err\s*\{/.test(side), 'F2-③ 的两套样式没进 06-sidebar.css');
+  assert.ok(/\.workspaceError\s*\{[^}]*color\s*:/.test(side), '默认工作区错误样式没进 06-sidebar.css');
   const surf = readFileSync(join(REPO, 'apps', 'desktop', 'src', 'design', '10-surface.css'), 'utf8');
   assert.ok(/\.demoOnly\s*\{[^}]*display\s*:\s*none/.test(surf), '.demoOnly（演示行隐藏）规则丢了');
   // 演示行 DOM 保留（只藏不删,桥自检照跑）

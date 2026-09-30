@@ -64,20 +64,18 @@ export function useKnowledge({ sessionRef, curProjectRef }: UseKnowledgeOptions)
 
   // ---- 第 11 步：资料上传/列表。文件直接由当前渲染进程 POST 到本机服务端，
   // 不经过 preload，不开新窗口；multipart 的 Content-Type 必须让浏览器自己带 boundary。 ----
-  /**
-   * 子阶段 2-B：资料列表**按项目**拉（`?projectId=`）。
-   * 不传就走服务端的「当前使用中的项目」——两条路都以服务端为准，前端不自己过滤。
-   */
+  /** ADR-0012：只按已激活的工作区 ID 拉资料；不再依赖服务端的旧「当前项目」兜底。 */
   const load = async (projectId?: number | null) => {
     const sess = sessionRef.current;
     if (!sess) return;
     const pid = projectId === undefined ? curProjectRef.current : projectId;
+    if (pid === null) { setDocuments([]); return; }
     try {
-      const r = await authFetchJson<KnowledgeListResult>(pid === null ? '/knowledge' : `/knowledge?projectId=${pid}`, {
+      const r = await authFetchJson<KnowledgeListResult>(`/knowledge?projectId=${pid}`, {
         headers: { authorization: `Bearer ${sess.token}` },
       });
-      // 切号期间晚到的 A 号响应不能覆盖 B 号列表。
-      if (sessionRef.current?.token !== sess.token) return;
+      // 切号或工作区失效期间的晚到响应不能覆盖当前资料。
+      if (sessionRef.current?.token !== sess.token || curProjectRef.current !== pid) return;
       setDocuments(r.documents);
     } catch {
       /* 资料列表属于辅助入口，后端暂不可达时不打扰已登录界面 */
@@ -87,6 +85,11 @@ export function useKnowledge({ sessionRef, curProjectRef }: UseKnowledgeOptions)
   const upload = async (file: File) => {
     const sess = sessionRef.current;
     if (!sess || uploading) return;
+    const pid = curProjectRef.current;
+    if (pid === null) {
+      setNote('默认工作区未就绪，资料没有上传。请重新登录后重试。');
+      return;
+    }
     const supported = /\.(txt|md|pdf)$/i.test(file.name);
     if (!supported) {
       setNote('只支持 .txt、.md、.pdf 文件。');
@@ -100,6 +103,8 @@ export function useKnowledge({ sessionRef, curProjectRef }: UseKnowledgeOptions)
     setUploading(true);
     try {
       const form = new FormData();
+      // Fastify 按字段顺序读 multipart：先写经本地确认的工作区 ID，再写文件。
+      form.append('projectId', String(pid));
       form.append('file', file, file.name);
       let res: Response;
       try {
@@ -114,12 +119,15 @@ export function useKnowledge({ sessionRef, curProjectRef }: UseKnowledgeOptions)
       const data = (await res.json().catch(() => ({}))) as KnowledgeUploadResult & { error?: string };
       if (!res.ok) throw new Error(dbHint(data.error) ?? `HTTP ${res.status}`);
       // 若用户在上传过程中退出/切换账号，不把旧账号的成功提示带到新账号界面。
-      if (sessionRef.current?.token !== sess.token) return;
+      if (sessionRef.current?.token !== sess.token || curProjectRef.current !== pid) return;
       const doc = data.document;
+      if (doc.projectId !== undefined && doc.projectId !== pid) throw new Error('服务端返回了其他工作区的资料；请检查归属');
       setNote(`《${doc.filename}》已入库，共 ${doc.chunkCount} 个片段。`);
-      await load(curProjectRef.current);
+      await load(pid);
     } catch (e) {
-      setNote(`上传没有入库：${(e as Error).message}`);
+      if (sessionRef.current?.token === sess.token && curProjectRef.current === pid) {
+        setNote(`上传没有入库：${(e as Error).message}`);
+      }
     } finally {
       setUploading(false);
     }

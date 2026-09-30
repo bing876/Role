@@ -184,44 +184,7 @@
 .splitter:hover::after,
 .splitter:focus-visible::after { background: rgba(255, 255, 255, 0.18); }
 
-/* ============ 批次 M-7'：左栏其余块（旧 styles.css 迁入，值原样） ============
-   项目行 / 保活开关 / 错误提示 / 账号 / 记忆 / 知识库 / 页脚。
-   ★ F2-③（挂账自批次 M-2'，用户拍板阶段 2 做）：projectNote 拆成
-   **成功/失败两个槽 + 两套样式** —— 成功 .projectBox__note（朴素，原样），
-   失败 .projectBox__note--err（红）。失败文案仍保留 ⚠ 字形（视觉双信号），
-   但程序判据从"文案前缀嗅探"改为"槽位/类名"。 */
-
-/* 项目行：复用 .contact 系（左栏一行一个项目，行是 <button>） */
-.contact {
-  width: 100%;
-  border: 1px solid transparent;
-  background: transparent;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px;
-  border-radius: 8px;
-  position: relative;
-}
-
-.contact:hover {
-  background: #f6f7f9;
-}
-
-/* 当前使用中的项目行 */
-.contact--on {
-  background: #eef2ff;
-  border-color: #c7d2fe;
-}
-
-.contact__name {
-  font-weight: 700;
-}
+/* 左栏：智能体/保活/工作区失败提示；旧项目管理入口样式已撤下。 */
 
 /* 智能体列表的错误提示行 */
 .agentList__note {
@@ -263,49 +226,16 @@
   width: 100%;
 }
 
-/* 子阶段 2-B：最简项目入口（左栏顶部） */
-.projectBox {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  flex: 0 0 auto;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
-}
-.projectBox__list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  max-height: 30vh;
-  overflow-y: auto;
-}
-.projectBox__row {
-  padding: 3px 6px;
-}
-/* B4 项目下拉：原生 <select>（取代「按钮 + 展开列表 + 行」，降噪） */
-.projectBox__select {
-  width: 100%;
-  padding: 4px 6px;
-  font-size: inherit;
-  border-radius: 6px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.06);
-  color: inherit;
-}
-/* F2-③：成功槽（朴素） */
-.projectBox__note {
-  color: #b45309;
-  line-height: 1.45;
-  word-break: break-word;
-}
-/* F2-③：失败槽（红 —— 一眼看出坏了，不必读句子） */
-.projectBox__note--err {
+/* 默认工作区加载/激活失败：可见报错，不静默进入旧项目。 */
+.workspaceError {
   color: #b91c1c;
   background: #fef2f2;
   border: 1px solid #fecaca;
   border-radius: 6px;
   padding: 4px 6px;
-  margin-top: 4px;
+  margin: 4px 0 8px;
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 /* 第 5 步（重做版）：左栏账号小块 */

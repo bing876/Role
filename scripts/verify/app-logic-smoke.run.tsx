@@ -204,7 +204,7 @@ const bridge = new Proxy(
 // ---------------------------------------------------------------------------
 // fetch 桩 —— 记录**每一条真实请求**（方法 + 路径），并按路径回数据
 // ---------------------------------------------------------------------------
-type Req = { method: string; path: string; body?: unknown };
+type Req = { method: string; path: string; url: string; body?: unknown };
 const requests: Req[] = [];
 /** 知识库的假数据（两行，用来验列表/删除） */
 const DOCS = [
@@ -247,6 +247,8 @@ let hasPassword = false;
 let slowAuthMe = false;
 /** ★ F2：把 `activate` 打成失败（验"失败提示带 ⚠ 前缀"这条），默认关着 */
 let activateFails = false;
+let defaultMissing = false;
+let legacyProposalHistory = false;
 /** 任务快照（默认"完成了但没读" → 红点亮着） */
 let TASK: { id: number; status: string; goal: string; steps: string[]; unread: boolean; summary?: string; docTitle?: string; unreadHint?: string; outline?: string[] } | null = {
   id: 55, status: 'done', goal: '整理季度数据', steps: ['读表', '算数'], unread: true,
@@ -282,7 +284,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   const url = raw.replace(/^https?:\/\/[^/]+/, '');
   const path = url.split('?')[0];
   const method = (init?.method ?? 'GET').toUpperCase();
-  requests.push({ method, path, body: init?.body });
+  requests.push({ method, path, url, body: init?.body });
 
   /**
    * ★ F5：**同一个 App 实例里**重新登录（走真登录表单）。
@@ -317,7 +319,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ ok: true, message: '密码已设置，下次可以用 XYZ + 密码登录。' });
   }
   if (path === '/projects' && method === 'GET') {
-    return json({ projects: [PROJECT, PROJECT_B].map((p) => ({ ...p, isCurrent: p.id === currentProjectId })), currentProjectId });
+    return json({ projects: (defaultMissing ? [PROJECT_B] : [PROJECT, PROJECT_B]).map((p) => ({ ...p, isCurrent: p.id === currentProjectId })), currentProjectId });
   }
   if (path === '/projects' && method === 'POST') {
     const name = (JSON.parse(String(init?.body ?? '{}')) as { name?: string }).name ?? '';
@@ -389,6 +391,7 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
     return json({ conversationId: 501, messages: [
       { id: 900, role: 'assistant', text: '九七号的历史' },
       { id: 903, role: 'assistant', text: '【协同·派单】小助 → 小美：盯一下店铺数据，半小时后回话（ID:12）' },
+      ...(legacyProposalHistory ? [{ id: 904, role: 'assistant', text: '我是项目管家，建议先建调研助手和整理助手；建一个调研助手就能开工。' }] : []),
     ] });
   }
   if (path === '/memory/user') return json({ items: USER_MEM });
@@ -405,6 +408,11 @@ globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promis
   if (path === '/knowledge') {
     const pid = Number(new URLSearchParams(url.split('?')[1] ?? '').get('projectId') ?? currentProjectId);
     return json({ documents: pid === 7 ? DOCS : [] });
+  }
+  if (path === '/knowledge/upload' && method === 'POST') {
+    const form = init?.body as FormData;
+    const pid = Number(form.get('projectId'));
+    return json({ document: { ...DOCS[0], projectId: pid, filename: '验收.md' } });
   }
   if (path === '/agent/task/current') return json({ task: null });
   if (path === '/settings') return json({});
@@ -661,11 +669,11 @@ await act(async () => {
 });
 await flush();
 
-await check('C4：侧栏只剩只读入口（用户 2 / 项目 1）；待确认以确认卡出现在**对话流**里（无抽屉式「待确认（N）」）', async () => {
+await check('C4：侧栏只剩只读入口（用户 2 / 工作区 1）；待确认以确认卡出现在**对话流**里（无抽屉式「待确认（N）」）', async () => {
   await waitFor('记忆入口出现', () => doc.body.textContent!.includes('用户记忆（2）'));
-  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|项目记忆/.test(t));
+  const labels = qa('aside.sidebar .btn').map((b) => b.textContent ?? '').filter((t) => /用户记忆|工作区记忆/.test(t));
   assert.ok(labels.some((t) => t.includes('用户记忆（2）')), `用户记忆条数不对：${labels.join(' | ')}`);
-  assert.ok(labels.some((t) => t.includes('项目记忆（1）')), `项目记忆条数不对：${labels.join(' | ')}`);
+  assert.ok(labels.some((t) => t.includes('工作区记忆（1）')), `工作区记忆条数不对：${labels.join(' | ')}`);
   // C4 红线：侧栏不许再有「待确认」抽屉式入口
   assert.ok(!qa('aside.sidebar .btn').some((b) => (b.textContent ?? '').includes('待确认')),
     '侧栏又出现「待确认」面板入口（C4：确认在对话流里,不弹抽屉）');
@@ -873,130 +881,101 @@ await check('useBrowserGlue：切智能体时视图跟着切（有卡进 embed /
 
 
 // ---------------------------------------------------------------------------
-// ⑤ features/projects（片 4）—— 列表 / 切换 / 新建，以及「切项目绝不碰浏览器」
+// ⑤ ADR-0012：只进入默认工作区，项目 UI 去掉；旧数据仍留在服务端。
 // ---------------------------------------------------------------------------
 log('');
-log('--- ⑤ 项目：列表 / 切换（名单与资料一起换）/ 新建 ---');
+log('--- ⑤ 默认单工作区：先激活再加载；项目入口不可见 ---');
 
-/** 项目面板的展开按钮（文案里带「项目」二字） */
-const projectToggle = (): Element | null => qa('aside.sidebar .btn').find((b) => (b.textContent ?? '').includes('项目')) ?? null;
-
-await check('★ B4：项目切换 = 原生 <select>，列出两个项目、当前那个标「使用中」', async () => {
-  const sel = q('.projectBox__select') as HTMLSelectElement | null;
-  assert.ok(sel, '项目下拉（<select>）不见了（B4：项目切换应为下拉）');
-  // ★ R1 门禁：DOM 元素一律不进断言库（失败时 jsdom 环形图会 OOM）—— 用 sameNode 比「是不是 null」
-  sameNode(q('.projectBox__row'), null, '旧的「项目行」按钮还在（B4 该换成 <select> 了）');
-  const opts = qa('.projectBox__select option');
-  assert.equal(opts.length, 2, `项目选项数不对：${opts.length}`);
-  const on = opts.filter((o) => (o.textContent ?? '').includes('使用中'));
-  assert.equal(on.length, 1, `「使用中」的项目应当只有一个：${on.length}`);
-  assert.match(on[0].textContent ?? '', /默认项目/, `使用中的不是 7 号：${on[0].textContent}`);
-  assert.equal(sel.value, '7', `下拉选中值应是当前项目（7 号）：${sel.value}`);
+await check('默认工作区首进直接见小助；没有项目新建/切换/团队快捷入口', async () => {
+  await waitFor('默认工作区小助出现', () => !!q('.contact-item[data-agent-id="97"]'));
+  assert.ok(!q('.projectBox') && !q('.projectBox__select') && !q('.projectBox__create'), '项目入口复活了');
+  assert.ok(!qa('aside button').some((b) => /新建项目|切换项目/.test(b.textContent ?? '')), '项目按钮复活了');
+  assert.ok(!q('.colleagueProposal__quickBuild') && !q('.colleagueProposal__actions'), '团队快捷创建复活了');
+  assert.equal(requests.filter((r) => r.path === '/projects' && r.method === 'POST').length, 0, '首进竟建了新项目');
 });
 
-/** 选下拉里的某个项目（React 受控 <select>：走原生 value setter + change 事件） */
-const selectProject = async (id: string): Promise<void> => {
-  const sel = q('.projectBox__select') as HTMLSelectElement;
-  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value')!.set!;
-  await act(async () => {
-    setter.call(sel, id);
-    sel.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
-  });
-};
-
-await check('下拉选 8 号项目 → POST /projects/8/activate（body {}），随后按新项目重拉名单与资料', async () => {
-  const before = requests.length;
-  await selectProject('8');
-  await waitFor('发出 activate', () => requests.some((r) => r.path === '/projects/8/activate'));
-  await flush(4);
-  const act = requests.filter((r) => r.path === '/projects/8/activate').pop()!;
-  assert.equal(act.method, 'POST', `方法不对：${act.method}`);
-  assert.equal(String(act.body), '{}', `activate 的 body 必须是空对象：${String(act.body)}`);
-  // 名单与资料都按 8 号项目重拉
-  assert.ok(requests.slice(before).some((r) => r.path === '/agents' && r.path === '/agents'), '没重拉名单');
-  assert.ok(requests.some((r) => r.path === '/agents'), '没拉过 /agents');
-  assert.match(q('aside.sidebar .agentList')?.textContent ?? '', /卡布/, '侧栏名单没换成 8 号项目的人');
-  const memBtns = qa('aside.sidebar .btn').map((b) => b.textContent ?? '');
-  assert.ok(memBtns.some((t) => t.includes('项目记忆（0）')), `切项目后项目记忆应当清空：${memBtns.filter((t) => t.includes('项目记忆')).join('|')}`);
+await check('不切项目时，浏览器层与页宿主仍是同一个节点', () => {
+  sameNode(q('.browserLayer'), heldLayer, '浏览器层无故被重建');
+  sameNode(q('.browserPanel__view'), heldWebview, '页宿主无故被重建');
 });
-
-await check('★ 切项目绝不碰浏览器：那一层与那一个页宿主还在，且是同一个节点', async () => {
-  const layer = q('.browserLayer');
-  const wv = q('.browserPanel__view');
-  assert.ok(layer, '切项目把浏览器层弄没了（第 20 步的规矩：所有页一直挂着）');
-  assert.ok(wv, '切项目把页宿主卸载了（这条是硬规则）');
-  // 节点身份：还是**切换前那个元素对象**（不是"又渲染出一个一样的"）
-  sameNode(layer, heldLayer, '浏览器层不是原来那个节点（被重建了）');
-  sameNode(wv, heldWebview, '页宿主不是原来那个节点（被重建了）');
-});
-
-await check('新建项目 → POST /projects（body 带名字）→ 进入新项目（★ F1 已修：确认文案要留得住）', async () => {
-  const input = q('.projectBox__name');
-  assert.ok(input, '新项目名字输入框不见了');
-  const setter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')!.set!;
-  await act(async () => {
-    setter.call(input, '我的新项目');
-    input!.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-  });
-  await flush(2);
-  click(q('.projectBox__create'), '新建项目');
-  await waitFor('发出 POST /projects', () => requests.some((r) => r.path === '/projects' && r.method === 'POST'));
-  await flush(4);
-  const req = requests.filter((r) => r.path === '/projects' && r.method === 'POST').pop()!;
-  const body = JSON.parse(String(req.body)) as { name?: string };
-  assert.equal(body.name, '我的新项目', `建项目的 body 不对：${JSON.stringify(body)}`);
-  assert.match(q('aside.sidebar .agentList')?.textContent ?? '', /小鸡/, '没有进到新项目（名单还是旧的）');
-  /**
-   * ★ F1（2026-09-25 修；用户 2026-09-24 拍板「片 7 之后单独小提交」）：
-   *   原来 `createProject` 里那句「项目「X」建好了…」紧接着被 `loadProjects()` 末尾的
-   *   `setProjectNote('')` 清掉 —— 界面上等于没有确认。
-   *   修法是让**刷新列表不动提示文案**（清空只发生在每个动作开始时与登出时）。
-   *
-   *   这条断言原来钉的是"note 现在是空的"（把既有行为钉住，等用户拍）；
-   *   现在**反过来**：成功文案必须留在屏幕上。反证 P4 把清空那句加回去 → 这条立刻红。
-   */
-  const note = q('.projectBox__note:not(.projectBox__note--err)');
-  assert.ok(note, '新建项目成功后没有确认文案（提示又被刷新清掉了 —— F1 复发）');
-  assert.match(note?.textContent ?? '', /建好了/, `确认文案不对：${note?.textContent}`);
-  /** ★ F2：成功是**朴素**的（失败才走红色 err 槽）—— 成功后还挂个 ⚠ 会让用户以为坏了 */
-  assert.ok(!/⚠/.test(note?.textContent ?? ''), `成功文案不该带 ⚠：${note?.textContent}`);
-  assert.ok(q('.projectBox__note--err') === null, '成功时错误槽不该亮（F2-③ 两槽串了）');
-});
-
-/**
- * ★ F2-③（2026-09-25 批次 M-7' 升级方案 ③）：失败与成功**各用一个槽** ——
- *   失败写 `projectErr`，渲染成 `.projectBox__note--err` 红色槽（一眼看出坏了，
- *   不用读句子）；成功槽（.projectBox__note 朴素）必须同时保持干净。
- *   这一条走的是**真实的失败路径**：服务端回 400 → `authFetchJson` 抛错 → catch 里写提示。
- *   反证 P5 把失败写回成功槽（两槽合一）→ 这条立刻红。
- */
-await check('★ F2-③：切换项目失败时，失败进专门的红色槽（成功槽保持干净）', async () => {
-  activateFails = true;
-  const before = requestsTo('/projects/7/activate').length;
-  await selectProject('7');
-  await waitFor('发出 activate（失败那一次）', () => requestsTo('/projects/7/activate').length > before);
-  await flush(4);
-  activateFails = false;
-  const errNote = q('.projectBox__note--err');
-  assert.ok(errNote, '切换失败后错误槽是空的（失败被写去了成功槽？F2-③ 两槽合一回归）');
-  assert.match(errNote?.textContent ?? '', /^\s*⚠/, `失败提示没有 ⚠ 字形（视觉信号丢了）：「${errNote?.textContent}」`);
-  assert.match(errNote?.textContent ?? '', /切换项目没成/, `失败提示文案不对：${errNote?.textContent}`);
-  assert.match(errNote?.textContent ?? '', /项目不存在或无权访问/, `没把服务端那句话带给用户：${errNote?.textContent}`);
-  const okNote = q('.projectBox__note:not(.projectBox__note--err)');
-  assert.ok(okNote === null || (okNote?.textContent ?? '').trim() === '', `失败文案串进了成功槽：「${okNote?.textContent}」`);
-  /**
-   * 而且**没进**那个项目（失败就是没切）：侧栏名单还是新项目里的「小鸡」。
-   * （不拿 `.contact--on` 判：桩里 `GET /projects` 只回 7/8 两条，新建出来的 9 号
-   *   不在列表里，所以"哪一行标使用中"在桩里本来就不准 —— 名单才是干净的判据。）
-   */
-  assert.match(
-    q('aside.sidebar .agentList')?.textContent ?? '',
-    /小鸡/,
-    '切换失败却把名单换掉了（失败也被当成功用了）',
-  );
-});
-
 await act(async () => rootGlue.unmount());
+
+await check('历史搭团队消息仍作为普通文字可读，不生成快捷建人按钮', async () => {
+  legacyProposalHistory = true;
+  const instance = await mountApp(true);
+  try {
+    await waitFor('旧消息可见', () => (q('.chat')?.textContent ?? '').includes('建议先建调研助手'));
+    assert.ok(!q('.colleagueProposal__quickBuild') && !q('.colleagueProposal__actions'), '历史提议又生成了团队快捷按钮');
+    assert.equal((q('.chat')?.textContent ?? '').includes('建议先建调研助手'), true, '历史文字被删了');
+  } finally {
+    await act(async () => instance.unmount());
+    legacyProposalHistory = false;
+  }
+});
+
+await check('旧 current 指向 8：先 POST /projects/7/activate，才按 7 拉智能体、资料与任务', async () => {
+  currentProjectId = 8;
+  const before = requests.length;
+  const instance = await mountApp(true);
+  try {
+    const flow = requests.slice(before);
+    const actIdx = flow.findIndex((r) => r.path === '/projects/7/activate' && r.method === 'POST');
+    assert.ok(actIdx >= 0, '没有发出 activate 默认工作区');
+    await waitFor('默认工作区的小助出现', () => !!q('.contact-item[data-agent-id="97"]'));
+    assert.equal(String(flow[actIdx].body), '{}', 'activate 的 body 不是空对象');
+    for (const dest of ['/agents', '/knowledge', '/agent/task/current']) {
+      const idx = flow.findIndex((r) => r.path === dest);
+      assert.ok(idx > actIdx, `${dest} 在默认工作区激活前发出`);
+      if (dest !== '/agent/task/current') assert.equal(new URLSearchParams(flow[idx].url.split('?')[1]).get('projectId'), '7', `${dest} 查的不是默认工作区`);
+    }
+    assert.ok(!flow.some((r) => r.url.includes('projectId=8')), '读到了旧项目的资料或智能体');
+    assert.ok(!q('.contact-item[data-agent-id="98"]'), '旧项目智能体冒充默认工作区成员');
+    assert.ok(!q('.projectBox'), '旧项目入口复活了');
+  } finally {
+    await act(async () => instance.unmount());
+    currentProjectId = 7;
+  }
+});
+
+await check('默认工作区激活失败：显示错误，不加载旧名单/资料/任务，不允许上传', async () => {
+  currentProjectId = 8;
+  activateFails = true;
+  const before = requests.length;
+  const instance = await mountApp(true);
+  try {
+    await waitFor('激活失败可见', () => !!q('.workspaceError'));
+    const flow = requests.slice(before);
+    assert.ok(flow.some((r) => r.path === '/projects/7/activate'), '没有尝试 activate 默认工作区');
+    assert.match(q('.workspaceError')?.textContent ?? '', /默认工作区未就绪.*项目不存在或无权访问/, '错误槽没有解释原因');
+    assert.ok(!flow.some((r) => ['/agents', '/knowledge', '/agent/task/current'].includes(r.path)), '激活失败却读取了旧项目');
+    assert.equal(qa('.contact-item').length, 0, '激活失败却显示了登录响应里的旧名单');
+    click(q('.knowledgePanel__toggle'), '知识库');
+    await flush(2);
+    assert.ok((q('.knowledgePanel__upload') as HTMLButtonElement)?.disabled, '激活失败后仍能点上传');
+  } finally {
+    await act(async () => instance.unmount());
+    activateFails = false;
+    currentProjectId = 7;
+  }
+});
+
+await check('缺默认行：不猜 8 号项目，不发 activate、不读旧项目，报可见错误', async () => {
+  currentProjectId = 8;
+  defaultMissing = true;
+  const before = requests.length;
+  const instance = await mountApp(true);
+  try {
+    await waitFor('缺默认行错误可见', () => !!q('.workspaceError'));
+    const flow = requests.slice(before);
+    assert.match(q('.workspaceError')?.textContent ?? '', /缺少默认工作区/, '缺默认行没有报错');
+    assert.ok(!flow.some((r) => /\/projects\/\d+\/activate/.test(r.path) || ['/agents', '/knowledge', '/agent/task/current'].includes(r.path)), '缺默认行仍然使用旧项目');
+    assert.equal(qa('.contact-item').length, 0, '缺默认行还显示智能体');
+  } finally {
+    await act(async () => instance.unmount());
+    defaultMissing = false;
+    currentProjectId = 7;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // ⑥ features/auth（片 5）—— 静默登录 / 改密码 / 登出
@@ -1343,6 +1322,40 @@ await check('A 号请求晚到时不许覆盖 B 号列表', async () => {
 });
 
 
+await check('上传归属：未激活时 hook 拒绝；已激活时 multipart 显式传默认 ID（即使服务端 current 被旧客户端切到 8）', async () => {
+  const sessionRef = { current: { token: 'tok-A' } };
+  const curProjectRef = { current: null as number | null };
+  let api: ReturnType<typeof useKnowledge> | null = null;
+  function Host() {
+    api = useKnowledge({ sessionRef: sessionRef as never, curProjectRef: curProjectRef as never });
+    return React.createElement('span', { id: 'uploadNote' }, api.note);
+  }
+  const host = doc.createElement('div');
+  doc.body.appendChild(host);
+  const hostRoot = createRoot(host);
+  await act(async () => hostRoot.render(React.createElement(Host)));
+  const file = new dom.window.File(['有内容的验收资料'], '验收.md', { type: 'text/markdown' });
+  const before = requestsTo('/knowledge/upload').length;
+  try {
+    await act(async () => api!.upload(file));
+    assert.equal(requestsTo('/knowledge/upload').length, before, '未确认工作区却发出了上传');
+    assert.match(host.textContent ?? '', /默认工作区未就绪/, 'hook 没给用户解释为什么不上传');
+    curProjectRef.current = 7;
+    currentProjectId = 8; // 模拟另一个旧客户端在激活后把 current 改走
+    await act(async () => api!.upload(file));
+    const uploads = requestsTo('/knowledge/upload');
+    assert.equal(uploads.length, before + 1, '工作区已确认却没有上传');
+    const form = uploads.at(-1)?.body as FormData;
+    assert.equal(form.get('projectId'), '7', 'multipart 没显式传默认工作区 id');
+    assert.equal((form.get('file') as File)?.name, '验收.md', 'multipart 文件不见了');
+    assert.match(host.textContent ?? '', /已入库/, '上传成功后没有确认提示');
+  } finally {
+    currentProjectId = 7;
+    await act(async () => hostRoot.unmount());
+    host.remove();
+  }
+});
+
 await check('useMemory：切走智能体后，A 号的慢响应不许覆盖项目记忆', async () => {
   const sessionRef = { current: { token: 'tok-A' } } as unknown as { current: { token: string } | null };
   const curAgentRef = { current: 97 as number | null };
@@ -1651,8 +1664,9 @@ await check('片 7b·守卫② chatsRef 最新值镜像：上一轮写回的会�
   await waitRoundEnd();
 });
 
-await check('片 7b·守卫③ 建智能体：桌面不拦、原话原样送给服务端（批次 L 的钩子点）', async () => {
+await check('片 7b·守卫③ 一句话创建：原话发服务端，meta.newAgent 即刻成为默认工作区并列智能体', async () => {
   const said = '建一个销售助手';
+  const projectsBefore = requests.filter((r) => r.path === '/projects' && r.method === 'POST').length;
   await typeIntoInput(said);
   clickSend();
   await waitFor('第六轮 /chat/stream 发出', () => streamBodies.length >= 6);
@@ -1660,18 +1674,24 @@ await check('片 7b·守卫③ 建智能体：桌面不拦、原话原样送给�
   const body = streamBodies[5];
   assert.equal(body.message, said, '桌面把「建智能体」那句话改了（服务端那侧的意图检测就废了）');
   assert.ok(!('taskMode' in body), `桌面不该替服务端决定这轮是不是任务：${JSON.stringify(body)}`);
-  // 服务端的确认话术就是普通 delta → 必须照常显示成一枚助手气泡
-  ssePush('meta', { conversationId: 4246, agentId: 97 });
-  ssePush(null, { delta: '要建一个「销售助手」，职责：跑销售线索，确认就建？（回复确认即可）' });
-  await flush(3);
-  ssePush('done', { conversationId: 4246, messageId: 9006, contentLength: 40, searches: 0, sources: [] });
+  const newAgent = {
+    id: 1697, name: '销售助手', kind: 'custom', deletable: true, canCreateAgents: false,
+    projectId: 7, personaStatus: 'ready', persona: { name: '销售助手', duty: '跑销售线索' }, conversationId: 4247, status: 'idle',
+  };
+  ssePush('meta', { conversationId: 4246, agentId: 97, newAgent });
+  ssePush(null, { delta: '已建好「销售助手」，直接和TA聊。' });
+  await flush(4);
+  assert.ok(q('.contact-item[data-agent-id="1697"]'), '新智能体未出现在侧栏');
+  assert.ok(q('.contact-item[data-agent-id="1697"].active'), '新智能体没有成为当前会话');
+  assert.ok(q('.personaChips'), '建好后 chips 没出现在输入框上方');
+  assert.equal(requests.filter((r) => r.path === '/projects' && r.method === 'POST').length, projectsBefore, '建一个智能体却创建了项目');
+  ssePush('done', { conversationId: 4246, messageId: 9006, contentLength: 20, searches: 0, sources: [] });
   sseEnd();
   await waitRoundEnd();
-  assert.match(
-    q('.chat')?.textContent ?? '',
-    /要建一个「销售助手」/,
-    '服务端那句确认话术没显示出来（批次 L 的确认环节在桌面上看不见）',
-  );
+  // 回看小助：这句确认是在它的会话里，不是被误塞进新人的空会话。
+  click(q('.contact-item[data-agent-id="97"]'), '切回小助');
+  await flush(3);
+  assert.match(q('.chat')?.textContent ?? '', /已建好「销售助手」/, '小助的建人回话丢了');
 });
 
 /**

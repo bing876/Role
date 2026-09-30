@@ -175,8 +175,10 @@ try {
     const p = await pool.query('SELECT id FROM projects WHERE is_default=true'); assert.equal(p.rowCount, 1);
     const agents = await pool.query<{ can_create_agents: boolean }>('SELECT can_create_agents FROM agents WHERE name=$1', ['小助']);
     assert.equal(agents.rows[0].can_create_agents, true);
+    const messages = await pool.query('SELECT id FROM messages');
+    assert.equal(messages.rowCount, 0, '首进不许自动写搭团队提议（历史老数据不删）');
   } finally { await pool.end(); }
-  check('直接读真持久库：一个用户/项目/有建人权限的小助；密码只存 scrypt，手机号无明文');
+  check('直接读真持久库：一个用户/项目/有建人权限的小助，无自动团队提议；密码只存 scrypt，手机号无明文');
 
   // 重启同一个包，数据库/签名 key 必须仍可复用（token 可验、密码可登）。
   restarted.serverEnv.PORT = String(port);

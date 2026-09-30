@@ -526,8 +526,21 @@ export function registerKnowledgeRoutes(app: FastifyInstance, { pool, env, ciphe
       const kind = kindFromFilename(filename);
       const text = await extractText(buffer, kind);
       const chunks = chunkText(text);
-      // 子阶段 2-A：这份资料归属**当前使用中的项目**（没有项目就不入库，绝不写 NULL）
-      const projectId = await currentProjectId(pool, claims.sub);
+      // ADR-0012：桌面显式指定默认工作区，避免另一个旧客户端改动 current_project_id 后写错归属。
+      // 旧客户端不带 projectId 时保留原有的当前项目语义；带了就必须鉴权该项目。
+      const field = part.fields.projectId;
+      if (Array.isArray(field)) return errJson(reply, 400, 'projectId 只能提交一次');
+      let projectId: number | null;
+      if (field !== undefined) {
+        const raw = field.type === 'field' ? field.value : undefined;
+        if (typeof raw !== 'string' || !/^\d{1,18}$/.test(raw)) return errJson(reply, 400, 'projectId 不正确');
+        const id = Number(raw);
+        if (!Number.isSafeInteger(id) || id <= 0) return errJson(reply, 400, 'projectId 不正确');
+        if (!await loadOwnedProject(pool, claims.sub, id)) return errJson(reply, 404, '项目不存在或不是你的');
+        projectId = id;
+      } else {
+        projectId = await currentProjectId(pool, claims.sub);
+      }
       if (projectId === null) return errJson(reply, 500, '当前账号还没有项目（请重新登录一次让建号流程补上）');
 
       const saved = await withTx(pool, async (client) => {

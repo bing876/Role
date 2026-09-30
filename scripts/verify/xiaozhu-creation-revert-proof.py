@@ -5,7 +5,7 @@
   R2  拆掉转发记录写库（非小助「创建」只回话、不转发进小助会话）
   R3  转发话术改回别的（「这个由管家来建,我转给它」丢失）
   R4  POST /agents 权限退回 canCreateAgents（母鸡当调用者也能建）
-  R5  拆掉 auth 首进空项目的搭团队提议（小助不再主动提议）
+  R5  恢复 auth 首进自动搭团队提议（新账号不该再有这段历史）
 
 跑法：python3 scripts/verify/xiaozhu-creation-revert-proof.py
 """
@@ -31,6 +31,7 @@ TSX_CLI = str(_REPO_PATH / 'node_modules' / 'tsx' / 'dist' / 'cli.mjs')
 CHAT = REPO / 'apps' / 'server' / 'src' / 'routes' / 'chat.ts'
 AGENTS = REPO / 'apps' / 'server' / 'src' / 'routes' / 'agents.ts'
 AUTH = REPO / 'apps' / 'server' / 'src' / 'routes' / 'auth.ts'
+KNOWLEDGE = REPO / 'apps' / 'server' / 'src' / 'routes' / 'knowledge.ts'
 
 MUTATIONS = [
     {
@@ -94,25 +95,37 @@ MUTATIONS = [
     },
     {
         'id': 'R5',
-        'name': '拆掉 auth 首进空项目的搭团队提议（小助不再主动提议）',
+        'name': '恢复短信新账号自动写入搭团队提议（ADR-0012 反证）',
         'file': AUTH,
         'repls': [
             (
-                """            const { seedColleagueProposal } = await import('../orchestrator/agentBuilder');
-            await seedColleagueProposal(
-              pool,
-              cipher,
-              Number(created.userId),
-              Number(created.createdProject.id),
-              String(created.createdProject.name ?? '默认项目'),
-              Number(created.createdAgent.id),
-            );
-""",
-                """            void 0; // 反证注入：首进空项目不提议
+                '          // ADR-0012：首进只有小助，不自动向会话写入搭团队提议；旧会话历史保持原样。\n',
+                """          const { seedColleagueProposal } = await import('../orchestrator/agentBuilder');
+          await seedColleagueProposal(pool, cipher, Number(created.userId), Number(created.createdProject.id),
+            String(created.createdProject.name ?? '默认项目'), Number(created.createdAgent.id));
 """,
             ),
         ],
-        'expect': '小助会话里没有消息',
+        'expect': '新账号自动出现了团队提议',
+    },
+    {
+        'id': 'R6',
+        'name': '服务端上传忽略显式工作区 ID，误落旧 current 项目',
+        'file': KNOWLEDGE,
+        'repls': [
+            ('      const field = part.fields.projectId;', '      const field = undefined; // 反证注入：无视显式项目字段'),
+        ],
+        'expect': '上传资料落到旧 current 项目',
+    },
+    {
+        'id': 'R7',
+        'name': '服务端上传绕过工作区归属检查，能写到别人的项目',
+        'file': KNOWLEDGE,
+        'repls': [
+            ("        if (!await loadOwnedProject(pool, claims.sub, id)) return errJson(reply, 404, '项目不存在或不是你的');",
+             '        // 反证注入：不校验工作区归属'),
+        ],
+        'expect': '上传别人的项目不被拒绝',
     },
 ]
 

@@ -87,6 +87,24 @@ MUTATIONS = [
         'replace': "",
         'expect': "DELETE 的 body",
     },
+    {
+        'file': KNOWLEDGE,
+        'id': 'K5',
+        'visible': True,
+        'name': '资料上传丢掉默认工作区未激活的拒绝闸',
+        'anchor': "    if (pid === null) {\n      setNote('默认工作区未就绪，资料没有上传。请重新登录后重试。');\n      return;\n    }\n",
+        'replace': '',
+        'expect': '未确认工作区却发出了上传',
+    },
+    {
+        'file': KNOWLEDGE,
+        'id': 'K6',
+        'visible': True,
+        'name': '资料上传不再显式传工作区 ID（旧客户端改 current 后会错归属）',
+        'anchor': "      form.append('projectId', String(pid));",
+        'replace': "      // 反证注入：项目字段不见了",
+        'expect': 'multipart 没显式传默认工作区 id',
+    },
     # ---- 片 2：features/memory ----
     {
         'file': MEMORY,
@@ -161,51 +179,56 @@ MUTATIONS = [
         'replace': "  const curHelp = Object.values(helpCards)[0] ?? null;",
         'expect': '漏到 98 号对话里',
     },
-    # ---- 片 4：features/projects ----
+    # ---- ADR-0012：默认工作区，不再把旧项目 UI 的断言当验收 ----
     {
         'file': PROJECTS,
         'id': 'P1',
-        'visible': False,   # 红了之后用户能直接看见的输出变了？
-        'name': 'switchProject 跳过服务端 activate（界面先切、后端没落地）',
-        'anchor': "      await authFetchJson<ProjectUpdateResult>(`/projects/${id}/activate`, {\n        method: 'POST',\n        body: '{}',\n        headers: { authorization: `Bearer ${sess.token}` },\n      });\n      if (sessionRef.current?.token !== sess.token) return;\n",
-        'replace': "",
-        'expect': '发出 activate',
+        'visible': True,
+        'name': '旧 current=8 时跳过 activate 默认工作区（服务端仍指向旧项目）',
+        'anchor': """        await authFetchJson<ProjectUpdateResult>(`/projects/${defaultProject.id}/activate`, {
+          method: 'POST',
+          body: '{}',
+          headers: { authorization: `Bearer ${sess.token}` },
+        });
+""",
+        'replace': '',
+        'expect': '没有发出 activate 默认工作区',
     },
     {
         'file': PROJECTS,
         'id': 'P2',
-        'visible': True,   # 红了之后用户能直接看见的输出变了？
-        'name': 'loadProjects 不把列表写进界面 state（拉回来了但不显示）',
-        'anchor': "      setProjects(r.projects);\n",
-        'replace': "",
-        'expect': '项目行数不对',
+        'visible': True,
+        'name': '沿用旧项目 isCurrent 而不是 isDefault（左栏落到 8）',
+        'anchor': "const defaultProject = r.projects.find((p) => p.isDefault === true);",
+        'replace': "const defaultProject = r.projects.find((p) => p.isCurrent === true);",
+        'expect': '没有发出 activate 默认工作区',
     },
     {
         'file': PROJECTS,
         'id': 'P3',
-        'visible': False,   # 红了之后用户能直接看见的输出变了？
-        'name': 'createProject 的 body 少送名字',
-        'anchor': "        body: JSON.stringify({ name }),",
-        'replace': "        body: JSON.stringify({}),",
-        'expect': '建项目的 body 不对',
+        'visible': True,
+        'name': '缺默认行时猜列表首项（旧项目 8 进了左栏）',
+        'anchor': "const defaultProject = r.projects.find((p) => p.isDefault === true);",
+        'replace': "const defaultProject = r.projects.find((p) => p.isDefault === true) ?? r.projects[0];",
+        'expect': '缺默认行错误可见',
     },
     {
         'file': PROJECTS,
         'id': 'P4',
-        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 确认文案没了
-        'name': '把 F1 打回去：刷新列表时又顺手清掉提示（用户看不见"建好了"）',
-        'anchor': "      curProjectRef.current = r.currentProjectId;\n      onCurrentProject(r.currentProjectId);\n",
-        'replace': "      curProjectRef.current = r.currentProjectId;\n      onCurrentProject(r.currentProjectId);\n      setProjectNote('');\n",
-        'expect': '没有确认文案',
+        'visible': True,
+        'name': '只激活服务端，不回填 UI 默认工作区（左栏不见小助）',
+        'anchor': "      onCurrentProject(defaultProject.id);",
+        'replace': "      onCurrentProject(r.currentProjectId); // 反证注入：前端仍记上次项目",
+        'expect': '默认工作区的小助出现',
     },
     {
         'file': PROJECTS,
         'id': 'P5',
-        'visible': True,   # 红了之后用户能直接看见的输出变了？—— 失败没进红色错误槽
-        'name': '把 F2-③ 打回去：切换失败写回成功槽（两槽合一，成功失败又分不开）',
-        'anchor': "      setProjectErr(`⚠ 切换项目没成：${(e as Error).message}`);\n",
-        'replace': "      setProjectNote(`⚠ 切换项目没成：${(e as Error).message}`);  // 反证注入\n",
-        'expect': '错误槽是空的',
+        'visible': True,
+        'name': '工作区激活失败吞掉可见错误（用户不知道为何没有小助）',
+        'anchor': "        setProjectErr(`⚠ 默认工作区未就绪：${(e as Error).message}`);",
+        'replace': "        setProjectNote(`⚠ 默认工作区未就绪：${(e as Error).message}`);",
+        'expect': '激活失败可见',
     },
     {
         'file': CHAT,
@@ -494,17 +517,24 @@ MUTATIONS = [
         'replace': '            {true && (  // 反证注入：设置抽屉恒开（拆掉默认收起闸门）\n              <div className="settingsDrawer__panel">',
         'expect': '设置抽屉默认就该收起',
     },
-    # ---- B4：项目切换 = 原生 <select>（降噪：不再「按钮 + 展开列表 + 行」）----
-    #   注入一个残留的 .projectBox__row 旧行按钮：B4 该把「行」换成 <select>，
-    #   旧行还在 = 没换干净 → ⑤ 的 B4 验收（「旧项目行不该还在」）必红。
+    # ---- ADR-0012：项目 UI 复活，挂整个 App 的 DOM 验证 ----
     {
         'file': APP_TSX,
-        'id': 'B4',
+        'id': 'W1',
         'visible': True,
-        'name': '把项目切换打回「旧项目行按钮」：<select> 旁边残留一个 .projectBox__row（没换成下拉）',
-        'anchor': '            </select>\n            <input\n              className="authInput projectBox__name"',
-        'replace': '            </select>\n            <button type="button" className="projectBox__row"></button>\n            <input\n              className="authInput projectBox__name"',
-        'expect': '旧的「项目行」按钮还在',
+        'name': '左栏重新暴露新建项目入口',
+        'anchor': '          {/* ADR-0012：这里直接是智能体；项目行仍在服务端，但没有新建/切换控件。 */}',
+        'replace': '<div className="projectBox"><button className="projectBox__create">新建项目</button></div>',
+        'expect': '项目入口复活了',
+    },
+    {
+        'file': CHAT,
+        'id': 'W2',
+        'visible': True,
+        'name': '服务端新智能体 meta 不再通知左栏（一句话创建后界面看不到）',
+        'anchor': "              options.onNewAgent?.(na);",
+        'replace': "              // 反证注入：丢弃新建回执",
+        'expect': '新智能体未出现在侧栏',
     },
     # ---- 形态片·真接管（①，2026-09-27）：拆掉「接管」键的暂停闸 → 点了不再真的暂停这一路 ----
     {
@@ -561,8 +591,12 @@ def main() -> int:
         print(out[-2000:])
         return 2
 
+    selected = [m for m in MUTATIONS if len(sys.argv) == 1 or m['id'] in sys.argv[1:]]
+    if not selected:
+        print('未匹配到反证 ID')
+        return 2
     failures = 0
-    for mut in MUTATIONS:
+    for mut in selected:
         print('')
         print(f"--- {mut['id']} {mut['name']}")
         target: Path = mut['file']
@@ -610,7 +644,7 @@ def main() -> int:
 
     print('')
     print('=== 结论 ===')
-    print(f'  {len(MUTATIONS) - failures}/{len(MUTATIONS)} 处缺陷被行为验收网咬住')
+    print(f'  {len(selected) - failures}/{len(selected)} 处缺陷被行为验收网咬住')
     if failures:
         print(f'  ★ {failures} 项未通过')
         return 1

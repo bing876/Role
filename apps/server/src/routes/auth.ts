@@ -376,11 +376,7 @@ export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: 
         return { userId: u.rows[0].id, projectId: p.rows[0].id, projectName: p.rows[0].name, agentId: a.rows[0].id };
       });
       if (!created) return reply.code(409).send({ error: '本地账号已存在，请用 XYZ 号登录' });
-      try {
-        const { seedColleagueProposal } = await import('../orchestrator/agentBuilder');
-        await seedColleagueProposal(pool, cipher, Number(created.userId), Number(created.projectId),
-          created.projectName, Number(created.agentId));
-      } catch { /* 建号成功后团队提议失败不能制造第二个账号；现有短信路径也允许这一项失败。 */ }
+      // ADR-0012：新账号只建默认工作区和小助；不自动写入「搭团队」提议。
       return await buildSession(pool, env, cipher, created.userId);
     } catch {
       return reply.code(503).send({ error: '本地账号创建失败，数据未确认；请检查本机数据库' });
@@ -551,21 +547,7 @@ export function registerAuthRoutes(app: FastifyInstance, { pool, env, cipher }: 
             );
             return { userId: u.rows[0].id, createdProject: p.rows[0], createdAgent: a.rows[0] };
           });
-          // G1-⑤（2026-09-25）：首进空项目（signup 默认项目,此时只有小助）→ **小助主动提议搭团队**
-          // （写进小助主会话流,用户首次打开就能看到）。失败只告警,绝不挡建号/登录。
-          try {
-            const { seedColleagueProposal } = await import('../orchestrator/agentBuilder');
-            await seedColleagueProposal(
-              pool,
-              cipher,
-              Number(created.userId),
-              Number(created.createdProject.id),
-              String(created.createdProject.name ?? '默认项目'),
-              Number(created.createdAgent.id),
-            );
-          } catch (e) {
-            console.warn('[auth] 首进空项目提议搭团队失败（忽略）：', (e as Error).message);
-          }
+          // ADR-0012：首进只有小助，不自动向会话写入搭团队提议；旧会话历史保持原样。
           return await buildSession(pool, env, cipher, created.userId);
         } catch (err) {
           if (isUniqueViolation(err)) {

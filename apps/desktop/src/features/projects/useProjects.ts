@@ -71,36 +71,43 @@ export function useProjects({
   const [projectNote, setProjectNote] = useState('');
   const [projectErr, setProjectErr] = useState('');
 
-  /** 读项目列表；把「当前使用中的项目」同步到 state 与 ref，并返回它 */
+  /** ADR-0012：旧项目行留库，但当前 UI 只进入默认工作区。先服务端激活，再允许拉名单/资料。 */
   const loadProjects = async (): Promise<number | null> => {
     const sess = sessionRef.current;
     if (!sess) return null;
+    setProjectBusy(true);
+    setProjectErr('');
     try {
       const r = await authFetchJson<ProjectListResult>('/projects', {
         headers: { authorization: `Bearer ${sess.token}` },
       });
       if (sessionRef.current?.token !== sess.token) return null;
       setProjects(r.projects);
-      /**
-       * ★ 把项目列表推给主进程 —— 分区闸（view-host 的 create，ADR-0002）靠它判定归属。
-       * 主进程那个事件是**同步**的，没法自己去拉，所以必须在这里显式同步一次。
-       * 拿不到列表时（上面 catch）不同步，主进程会保持"还没同步过"的宽松状态。
-       */
+      // 主进程分区白名单仍需全部项目 id；旧分区与 API 并未删除。
       void window.workbench?.syncProjects?.(r.projects.map((p) => p.id));
-      curProjectRef.current = r.currentProjectId;
-      onCurrentProject(r.currentProjectId);
-      /**
-       * ★ F1 修复（2026-09-25，用户 2026-09-24 拍板「片 7 之后单独小提交」）：
-       *   这里**原来有一句 `setProjectNote('')`** —— 于是 `createProject` 里刚写的
-       *   「项目「X」建好了…」会被随后的这次刷新立刻擦掉，界面上等于**没有确认**。
-       *   「刷新列表」不该管提示文案：清空只发生在**每个动作开始时**（切换/新建的入口都写了）
-       *   与登出（`resetProjects`）—— 这样成功文案才留得住。
-       *   顺带说明：`switchProject` 成功时不写字（那是 F2，需要设计决定，见缺陷清单）。
-       */
-      return r.currentProjectId;
+      const defaultProject = r.projects.find((p) => p.isDefault === true);
+      if (!defaultProject) throw new Error('账号缺少默认工作区；未进入其他项目');
+      if (defaultProject.id !== r.currentProjectId) {
+        await authFetchJson<ProjectUpdateResult>(`/projects/${defaultProject.id}/activate`, {
+          method: 'POST',
+          body: '{}',
+          headers: { authorization: `Bearer ${sess.token}` },
+        });
+        if (sessionRef.current?.token !== sess.token) return null;
+      }
+      curProjectRef.current = defaultProject.id;
+      onCurrentProject(defaultProject.id);
+      // 刷新列表不擦旧客户端兼容动作的成功提示（F1）。
+      return defaultProject.id;
     } catch (e) {
-      setProjectErr(`⚠ 读不到项目列表：${(e as Error).message}`);
+      if (sessionRef.current?.token === sess.token) {
+        curProjectRef.current = null;
+        onCurrentProject(null);
+        setProjectErr(`⚠ 默认工作区未就绪：${(e as Error).message}`);
+      }
       return null;
+    } finally {
+      if (sessionRef.current?.token === sess.token) setProjectBusy(false);
     }
   };
 

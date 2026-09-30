@@ -5,7 +5,7 @@
  *   ② 非小助会话发「创建 XXX」→ 不建 + 回「这个由管家来建,我转给它」+ 转发进小助会话;左栏不新增、meta 无 newAgent
  *   ④ 小助说「建一个 XXX」→ 立刻建好（保留 chips/newAgent 流）
  *   ③ 「＋添加」只在小助上下文生效:服务端 POST /agents 调用者只放 assistant（母鸡当调用者 → 403）
- *   ⑤ 首进空项目（新账号默认项目）→ 小助主动提议搭团队
+ *   ⑤ 首进默认工作区只见小助，不自动写「搭团队」提议；旧项目 API 保留
  *
  * 全部走**真实生产代码路径**：
  *   · 建号 = buildApp 真 Fastify + app.inject() 走 /auth/sms/send + /auth/login/sms（SMS mock）
@@ -114,16 +114,15 @@ async function main(): Promise<void> {
   const xzId = xiaozhu.id;
   const baseCount = firstList.agents.length;
 
-  // ---------------------------------------------------------------- ⑤ 首进空项目小助主动提议
+  // ---------------------------------------------------------------- ⑤ 默认工作区只创建小助，历史兼容不抹旧数据
   log('');
-  log('--- ⑤ 首进空项目（新账号默认项目,只有小助）→ 小助主动提议搭团队 ---');
-  await check('新账号小助会话里有一条「主动搭团队」的提议（真库,非写死）', async () => {
+  log('--- ⑤ 首进默认工作区，小助直接可用，无自动搭团队提议 ---');
+  await check('新账号没有自动写入搭团队提议（真库）；只有默认工作区和小助', async () => {
     const msgs = await assistantMsgs(xzId);
-    assert.ok(msgs.length >= 1, '小助会话里没有消息（提议没写进去？）');
-    assert.ok(
-      msgs.some((m) => m.includes('建议') && (m.includes('同事') || m.includes('建'))),
-      `小助没主动提议搭团队，会话内容：${JSON.stringify(msgs).slice(0, 200)}`,
-    );
+    assert.deepEqual(msgs, [], `新账号自动出现了团队提议：${JSON.stringify(msgs).slice(0, 200)}`);
+    assert.equal(projRes.projects.length, 1, '新账号竟创建了第二个项目');
+    assert.equal(projRes.projects[0].id, defaultProjectId, '首进没有默认工作区');
+    assert.equal(baseCount, 1, '新账号除了小助还有其他智能体');
   });
 
   // ---------------------------------------------------------------- ③ 添加 服务端只放 assistant
@@ -160,6 +159,48 @@ async function main(): Promise<void> {
   const laoId = (createLao.json() as { agent: { id: number } }).agent.id;
   await check('小助当调用者 POST /agents → 200（小助能建）', () => {
     assert.ok(laoId, '小助建人没返回 id');
+  });
+
+  // ADR-0012：旧项目 API 仍可用，上传时显式归属必须赢过另一个客户端留下的 current=母鸡项目。
+  // 真 multipart 走 Fastify 的 req.file({ fields })，不是把 handler 拿出来单测。
+  const upload = (auth: string, fields: string[]): ReturnType<typeof app.inject> => {
+    const boundary = 'role-adr0012-form';
+    const parts = fields.map((id) =>
+      `--${boundary}\r\nContent-Disposition: form-data; name="projectId"\r\n\r\n${id}\r\n`).join('');
+    const body = `${parts}--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="验收.txt"\r\nContent-Type: text/plain\r\n\r\n一段测试资料\r\n--${boundary}--\r\n`;
+    return app.inject({ method: 'POST', url: '/knowledge/upload',
+      headers: { authorization: auth, 'content-type': `multipart/form-data; boundary=${boundary}` }, payload: Buffer.from(body) });
+  };
+  await check('上传显式传默认工作区 ID：即使旧客户端 current=8，也不误写到 8', async () => {
+    const res = await upload(AH.authorization, [String(defaultProjectId)]);
+    assert.equal(res.statusCode, 200, `显式上传失败：${res.statusCode} ${res.body.slice(0, 160)}`);
+    assert.equal(res.json().document.projectId, defaultProjectId, '上传资料落到旧 current 项目');
+    const stored = await pool.query<{ project_id: string }>('SELECT project_id FROM knowledge_documents WHERE id=$1', [res.json().document.id]);
+    assert.equal(Number(stored.rows[0].project_id), defaultProjectId, '数据库资料归属不正确');
+  });
+  await check('旧客户端不带项目字段：仍按当前项目写入（不破坏兼容）', async () => {
+    const res = await upload(AH.authorization, []);
+    assert.equal(res.statusCode, 200, `旧上传失败：${res.statusCode} ${res.body.slice(0, 160)}`);
+    assert.equal(res.json().document.projectId, henProjectId, '旧客户端 current 项目语义被破坏');
+  });
+  await check('上传不接受坏/重复 projectId，且无资料入库', async () => {
+    const countBefore = await pool.query<{ n: string }>('SELECT count(*) AS n FROM knowledge_documents');
+    for (const fields of [['abc'], ['0'], ['7x'], [String(defaultProjectId), String(defaultProjectId)]]) {
+      const res = await upload(AH.authorization, fields);
+      assert.equal(res.statusCode, 400, `字段 ${JSON.stringify(fields)} 应为 400, 实际 ${res.statusCode}`);
+    }
+    const countAfter = await pool.query<{ n: string }>('SELECT count(*) AS n FROM knowledge_documents');
+    assert.equal(countAfter.rows[0].n, countBefore.rows[0].n, '坏 projectId 仍写入了资料');
+  });
+  await check('上传别人的工作区 ID → 404，不能越权写入', async () => {
+    const phone2 = '138' + String(Date.now()).slice(-8);
+    const sent = await app.inject({ method: 'POST', url: '/auth/sms/send', headers: H, payload: JSON.stringify({ phone: phone2 }) });
+    const code = sent.json().mock_code;
+    const signed = await app.inject({ method: 'POST', url: '/auth/login/sms', headers: H, payload: JSON.stringify({ phone: phone2, code }) });
+    assert.equal(signed.statusCode, 200, `第二个账号注册失败：${signed.statusCode}`);
+    const other = (await app.inject({ method: 'GET', url: '/projects', headers: { ...H, authorization: `Bearer ${signed.json().token}` } })).json();
+    const res = await upload(AH.authorization, [String(other.projects[0].id)]);
+    assert.equal(res.statusCode, 404, '上传别人的项目不被拒绝');
   });
 
   // 把当前项目切回默认项目（③ 建母鸡项目时切走了）—— ②④ 都在默认项目里发生
@@ -204,6 +245,7 @@ async function main(): Promise<void> {
   log('');
   log('--- ④ 小助发「创建小红」→ 立刻建好 + meta 带 newAgent（左栏现真名） ---');
   const before4 = (await listAgents()).agents.length;
+  const projectsBeforeBuild = (await app.inject({ method: 'GET', url: '/projects', headers: AH })).json() as { projects: Array<{ id: number }> };
   const r4 = await app.inject({
     method: 'POST',
     url: '/chat/stream',
@@ -219,6 +261,13 @@ async function main(): Promise<void> {
     assert.ok(xiaohong, '没建出「小红」');
     assert.equal(xiaohong!.kind, 'custom', '小红应是 custom');
   });
+  await check('一句话建并列一级智能体：项目数不变、归属默认工作区、没有团队层', async () => {
+    const after = (await app.inject({ method: 'GET', url: '/projects', headers: AH })).json() as { projects: Array<{ id: number }> };
+    assert.equal(after.projects.length, projectsBeforeBuild.projects.length, '创建智能体时竟创建了项目');
+    const owner = await pool.query<{ project_id: string; kind: string }>('SELECT project_id, kind FROM agents WHERE id=$1', [xiaohong!.id]);
+    assert.equal(Number(owner.rows[0].project_id), defaultProjectId, '智能体落到了旧项目');
+    assert.equal(owner.rows[0].kind, 'custom', '新智能体不是并列主智能体');
+  });
   await check('回话「已建好「小红」…」', () => {
     assert.ok(s4.deltaText.includes('已建好「小红」'), `回话不对：${s4.deltaText.slice(0, 80)}`);
   });
@@ -226,6 +275,7 @@ async function main(): Promise<void> {
     assert.ok(s4.meta?.newAgent, 'meta 没带 newAgent');
     assert.equal(Number(s4.meta.newAgent.id), xiaohong!.id, 'newAgent.id 对不上');
     assert.equal(s4.meta.newAgent.name, '小红', 'newAgent.name 对不上');
+    assert.equal(s4.meta.newAgent.projectId, defaultProjectId, 'newAgent 的工作区不是默认工作区');
   });
   await check('新智能体 duty 从原话提取（真数据）', async () => {
     const p = ((await app.inject({ method: 'GET', url: `/agents/${xiaohong!.id}/persona`, headers: AH })).json() as {

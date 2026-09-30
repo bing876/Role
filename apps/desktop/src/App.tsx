@@ -16,10 +16,6 @@ import type {
   MemoryItem,
   MemoryListResult,
   OpenTabRequest,
-  ProjectCreateResult,
-  ProjectListResult,
-  ProjectSummary,
-  ProjectUpdateResult,
   TaskState,
   WorkbenchSettings,
 } from '@ai-workbench/shared';
@@ -663,8 +659,12 @@ export default function App() {
    * ③ 输入框上方摆三问 chips（名字已在原话里,占位名 false）。
    */
   const onNewAgent = (a: AgentView): void => {
+    // 只接收已确认的默认工作区成员；显式标了旧项目的晚到 SSE 不许污染侧栏。
+    // 旧服务端 AgentView.projectId 可选，未标时只沿用本次已激活的工作区。
+    const pid = curProjectRef.current;
+    if (pid === null || (a.projectId !== undefined && a.projectId !== pid)) return;
     setAgents((prev) => (prev.some((x) => x.id === a.id) ? prev : [...prev, a]));
-    if (curProjectRef.current !== null) agentProjectRef.current.set(a.id, curProjectRef.current);
+    agentProjectRef.current.set(a.id, pid);
     historyLoadedRef.current.add(a.id);
     patchChat(a.id, () => ({ messages: [], convId: a.conversationId }));
     setJustAddedAgentId(a.id);
@@ -949,9 +949,10 @@ export default function App() {
     const sess = sessionRef.current;
     if (!sess) return;
     const pid = projectId === undefined ? curProjectRef.current : projectId;
+    if (pid === null) return; // 默认工作区未激活前，不能用无 projectId 的全账号旧语义。
     try {
       const r = await fetchAgentsFor(pid);
-      if (!r) return;
+      if (!r || curProjectRef.current !== pid || sessionRef.current?.token !== sess.token) return;
       setAgents(r.agents);
       setAgentNote('');
       const cur = curAgentRef.current;
@@ -1005,24 +1006,11 @@ export default function App() {
     void loadKnowledge(id);
   };
 
-  /**
-   * 批次 M · 逻辑抽离第 4 片：项目列表 / 切换 / 新建搬进 `features/projects`。
-   * ★ **进入项目（enterProject）留在上面这一层** —— 它要同时动 chat / memory / knowledge 三块，
-   *   属于跨 feature 协调，按拍板只能待在组合层；这里把它注入给 hook。
-   * ★ 同名解构 → 下面 JSX（disabled={projectBusy} 等）一个字都不用改。
-   */
+  /** ADR-0012：项目 hook 留作内部默认工作区与旧 API 兼容；App 不接新建/切换入口。 */
   const {
-    projects,
-    projectsOpen,
-    setProjectsOpen,
     projectBusy,
-    projectNote,
     projectErr,
-    newProjectName,
-    setNewProjectName,
     loadProjects,
-    switchProject,
-    createProject,
     resetProjects,
   } = useProjects({
     sessionRef,
@@ -1058,54 +1046,12 @@ export default function App() {
     const pid = curProjectRef.current;
     // G1（2026-09-25,规格 C1 收紧）：**只有小助（管家, kind='assistant'）能建智能体**。
     // 服务端闸同口径（POST /agents 只放 assistant）；前端只认小助,母鸡/普通智能体一律不挑（不猜）。
+    if (pid === null) return null; // 默认工作区未确认时，不拿旧项目的小助顶替
     return (
       list.find(
-        (a) => a.kind === 'assistant' && a.canCreateAgents === true && (pid === null || a.projectId === undefined || a.projectId === pid),
+        (a) => a.kind === 'assistant' && a.canCreateAgents === true && (a.projectId === undefined || a.projectId === pid),
       ) ?? null
     );
-  };
-
-  /**
-   * 批次 E | 对话式建智能体、立刻建好不挡你
-   * quickBuildAgent：从提议或对话里直接建一个带人设的智能体，不走 pending 引导表，立刻 ready
-   */
-  const quickBuildAgent = async (name: string, duty: string) => {
-    const sess = sessionRef.current;
-    if (!sess || agentBusy) return;
-    setAgentBusy(true);
-    setAgentNote('');
-    try {
-      let creator = pickCreator(agentsRef.current);
-      if (!creator) {
-        const fresh = await fetchAgentsFor(curProjectRef.current);
-        if (!fresh) return;
-        setAgents(fresh.agents);
-        creator = pickCreator(fresh.agents);
-      }
-      if (!creator) {
-        setAgentNote('这个项目里没有小助（管家），建智能体得由管家来办。');
-        return;
-      }
-      const r = await authFetchJson<AgentCreateResult>('/agents', {
-        method: 'POST',
-        body: JSON.stringify({ asAgentId: creator.id, name: name.slice(0, 24), duty: duty.slice(0, 120) }),
-        headers: { authorization: `Bearer ${sess.token}` },
-      });
-      const a = r.agent;
-      if (curProjectRef.current !== null) agentProjectRef.current.set(a.id, curProjectRef.current);
-      setAgents((prev) => prev.concat(a));
-      historyLoadedRef.current.add(a.id);
-      patchChat(a.id, () => ({ messages: [], convId: a.conversationId }));
-      curAgentRef.current = a.id;
-      setCurAgentId(a.id);
-      setProjMem([]);
-      setProjMemOpen(false);
-      setChatNote(`已建好「${a.name}」：${duty}。直接和TA聊就行。`);
-    } catch (e) {
-      setAgentNote(`快捷建没成：${(e as Error).message}`);
-    } finally {
-      setAgentBusy(false);
-    }
   };
 
   /**
@@ -1118,7 +1064,7 @@ export default function App() {
    */
   const addAgent = async () => {
     const sess = sessionRef.current;
-    if (!sess || agentBusy) return;
+    if (!sess || curProjectRef.current === null || agentBusy) return;
     setAgentBusy(true);
     setAgentNote('');
     try {
@@ -1267,7 +1213,7 @@ export default function App() {
       });
       if (r.skipped === 'llm_not_configured') setChatNote('没配 DEEPSEEK_API_KEY，这次没整理记忆。');
       else if (r.skipped === 'empty_transcript') setChatNote('还没聊过天，没有可整理的。');
-      else setChatNote(`整理完了：用户记忆库 +${r.userAdded} 条，本项目记忆 +${r.projectAdded} 条。`);
+      else setChatNote(`整理完了：用户记忆库 +${r.userAdded} 条，工作区记忆 +${r.projectAdded} 条。`);
       void loadUserMemory();
       void loadProjectMemory(agentId);
       void loadPendingMemory(agentId, convId);
@@ -1359,16 +1305,12 @@ export default function App() {
     agentProjectRef.current.clear();
     setCurProjectId(null);
     if (!session) return;
-    void refreshTask();
     void loadUserMemory();
-    /**
-     * 子阶段 2-B：顺序不能反 —— **先**拿到「当前使用中的项目」，再按它拉智能体名单与资料列表。
-     * 反过来的话首帧会打一次不带 projectId 的 `/agents`（= 老语义：这个账号的全部智能体），
-     * 界面上就会闪一下别的项目的智能体。
-     */
+    /** ADR-0012：先在服务端激活默认工作区，再读取任务/名单/资料；失败时不回落旧项目。 */
     void (async () => {
       const pid = await loadProjects();
-      await Promise.all([loadAgents(pid), loadKnowledge(pid)]);
+      if (pid === null || sessionRef.current?.token !== session.token) return;
+      await Promise.all([refreshTask(), loadAgents(pid), loadKnowledge(pid)]);
     })();
   }, [session]);
 
@@ -1951,21 +1893,7 @@ export default function App() {
     return <AuthScreen onSession={setSession} />;
   }
 
-  /**
-   * 左栏要显示的智能体列表。
-   * 正常情况以服务端 /agents 为准；刚登录还没拉回来时先用登录响应里的 agents 顶上，
-   * 免得首屏左栏是空的（那种「点了没反应」的错觉最难查）。
-   */
-  // 已经进了某个项目就不再拿登录响应兜底 —— 否则会拿登录时那份（默认项目的）名单冒充当前项目。
-  const loginAgentsFallback: AgentView[] = (session.agents ?? []).map((a) => ({
-    id: a.id,
-    name: a.name,
-    kind: 'assistant',
-    deletable: false,
-    personaStatus: 'ready' as const,
-    persona: null,
-    conversationId: null,
-  }));
+  /** 工作区尚未激活时不拿登录响应兜底：那份名单可能属于上次使用的旧项目。 */
   /**
    * B5（降噪片·用户拍板）：**占位名「新智能体」的行不显示**。
    * 「＋ 添加」会先用占位名建出来（随后靠 chips 改名），在改名之前它在左栏就是一条
@@ -1973,7 +1901,7 @@ export default function App() {
    * 改完名（chips 答完 / 跳过但自己写了名）名字一变，那一行自然就回来了。
    */
   const namedAgents = agents.filter((a) => a.name !== '新智能体');
-  const sidebarAgents: AgentView[] = namedAgents.length > 0 ? namedAgents : curProjectId !== null ? [] : loginAgentsFallback;
+  const sidebarAgents: AgentView[] = curProjectId === null ? [] : namedAgents.filter((a) => a.projectId === undefined || a.projectId === curProjectId);
   const curAgent = sidebarAgents.find((a) => a.id === curAgentId) ?? null;
   /**
    * G1（2026-09-25,规格 C1 收紧）：「＋ 添加」只在小助（管家）上下文生效。
@@ -2155,57 +2083,8 @@ export default function App() {
         </div>
         <div className="sidebar__body">
 
-          {/*
-            子阶段 2-B：**最简项目入口**（看得见全部项目 / 新建 / 点一下切换当前项目）。
-
-            刻意不做下拉动效、双击切换、全屏小圆圈那套正式交互 —— 那些留给后面独立的 UI 阶段；
-            这里只在功能上把「项目层」跑通，用既有的 .contact / .btn / .authInput 拼出来，不加新视觉。
-            切换只换「看不见的项目视角 + 名单 + 资料列表」，**浏览器一张页都不动**（见 enterProject）。
-          */}
-          {/*
-            B4 项目下拉：项目切换 = 原生 <select>（降噪：不再「按钮 + 展开列表 + 行」）。
-            选中即 switchProject（换项目视角 + 重拉名单/资料，浏览器一张页都不动）。
-            「新建项目」入口保留（常显）；F2-③ 成功/失败两槽照旧。
-          */}
-          <div className="projectBox">
-            <div className="small projectBox__cur">
-              当前项目：{projects.find((p) => p.id === curProjectId)?.name ?? '（还没读到）'}
-            </div>
-            <select
-              className="projectBox__select"
-              value={curProjectId ?? ''}
-              disabled={projectBusy}
-              aria-label="切换项目"
-              onChange={(e) => void switchProject(Number(e.target.value))}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.id === curProjectId ? '（使用中）' : ''}
-                </option>
-              ))}
-            </select>
-            <input
-              className="authInput projectBox__name"
-              placeholder="新项目名字（≤24 字）"
-              value={newProjectName}
-              maxLength={24}
-              onChange={(e) => setNewProjectName(e.target.value)}
-            />
-            <div className="buttons-row">
-              <button
-                type="button"
-                className="btn projectBox__create"
-                disabled={projectBusy || !newProjectName.trim()}
-                onClick={() => void createProject()}
-              >
-                {projectBusy ? '处理中…' : '新建项目'}
-              </button>
-            </div>
-            {/* F2-③：成功/失败两个槽 + 两套样式（失败槽 = 红，一眼看出坏没坏） */}
-            {projectNote && <div className="small projectBox__note">{projectNote}</div>}
-            {projectErr && <div className="small projectBox__note projectBox__note--err">{projectErr}</div>}
-          </div>
+          {/* ADR-0012：这里直接是智能体；项目行仍在服务端，但没有新建/切换控件。 */}
+          {projectErr && <div className="small workspaceError" role="alert">{projectErr}</div>}
 
           <div className="agentList">
             {/* M2':行结构换设计基准 .contact-item(头像块/名字/真实状态行),数据仍是真名单;
@@ -2356,7 +2235,7 @@ export default function App() {
                 用户记忆（{userMem.length}）
               </button>
               <button type="button" className="btn" onClick={() => setProjMemOpen((v) => !v)}>
-                项目记忆（{projMem.length}）
+                工作区记忆（{projMem.length}）
               </button>
             </div>
             {userMemOpen && (
@@ -2374,11 +2253,11 @@ export default function App() {
               </div>
             )}
             {projMemOpen && (
-              <div className="memList" role="list" aria-label="当前智能体的项目记忆">
+              <div className="memList" role="list" aria-label="当前智能体的工作区记忆">
                 <div className="small memList__title">
                   {curAgent ? `${curAgent.name} 专属 · 别的智能体看不到` : '智能体级'}
                 </div>
-                {projMem.length === 0 && <div className="small">这个智能体还没有项目记忆。</div>}
+                {projMem.length === 0 && <div className="small">这个智能体还没有工作区记忆。</div>}
                 {projMem.map((m) => (
                   <div className="memList__row" key={m.id}>
                     <span className="small">{m.content}</span>
@@ -2405,7 +2284,7 @@ export default function App() {
               <div className="knowledgePanel">
                 <div className="small">
                   上传 .txt / .md / .pdf；资料原文片段会加密入库。
-                  资料只属于<b>当前项目</b>（{projects.find((p) => p.id === curProjectId)?.name ?? '…'}）：切到别的项目看不到这里的资料。
+                  资料只属于<b>默认工作区</b>；工作区未就绪时不能上传。
                 </div>
                 <input
                   ref={knowledgeFileRef}
@@ -2418,9 +2297,8 @@ export default function App() {
                   <button
                     type="button"
                     className="btn knowledgePanel__upload"
-                    // 子阶段 2-B：切项目过程中不许上传 —— 服务端的「当前项目」正在变，
-                    // 这一瞬间传上去会落到上一个项目（归属由服务端按当前项目写）。
-                    disabled={knowledgeUploading || projectBusy}
+                    // ADR-0012：工作区激活前或激活失败后不能上传，hook 内也有相同守卫。
+                    disabled={knowledgeUploading || projectBusy || curProjectId === null || Boolean(projectErr)}
                     onClick={() => knowledgeFileRef.current?.click()}
                   >
                     {knowledgeUploading ? '上传中…' : '上传资料'}
@@ -2755,23 +2633,6 @@ export default function App() {
                 </div>
               ) : (
                 <div className={`msg ${m.role}`}>{m.text}</div>
-              )}
-              {/* 批次 E：第一个智能体提议同事，快捷建按钮（对话式建智能体、立刻建好不挡你） */}
-              {m.role === 'assistant' && m.text.includes('建议先建这几位同事') && (
-                <div className="colleagueProposal" style={{ padding: '6px 8px', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {(() => {
-                    const matches = [...m.text.matchAll(/\d+\. \*\*([^*]+)\*\*：([^（\n]+)/g)];
-                    return matches.map((mat, i) => {
-                      const name = mat[1].trim();
-                      const duty = mat[2].trim();
-                      return (
-                        <button key={i} type="button" className="btn btn--go" onClick={() => void quickBuildAgent(name, duty)} title={duty}>
-                          ＋ 建「{name}」
-                        </button>
-                      );
-                    });
-                  })()}
-                </div>
               )}
               {/*
                 第 26 步：来源标注 —— 这条回答是从哪些网页查到的。
