@@ -174,14 +174,16 @@ async function main(): Promise<void> {
   await check('上传显式传默认工作区 ID：即使旧客户端 current=8，也不误写到 8', async () => {
     const res = await upload(AH.authorization, [String(defaultProjectId)]);
     assert.equal(res.statusCode, 200, `显式上传失败：${res.statusCode} ${res.body.slice(0, 160)}`);
-    assert.equal(res.json().document.projectId, defaultProjectId, '上传资料落到旧 current 项目');
+    const storedProjectId = res.json().document.projectId;
+    assert.equal(storedProjectId, defaultProjectId, '上传资料落到旧 current 项目');
     const stored = await pool.query<{ project_id: string }>('SELECT project_id FROM knowledge_documents WHERE id=$1', [res.json().document.id]);
     assert.equal(Number(stored.rows[0].project_id), defaultProjectId, '数据库资料归属不正确');
   });
   await check('旧客户端不带项目字段：仍按当前项目写入（不破坏兼容）', async () => {
     const res = await upload(AH.authorization, []);
     assert.equal(res.statusCode, 200, `旧上传失败：${res.statusCode} ${res.body.slice(0, 160)}`);
-    assert.equal(res.json().document.projectId, henProjectId, '旧客户端 current 项目语义被破坏');
+    const legacyProjectId = res.json().document.projectId;
+    assert.equal(legacyProjectId, henProjectId, '旧客户端 current 项目语义被破坏');
   });
   await check('上传不接受坏/重复 projectId，且无资料入库', async () => {
     const countBefore = await pool.query<{ n: string }>('SELECT count(*) AS n FROM knowledge_documents');

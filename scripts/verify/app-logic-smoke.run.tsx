@@ -442,7 +442,7 @@ const { act } = await import('react-dom/test-utils');
 const { createRoot } = await import('react-dom/client');
 const React = (await import('react')).default;
 const App = (await import('../../apps/desktop/src/App')).default;
-const { avatarStateOf } = await import('../../apps/desktop/src/App');
+const { deriveRunFacts } = await import('../../apps/desktop/src/shared/deriveRunFacts');
 const { useKnowledge } = await import('../../apps/desktop/src/features/knowledge');
 const { useMemory } = await import('../../apps/desktop/src/features/memory');
 const { useBrowserGlue } = await import('../../apps/desktop/src/app/browserGlue');
@@ -906,7 +906,7 @@ await check('历史搭团队消息仍作为普通文字可读，不生成快捷�
   try {
     await waitFor('旧消息可见', () => (q('.chat')?.textContent ?? '').includes('建议先建调研助手'));
     assert.ok(!q('.colleagueProposal__quickBuild') && !q('.colleagueProposal__actions'), '历史提议又生成了团队快捷按钮');
-    assert.equal((q('.chat')?.textContent ?? '').includes('建议先建调研助手'), true, '历史文字被删了');
+    assert.ok((q('.chat')?.textContent ?? '').includes('建议先建调研助手'), '历史文字被删了');
   } finally {
     await act(async () => instance.unmount());
     legacyProposalHistory = false;
@@ -1548,10 +1548,10 @@ await check('片 7b·② 流式回复是一段一段长出来的（停在中途�
 });
 
 await check('片 7b·③ 智能体的步骤逐条显示（新一轮先清空上一轮，再接着长）', async () => {
-  emitAgent({ kind: 'step', wcId: 7777, summary: '打开百度', ok: true });
+  emitAgent({ kind: 'step', wcId: wcIdByTabKey.get(orderedTabKey ?? -1)!, summary: '打开百度', ok: true });
   await flush(3);
   assert.match(stepBarText(), /打开百度/, '主进程报的第一条步摘要没显示出来');
-  emitAgent({ kind: 'step', wcId: 7777, summary: '在搜索框输入天气', ok: true });
+  emitAgent({ kind: 'step', wcId: wcIdByTabKey.get(orderedTabKey ?? -1)!, summary: '在搜索框输入天气', ok: true });
   await flush(3);
   assert.match(stepBarText(), /在搜索框输入天气/, '第二条步摘要没接上（不是逐条显示）');
 
@@ -2177,7 +2177,7 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
 
   await check('⑲-2 步骤事件进「可点开、默认收起」的轨迹抽屉，且**不进**主对话流', async () => {
     const before = q('.chat')?.textContent ?? '';
-    emitAgent({ kind: 'step', wcId: 7777, summary: '打开抖音首页', ok: true });
+    emitAgent({ kind: 'step', wcId: wcIdByTabKey.get(orderedTabKey ?? -1)!, summary: '打开抖音首页', ok: true });
     await flush(3);
     const trace = q('.runTrace');
     assert.ok(trace, '步骤没有进轨迹抽屉（.runTrace 不在）');
@@ -2432,6 +2432,11 @@ log('--- ⑲ 交互对齐片：执行中不出现步骤墙 / 状态一行 / 轨�
     await waitFor('⑲-8 新一轮发出', () => streamBodies.length > streamsB);
     ssePush('meta', { conversationId: 4251, agentId: 97 });
     ssePush('loop', { loopId: 'loop-19c', wcId: 7777 });
+    // 真主进程发起新循环会广播 running；测试桩的 agentStart 不会自动广播。
+    // 旧轮 pausedBy=user 的镜像不能冒充这轮，不能靠 streaming-only 假绿。
+    const wcId19c = wcIdByTabKey.get(orderedTabKey ?? -1);
+    assert.ok(wcId19c, '前置：没有真实 create 回执 wcId');
+    emitBridge('state', JSON.stringify({ wcId: wcId19c, phase: 'running', detail: 'AI 正在下一步', step: 1, blocked: false }));
     await flush(4);
     const bar = q('.runStatus');
     const ib = q('.inputbar');
@@ -2619,46 +2624,146 @@ log('--- ⑳ 降噪片：占位行不显示 / 结束键条件显示 / 首进引�
   });
 }
 
-/**
- * 形态片·头像六态（③，2026-09-27；规格 docs/产品交互规格.md）：
- *   空闲/思考/执行/需你处理/出错/休眠 —— 全有颜色 + 一个词；点头像弹「它在干嘛」。
- * 反证：app-logic-smoke-revert.py 的 TK3（拆六态映射必红）。
- */
-await check('③-a 六态映射：每态都有颜色 + 一个词（空闲/思考/执行/需你处理/出错/休眠）', async () => {
-  const cases: Array<[status: string, sleeping: boolean, word: string, color: string]> = [
-    ['idle', false, '空闲', '#8b93a1'],
-    ['thinking', false, '思考', '#5b9bd5'],
-    ['working', false, '执行', '#46b57c'],
-    ['blocked', false, '需你处理', '#e0a63a'],
-    ['failed', false, '出错', '#e05c5c'],
-    ['idle', true, '休眠', '#9b7fd4'],
+/** ADR-0012 · 六种运行事实、四态头像：纯函数逐态/优先级 + 真 App 三处接线。 */
+await check('③-a deriveRunFacts：六种事实 → 四种头像；思考/休眠只在「它在干嘛」细节', async () => {
+  const cases: Array<[status: string, keepalive: boolean, phase: string, word: string, color: string, detail: string]> = [
+    ['idle', true, 'idle', '空闲', '#8b93a1', '闲着'],
+    ['idle', false, 'sleeping', '空闲', '#8b93a1', '休眠'],
+    ['thinking', true, 'thinking', '执行', '#46b57c', '思考'],
+    ['working', true, 'working', '执行', '#46b57c', '动手'],
+    ['waiting', true, 'working', '执行', '#46b57c', '等待'],
+    ['blocked', true, 'blocked', '需你处理', '#e0a63a', '卡住'],
+    ['failed', true, 'failed', '出错', '#e05c5c', '出错'],
+    ['done', true, 'idle', '空闲', '#8b93a1', '干完'],
   ];
-  for (const [status, sleeping, word, color] of cases) {
-    const st = avatarStateOf({ id: 1, status: status as never } as never, { sleeping });
-    assert.equal(st.word, word, `状态 ${status}${sleeping ? '(休眠)' : ''} 的词不对：${st.word}`);
-    assert.equal(st.color, color, `状态 ${status} 的颜色不对：${st.color}`);
+  for (const [status, keepalive, phase, word, color, detail] of cases) {
+    const facts = deriveRunFacts({ agent: { ...AGENTS[0], status } as never, conversation: { ...STATE, keepalive } });
+    assert.equal(facts.phase, phase, `状态 ${status} 的事实不对`);
+    assert.equal(facts.avatar.word, word, `状态 ${status} 的词不对`);
+    assert.equal(facts.avatar.color, color, `状态 ${status} 的颜色不对`);
+    assert.match(facts.doing, /它在干嘛：/, `状态 ${status} 丢了细节行`);
+    assert.ok(facts.doing.includes(detail), `状态 ${status} 的细节不对：${facts.doing}`);
+    assert.equal(facts.visibilityHint, facts.doing, '可见度条重新派生了第二份状态提示');
+    assert.ok(!['思考', '休眠'].includes(facts.avatar.word), '思考/休眠重新占据了头像');
   }
 });
+
+await check('③-a2 deriveRunFacts：暂停/求助/失败高于 SSE；有新旧循环关联证据才覆盖旧镜像', () => {
+  const agent = { ...AGENTS[0], status: 'working', statusLoopId: 'old-loop' } as never;
+  const task = { phase: 'paused', detail: '页面归你', step: 3, blocked: false, pausedBy: 'user', wcId: 1001 } as never;
+  const running = { streaming: true, loopId: 'old-loop', taskObservedLoopId: 'old-loop', activeWebContentsId: 1001 };
+  const paused = deriveRunFacts({ agent, task, inFlight: { ...running, paused: true } });
+  assert.equal(paused.avatar.word, '需你处理', '本地暂停被 streaming 覆盖');
+  assert.equal(paused.runBar?.mode, 'paused');
+  assert.equal(paused.resumeAwaited, true);
+  assert.equal(paused.driveState?.cls, 'user');
+  assert.equal(deriveRunFacts({ agent, task, inFlight: running }).phase, 'blocked', '同轮镜像暂停被 streaming 覆盖');
+  const agentPause = deriveRunFacts({ agent, task: { ...task, pausedBy: 'agent' }, inFlight: { ...running, loopId: 'new-loop' } });
+  assert.equal(agentPause.avatar.word, '需你处理', 'AI 求助被新循环覆盖');
+  assert.equal(agentPause.driveState?.cls, 'agent');
+  const stale = deriveRunFacts({ agent, task, inFlight: { ...running, loopId: 'new-loop' } });
+  assert.equal(stale.runBar?.mode, 'running', '新循环仍被可证明的旧轮镜像遮住');
+  assert.equal(stale.driveState, null, '旧轮求助条仍显示在新循环');
+  assert.equal(stale.step, null, '旧轮步数不应冒充新循环');
+  assert.equal(deriveRunFacts({ agent, task, inFlight: { ...running, loopId: 'new-loop', taskObservedLoopId: 'new-loop' } }).phase,
+    'blocked', '当轮暂停被旧的服务端名单误当成过期');
+  assert.equal(deriveRunFacts({ agent, task, inFlight: { ...running, loopId: 'new-loop', taskObservedLoopId: null } }).phase,
+    'blocked', '缺少镜像循环证据时不应猜暂停已过期');
+  const failed = deriveRunFacts({ agent, task: { ...task, phase: 'failed', detail: '网页报错' }, inFlight: { ...running, paused: true } });
+  assert.equal(failed.avatar.word, '出错', '服务端失败被本地暂停或 streaming 覆盖');
+  assert.equal(failed.runBar, null, '服务端已失败却还画暂停/执行状态行');
+  assert.equal(deriveRunFacts({ agent, task: { ...task, phase: 'done' }, inFlight: { ...running, paused: true } }).runBar,
+    null, '任务已完成还画着旧轮暂停状态行');
+  assert.equal(deriveRunFacts({ agent, task: { ...task, pausedBy: null }, inFlight: running }).driveState?.cls,
+    'none', '未知暂停发起人不能猜成用户/AI');
+  const yieldTask = { ...task, phase: 'running', detail: '你在操作，我停下了' } as never;
+  assert.equal(deriveRunFacts({ agent, task: yieldTask, inFlight: running }).runBar?.text,
+    '你在操作，我停下了', '本页真人输入让路被忽略');
+  assert.equal(deriveRunFacts({ agent, task: yieldTask, inFlight: { ...running, activeWebContentsId: 2002 } }).runBar?.mode,
+    'running', '别页真人输入让路串到了本页');
+});
+
 {
   const root3 = await mountApp(true);
   await ensure('③ 前置：左栏头像在', () => qa('.contact-avatar').length > 0);
   await flush(2);
-  await check('③-b 左栏头像显示当前状态：颜色环 + 一个词（idle + 没在监听 → 休眠）', async () => {
+  await check('③-b 左栏头像四态：颜色环 + 一个词（没在监听 → 空闲，休眠留在细节）', async () => {
     const av = qa('.contact-avatar')[0];
     assert.ok(av, '找不到左栏头像');
     const stateEl = av!.querySelector('.contact-avatar__state');
     assert.ok(stateEl, '头像上没有那一个词（.contact-avatar__state）');
-    assert.match(stateEl!.textContent ?? '', /休眠|空闲/, `词不对：${stateEl?.textContent}`);
+    assert.equal(stateEl!.textContent, '空闲', `休眠又占了头像：${stateEl?.textContent}`);
     assert.ok((av!.getAttribute('style') ?? '').includes('--state-c'), '头像没有状态颜色环（--state-c）');
+    assert.match(av!.getAttribute('title') ?? '', /休眠/, '没在监听没有进入细节行');
   });
-  await check('③-c 头像带「它在干嘛」一行（title 气泡，点头像/悬停弹出）', async () => {
+  await check('③-c 头像与左栏第二行共用「它在干嘛」提示', async () => {
     const av = qa('.contact-avatar')[0];
     assert.ok(av, '找不到左栏头像');
     const title = av!.getAttribute('title') ?? '';
     assert.match(title, /它在干嘛/, `头像 title 不是「它在干嘛」：${title}`);
+    const rowDetail = q('.contact-msg')?.textContent;
+    assert.equal(rowDetail, title, '左栏第二行偷偷用了另一份文案');
   });
   await act(async () => root3.unmount());
 }
+
+await check('③-d 真 App：思考/暂停/跨人/未知页 → 头像、会话状态行与可见度同源', async () => {
+  const original = { ...AGENTS[0] };
+  Object.assign(AGENTS[0], { status: 'thinking', statusDetail: '思考中，检查条件', statusLoopId: 'loop-xz' });
+  AGENTS.push({
+    id: 99, name: '小美', kind: 'worker', deletable: true, canCreateAgents: false,
+    projectId: 7, personaStatus: 'ready', persona: null, conversationId: 503,
+    status: 'working', statusLoopId: 'loop-peer',
+  });
+  let root: ReturnType<typeof createRoot> | null = null;
+  try {
+    root = await mountApp(true);
+    await ensure('③-d 两名并列智能体出现', () => !!q('.contact-item[data-agent-id="97"]') && !!q('.contact-item[data-agent-id="99"]'));
+    await act(async () => { assert.equal(emitBridge('open', 'https://example.com/status/'), 1); });
+    await ensure('③-d 有活页才渲染可见度条', () => !!q('.computerVisibility__bar'));
+    const word = (id: number) => q(`.contact-item[data-agent-id="${id}"] .contact-avatar__state`)?.textContent ?? '';
+    const detail = (id: number) => q(`.contact-item[data-agent-id="${id}"] .contact-msg`)?.textContent ?? '';
+    const visWord = () => q('.computerVisibility__bar > .chip')?.textContent ?? '';
+    const visHint = () => q('.computerVisibility__detail')?.textContent ?? '';
+    assert.equal(word(97), '执行', '思考重新占了头像（头像应为执行）');
+    assert.match(detail(97), /思考中/, '思考应只在细节行');
+    assert.equal(visWord(), word(97), '可见度条没有吃同一个头像事实');
+    assert.equal(visHint(), detail(97), '可见度条没有吃同一个细节提示');
+    assert.ok(q('.runStatus__spin'), '服务器确认思考中，但运行条没有使用同一事实');
+
+    await act(async () => emitBridge('state', JSON.stringify({ phase: 'paused', pausedBy: 'user', detail: '页面归你', step: 3, blocked: false })));
+    await flush(3);
+    assert.equal(word(97), '需你处理', '主进程暂停没到头像');
+    assert.equal(visWord(), word(97), '暂停时可见度与头像矛盾');
+    assert.equal(visHint(), detail(97), '暂停时可见度与左栏文案矛盾');
+    assert.ok(q('.runStatus--paused') && q('.driveState--user'), '暂停未同步到运行/会话状态条');
+    assert.equal(word(99), '执行', '别人被当前智能体的暂停污染');
+
+    await act(async () => click(q('.contact-item[data-agent-id="99"]'), '切到小美'));
+    await flush(3);
+    assert.equal(visWord(), word(99), '切人后可见度仍是上一人的状态');
+    assert.ok(!q('.driveState--user') && !q('.runStatus--paused'), '无 wcId 镜像切人后串到了小美');
+    assert.equal(word(97), '需你处理', '切人后反而改了原智能体的暂停事实');
+
+    await act(async () => click(q('.contact-item[data-agent-id="97"]'), '切回小助'));
+    await flush(3);
+    assert.equal(visWord(), '需你处理', '切回原智能体，暂停镜像丢失');
+    await act(async () => emitBridge('state', JSON.stringify({ wcId: 987654, phase: 'failed', detail: '别页出错', step: 1, blocked: false })));
+    await flush(3);
+    assert.equal(word(97), '执行', '归属未知的别页失败冒充当前智能体');
+    assert.equal(visWord(), word(97), '未知页改变了可见度条');
+    assert.ok(!q('.driveState--user'), '旧镜像仍显示为当前任务');
+    const beforeUnknownStep = q('.computerVisibility__bar')?.textContent;
+    await act(async () => emitAgent({ kind: 'step', wcId: 987654, summary: '别人的未知步骤', ok: true }));
+    await flush(2);
+    const afterUnknownStep = q('.computerVisibility__bar')?.textContent;
+    assert.equal(afterUnknownStep, beforeUnknownStep, '未知页步骤漏到当前智能体的可见度条');
+  } finally {
+    if (root) await act(async () => root!.unmount());
+    AGENTS.pop();
+    AGENTS[0] = original;
+  }
+});
 
 /**
  * 形态片·Routines 管理（④，2026-09-27；规格 docs/产品交互规格.md）：

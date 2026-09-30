@@ -9,7 +9,7 @@ function ok(m){console.log(`PASS ${m}`);}
 function fail(m){console.error(`FAIL ${m}`);fails++;}
 function must(c,m){c?ok(m):fail(m);}
 
-console.log('=== 批次 E | 前端引导：对话式建智能体、立刻建好不挡你、第一个智能体提议同事、砍仪表盘 ===');
+console.log('=== 批次 E / ADR-0012 | 对话式建并列智能体、旧项目提议仅留在兼容层、无项目管理 UI ===');
 
 const abPath = path.join(root,'apps/server/src/orchestrator/agentBuilder.ts');
 must(fs.existsSync(abPath), 'agentBuilder.ts 存在（对话式建智能体）');
@@ -32,8 +32,13 @@ must(proj.includes('seedColleagueProposal') && proj.includes('提议同事'), 'p
 
 const appPath = path.join(root,'apps/desktop/src/App.tsx');
 const app = fs.readFileSync(appPath,'utf8');
-must(app.includes('quickBuildAgent'), 'App.tsx 有 quickBuildAgent（对话式建，立刻建好不挡你）');
-must(app.includes('colleagueProposal') || app.includes('建议先建这几位同事'), 'App.tsx 有同事提议快捷建按钮');
+// ADR-0012：真 App 的 DOM/请求行为由 app-logic-smoke 验；这里保留旧服务端提议的兼容断言，
+// 同时守住桌面只走聊天 meta.newAgent、新账号不从历史提议生成快捷建人 UI。
+const chatUi = fs.readFileSync(path.join(root, 'apps/desktop/src/features/chat/useChat.ts'), 'utf8');
+must(chatUi.includes('if (j.newAgent)') && chatUi.includes('options.onNewAgent?.(na)') && app.includes('onNewAgent,'),
+  '聊天 meta.newAgent 接入 App，新增并列智能体无需项目或团队快捷按钮');
+must(!app.includes('const quickBuildAgent =') && !app.includes('className="colleagueProposal"') && !app.includes('className="projectBox"'),
+  '桌面不再暴露项目管理或旧同事提议快捷建入口（旧数据/API 保留）');
 must(!app.includes('className="driveBar"') || app.includes('批次 E：driveBarAct 已移除'), 'App.tsx 已砍掉 driveBar 仪表盘（砍掉一切仪表盘）');
 must(app.includes('创建小美') || app.includes('建一个'), 'App.tsx placeholder 提示对话式建智能体（C1 句式：创建 XXX）');
 

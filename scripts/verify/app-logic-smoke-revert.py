@@ -49,6 +49,8 @@ CHAT = FEATURES / 'chat' / 'useChat.ts'
 AUTHSCREEN = FEATURES / 'auth' / 'AuthScreen.tsx'
 CHIPS = FEATURES / 'chat' / 'PersonaChips.tsx'  # C1：AgentGuide.tsx 已删,三问 = PersonaChips chips
 BROWSER = REPO / 'apps' / 'desktop' / 'src' / 'browser' / 'useBrowserWorkspace.ts'
+RUN_FACTS = REPO / 'apps' / 'desktop' / 'src' / 'shared' / 'deriveRunFacts.ts'
+VISIBILITY = REPO / 'apps' / 'desktop' / 'src' / 'browser' / 'ComputerVisibility.tsx'
 
 MUTATIONS = [
     {
@@ -546,15 +548,42 @@ MUTATIONS = [
         'replace': "              className=\"inputbar-btn send inputbar-btn--stop\"\n              onClick={() => undefined} // 反证注入：拆掉暂停闸（点了不暂停）\n",
         'expect': '点「接管」没有真的暂停这一路',
     },
-    # ---- 形态片·头像六态（③，2026-09-27）：把六态映射打平（thinking 也变「空闲」）→ 六态塌成一态 ----
+    # ---- ADR-0012：旧 TK3 改验「六种事实 → 四态头像」；单源反证 S1/S2/S3 ----
     {
-        'file': APP_TSX,
+        'file': RUN_FACTS,
         'id': 'TK3',
         'visible': True,
-        'name': '头像六态映射打平：thinking 也显示「空闲」（六态塌成一态,颜色和词都丢）',
-        'anchor': "  thinking: { color: '#5b9bd5', word: '思考' },\n",
-        'replace': "  thinking: { color: '#8b93a1', word: '空闲' }, // 反证注入：六态塌成空闲\n",
+        'name': '思考错误折叠成空闲头像：四态映射塌陷',
+        'anchor': "const mode: AvatarMode = phase === 'thinking' ? 'working' : phase === 'sleeping' ? 'idle' : phase;",
+        'replace': "const mode: AvatarMode = phase === 'thinking' ? 'idle' : phase === 'sleeping' ? 'idle' : phase; // 反证注入：思考当空闲",
         'expect': '状态 thinking 的词不对',
+    },
+    {
+        'file': APP_TSX,
+        'id': 'S1',
+        'visible': True,
+        'name': '侧栏第二行绕过 deriveRunFacts，重新按原始 status 派生「思考」',
+        'anchor': '<span className="contact-msg">{facts.doing}</span>',
+        'replace': '<span className="contact-msg">{a.status === "thinking" ? "思考中" : facts.doing}</span>',
+        'expect': '可见度条没有吃同一个细节提示',
+    },
+    {
+        'file': VISIBILITY,
+        'id': 'S2',
+        'visible': True,
+        'name': '可见度条复活独立思考标签（头像执行、可见度却说思考）',
+        'anchor': '{facts.avatar.word}',
+        'replace': '{facts.phase === "thinking" ? "思考" : facts.avatar.word}',
+        'expect': '可见度条没有吃同一个头像事实',
+    },
+    {
+        'file': APP_TSX,
+        'id': 'S3',
+        'visible': True,
+        'name': '运行条恢复 streaming 本地判据，让真人输入让路误显执行中',
+        'anchor': "className={`runStatus${curFacts.runBar.mode === 'paused' ? ' runStatus--paused' : ''}`}",
+        'replace': "className={`runStatus${runningLoopId && streaming ? '' : ' runStatus--paused'}`}",
+        'expect': '让路时不应继续画「AI 正在操作」的转圈',
     },
     # ---- 形态片·Routines 管理（④，2026-09-27）：拆掉列表加载 → 面板永远空 ----
     {

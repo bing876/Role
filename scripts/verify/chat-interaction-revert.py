@@ -89,8 +89,8 @@ DEFECTS = [
     {
         'name': 'I7 执行中发送键不再变「停止」',
         'file': APP,
-        'old': "          {runningLoopId && streaming ? (\n",
-        'new': "          {false && runningLoopId && streaming ? (\n",
+        'old': "          {curFacts.runBar?.mode === 'running' && runningLoopId && streamingAgentId === curAgentId ? (\n",
+        'new': "          {false && curFacts.runBar?.mode === 'running' && runningLoopId && streamingAgentId === curAgentId ? (\n",
         'expect': ['⑲-1'],
         'cmd': LOGIC,
     },
@@ -126,7 +126,7 @@ DEFECTS = [
     {
         'name': 'I11(A①) 暂停态不单列发送键（挂起时落进"打字中…"并被禁用）',
         'file': APP,
-        'old': "          ) : pausedHere ? (\n",
+        'old': "          ) : curFacts.resumeAwaited ? (\n",
         'new': "          ) : false ? (\n",
         'expect': ['⑲-9'],
         'cmd': LOGIC,
@@ -134,8 +134,8 @@ DEFECTS = [
     {
         'name': 'I12(A②) 状态行不渲染（不再"钉在输入框正上方"）',
         'file': APP,
-        'old': "        {runBarMode && (\n",
-        'new': "        {false && runBarMode && (\n",
+        'old': "        {curFacts.runBar && (\n",
+        'new': "        {false && curFacts.runBar && (\n",
         'expect': ['⑲-8'],
         'cmd': LOGIC,
     },

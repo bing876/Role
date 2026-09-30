@@ -132,10 +132,10 @@
   display: grid; place-items: center;
   /* Round 138：头像仅保留 brightness 过渡（hover 提亮）；白外环已移除 */
   transition: filter .18s ease, box-shadow .18s ease;
-  /* 形态③（2026-09-27）：颜色环 = 六态颜色（--state-c）；没状态时用透明，不抢戏 */
+  /* ADR-0012：颜色环 = 四态头像色（--state-c）；没状态时用透明，不抢戏 */
   box-shadow: 0 0 0 2px var(--state-c, transparent);
 }
-/* 形态③：头像下方那一个词（空闲/思考/执行/需你处理/出错/休眠），颜色跟状态走 */
+/* ADR-0012：头像下方只显示空闲/执行/需你处理/出错；思考/休眠留在细节行 */
 .contact-avatar__state {
   position: absolute; left: 50%; bottom: -13px; transform: translateX(-50%);
   font-size: 10px; font-weight: 600; line-height: 1; white-space: nowrap;
@@ -145,8 +145,8 @@
 }
 
 /* 中间文字区域：两行 21 + 3 + 16 = 40 → 与头像 40 严格等高，垂直重心对齐。
-   桌面端：第二行 .contact-msg 放真实状态人话（服务端 statusDetail 优先，
-   否则 在线 / 等你填引导表 / 已就位）；.contact-time 不搬（智能体没有「最后消息时间」这真数据，不造假）。 */
+   桌面端：第二行 .contact-msg 放 deriveRunFacts 的「它在干嘛」细节；
+   .contact-time 不搬（智能体没有「最后消息时间」这真数据，不造假）。 */
 .contact-body { flex: 1 1 auto; min-width: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: center; }
 .contact-line {
   display: flex; align-items: center; gap: 8px;

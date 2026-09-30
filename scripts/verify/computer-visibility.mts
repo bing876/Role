@@ -280,11 +280,31 @@ log('--- ⑤ 接线：App.tsx 真的渲染了它（H 空转的主因就是「组
     assert.ok(/if \(off \|\| !v\) return;/.test(app), '读不到时也去 setComputerVisibility 了（那会把「读不到」变成「用户选了收起」）');
     assert.ok(/\}, \[curAgentId, session\?\.token\]\);/.test(app), '读档 effect 的依赖不是「换人/换登录态」');
   });
-  await check('⑤-7：喂给组件的状态是真数据（智能体状态 + 最后一条步摘要 + 当前页标题），不是写死的假文案', () => {
-    assert.ok(/loopStatus=\{visAgent\?\.status/.test(app), '状态不是从智能体那一行来的');
-    assert.ok(/currentTool=\{visLastStep\}/.test(app), '当前这一步不是从主进程报上来的步摘要来的');
-    assert.ok(/pageSummary=\{visPage\}/.test(app), '页面摘要不是当前那张页的标题/地址');
-    assert.ok(/const visLastStep = agentSteps\.length > 0 \? agentSteps\[agentSteps\.length - 1\] : null;/.test(app));
+  await check('⑤-7：可见度条消费唯一 deriveRunFacts 的事实 + 本人步骤/页面', () => {
+    const comp = read('apps/desktop/src/browser/ComputerVisibility.tsx');
+    assert.match(app, /factsByAgent\.set\(a\.id, deriveRunFacts\(\{/, '没有按智能体派生唯一事实');
+    assert.match(app, /agent: a,\s*conversation: agentStates\[a\.id\],\s*task: taskOwnerId === a\.id \? task : null/, '智能体/会话/主进程任务没有合流或没隔离');
+    assert.match(app, /task\.wcId == null\s*\? task\.legacyOwnerId/, '无 wcId 的旧镜像切人后会串人');
+    assert.match(app, /browser\.tabIdOfWebContents\(task\.wcId\)/, '有 wcId 的镜像没按页找归属');
+    assert.match(app, /task\.snapshotToken !== session\.token/, '旧登录态的镜像可能串到新会话');
+    assert.match(app, /facts=\{curFacts\}/, '没有把同一份派生事实传给可见度条');
+    assert.match(comp, /facts: RunFacts;/, '组件没有要求唯一派生事实');
+    assert.match(comp, /\{facts\.avatar\.word\}/, '可见度条的状态芯片没有用同一份头像词');
+    assert.match(comp, /\{facts\.visibilityHint\}/, '可见度条的提示没有用同一份细节');
+    assert.match(app, /currentTool=\{visLastStep\}/, '当前步骤不是主进程报的步摘要');
+    assert.match(app, /pageSummary=\{visPage\}/, '页面摘要不是当前页的标题/地址');
+    assert.match(app, /const visLastStep = lastStepOwnerId === curAgentId/, '上一个智能体的步摘要串进当前条');
+  });
+  await check('⑤-8：四态头像、侧栏细节、运行条与会话行没有复活第二份状态词典', () => {
+    const comp = read('apps/desktop/src/browser/ComputerVisibility.tsx');
+    assert.doesNotMatch(comp, /STATUS_LABEL|loopStatus|statusDetail/, '可见度组件重新解释了一份状态');
+    assert.doesNotMatch(app, /AVATAR_STATE_MAP|avatarStateOf|avatarDoing|agentStatusLine|driveStateView/, 'App 恢复了本地第二份状态映射');
+    assert.match(app, /const st = facts\.avatar;/, '头像没吃同一份事实');
+    assert.match(app, /className="contact-msg">\{facts\.doing\}/, '侧栏细节重新按原始状态推导');
+    assert.match(app, /\{curFacts\.sessionHint && <div className="taskState">\{curFacts\.sessionHint\}/, '会话状态行没有用同一份提示');
+    assert.match(app, /\{curFacts\.runBar && \(/, '运行状态行没用同一份事实');
+    assert.match(app, /\{curFacts\.runBar\.text\}/, '运行文案又在本地推了一份');
+    assert.match(app, /\{curFacts\.driveState && \(/, '谁在等谁的口径没从同一源派生');
   });
 }
 

@@ -69,9 +69,7 @@ def sh(cmd: str, timeout: int = 900) -> tuple[int, str]:
 # App.tsx 里那个 JSX 元素（逐字，HV1 要整块摘掉）
 JSX_BLOCK = """            <ComputerVisibility
               agentId={curAgentId}
-              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
-              statusDetail={visAgent?.statusDetail ?? null}
-              step={visAgent?.statusStep ?? null}
+              facts={curFacts}
               currentTool={visLastStep}
               pageSummary={visPage}
               visibility={computerVisibility}

@@ -20,8 +20,8 @@
 ★ 批次 M-8'：`AuthScreen` / `AgentGuide`（带 JSX 的组件）已从 App.tsx 逐字搬进
   `features/auth` / `features/chat`，本脚本**断言它们不再出现在 App.tsx**
   （回归 = 非零退出）。
-★ 留在 App 的顶层块都是**纯展示派生**（driveStateView / agentGlyph 等）——
-  按用户拍板「跨 feature 协调与纯展示派生留 App」，它们有留因，不算漏抽。
+★ ADR-0012 后 App 顶层仅余 agentGlyph / agentColor 等纯视觉辅助；
+  运行事实统一由 shared/deriveRunFacts.ts 派生，不再在 App 顶层复制状态词典。
 
 用法：python3 scripts/verify/app-tsx-line-budget.py [--json]
 """

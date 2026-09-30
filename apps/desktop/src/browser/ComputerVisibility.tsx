@@ -31,10 +31,11 @@
  *   切档要顺带把浏览器前置，那是**调用方**的事（App 调 `browser.showFullscreen()`，
  *   而那条路本来就是「视图开关，跟任务执行毫无耦合」）。
  *
- * 状态来自 loop (running/waiting/done/paused/job_pending)；可见度偏好存 agents.computer_visibility，默认 status。
+ * 运行提示只消费 deriveRunFacts；可见度偏好存 agents.computer_visibility，默认 status。
  */
 
 import { useEffect, useState } from 'react';
+import type { RunFacts } from '../shared/deriveRunFacts';
 
 export type ComputerVisibility = 'status' | 'preview' | 'takeover';
 
@@ -42,11 +43,8 @@ export const VISIBILITY_LEVELS: ComputerVisibility[] = ['status', 'preview', 'ta
 
 export interface ComputerVisibilityProps {
   agentId: number | null;
-  loopStatus?: string | null;
-  /** 状态人话摘要（AgentRow.statusDetail）——比裸状态码有用，界面上就显示它 */
-  statusDetail?: string | null;
-  /** 当前步数（AgentRow.statusStep） */
-  step?: number | null;
+  /** 与侧栏头像、会话状态行、执行状态行共用的唯一运行事实。 */
+  facts: RunFacts;
   currentTool?: string | null;
   pageSummary?: string | null;
   /** 受控用法：调用方（App）持有档位并负责持久化 */
@@ -63,20 +61,6 @@ const LABEL: Record<ComputerVisibility, string> = {
   status: '状态',
   preview: '预览',
   takeover: '接管',
-};
-
-const STATUS_LABEL: Record<string, string> = {
-  running: '运行中',
-  waiting: '等待中',
-  waiting_job: '等待同事',
-  paused: '已暂停',
-  done: '已完成',
-  stopped: '已停止',
-  failed: '失败',
-  idle: '空闲',
-  thinking: '思考中',
-  working: '在干活',
-  blocked: '需要你看一眼',
 };
 
 // ---------------------------------------------------------------------------
@@ -145,9 +129,7 @@ export async function saveVisibility(
 
 export function ComputerVisibility({
   agentId,
-  loopStatus,
-  statusDetail,
-  step,
+  facts,
   currentTool,
   pageSummary,
   visibility: propVisibility,
@@ -172,16 +154,15 @@ export function ComputerVisibility({
     onChange?.(v);
   };
 
-  const statusText = loopStatus ? (STATUS_LABEL[loopStatus] ?? loopStatus) : '空闲';
   const who = agentId ? `#${agentId}` : '未选智能体';
 
   return (
     <div className={`computerVisibility computerVisibility--${visibility}`} data-agent-id={agentId ?? ''}>
       <div className="computerVisibility__bar">
-        <span className={visibility === 'status' ? 'chip' : 'chip chip--on'}>{statusText}</span>
-        {typeof step === 'number' && step > 0 && <span className="small">第 {step} 步</span>}
+        <span className={visibility === 'status' ? 'chip' : 'chip chip--on'}>{facts.avatar.word}</span>
+        {typeof facts.step === 'number' && facts.step > 0 && <span className="small">第 {facts.step} 步</span>}
         {currentTool && <span className="small">· {currentTool}</span>}
-        {statusDetail && <span className="small computerVisibility__detail">{statusDetail}</span>}
+        <span className="small computerVisibility__detail">{facts.visibilityHint}</span>
         <span className="small computerVisibility__who">{who}</span>
         <span className="computerVisibility__actions">
           {VISIBILITY_LEVELS.map((v) => (

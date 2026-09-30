@@ -34,6 +34,8 @@ import { shouldFallbackLaunch } from './mentionGate';
 import { API_BASE, TOKEN_KEY, authFetchJson } from './shared/api';
 /** 批次 M-8'：首帧兜底配置（原写在本文件模块级）搬进 shared/settings.ts */
 import { SETTINGS_FALLBACK } from './shared/settings';
+import { deriveRunFacts } from './shared/deriveRunFacts';
+import type { RunFacts } from './shared/deriveRunFacts';
 import { useKnowledge } from './features/knowledge';
 import { MemoryConfirmCard, useMemory } from './features/memory';
 import { PluginsPanel, usePlugins } from './features/plugins';
@@ -186,48 +188,6 @@ import type { CurrentTask } from './features/tasks';
  */
 
 /**
- * 阶段简报 · 方案 B：临时测试条用的相位中文名。
- *
- * 只是把主进程状态机的 `TaskPhase` 翻成人话显示，**不做二次判断**——
- * 真实权威状态始终在主进程（界面只是镜像），免得出现「界面说暂停、实际还在跑」。
- */
-const DRIVE_PHASE_LABEL: Record<string, string> = {
-  idle: '空闲',
-  running: 'AI 驾驶中',
-  paused: '已暂停',
-  done: '已完成',
-  failed: '失败',
-};
-
-/**
- * 第 27 步 · **「谁在等谁」的唯一口径**（本步的核心验收点之一）。
- *
- * 要解决的问题：用户主动按「暂停」和 AI 自己走不下去来求助，
- * 在状态机里**都是 `phase='paused'`** —— 界面原来只按 phase 取文案，
- * 于是两种情况被压成同一句话「已暂停（页面归你操作）」，用户根本分不清是谁在等谁。
- *
- * 现在把两件事拆开：
- *   · `phase`    管"停没停"；
- *   · `pausedBy` 管"**谁**发起的"。
- * 颜色 / 图标 / 文案**三者一律跟着 `pausedBy` 走**，绝不跟着 phase 走。
- *
- * ★ 分不清时（`pausedBy` 为空）走**中立灰**，如实说"没记下是谁发起的" ——
- *   绝不猜、也不冒充任何一方（猜错的代价是用户按错了按钮）。
- */
-function driveStateView(
-  state: TaskState | null | undefined,
-): { cls: 'user' | 'agent' | 'none'; icon: string; text: string } | null {
-  if (!state || state.phase !== 'paused') return null;
-  if (state.pausedBy === 'agent') {
-    return { cls: 'agent', icon: '🤖', text: `AI 主动求助 · 等你处理 — ${state.detail}` };
-  }
-  if (state.pausedBy === 'user') {
-    return { cls: 'user', icon: '✋', text: `你在操作 · AI 已暂停，页面归你 — ${state.detail}` };
-  }
-  return { cls: 'none', icon: '⏸', text: `已暂停（未记录发起方）— ${state.detail}` };
-}
-
-/**
  * 第 16 步：确认是**例外**，不是默认。
  *
  * 模型只在「本会话第一次要用浏览器、且这句不是明确开页指令」时回那句固定话术；
@@ -277,46 +237,6 @@ function userAvatarChar(u: { xyz_id?: string; phone_masked?: string | null }): s
   return (u.xyz_id || u.phone_masked || 'U').slice(0, 1).toUpperCase();
 }
 
-/** M2':行第二行的真实状态人话（服务端 statusDetail 优先；否则沿用既有状态逻辑） */
-function agentStatusLine(a: AgentView): string {
-  if (a.statusDetail) return a.statusDetail;
-  if (a.kind === 'assistant') return '在线';
-  // 规格 C1 起新智能体建好即 ready（chips 只是可选精调）；'pending' 只剩旧数据兼容
-  return a.personaStatus === 'pending' ? '等你定个样子' : '已就位';
-}
-
-/**
- * 形态③ 头像六态（2026-09-27）：空闲 / 思考 / 执行 / 需你处理 / 出错 / 休眠 —— 全有颜色 + 一词。
- * 服务端 status（含 waiting/done 归并）→ 六态；`sleeping`（休眠）由桌面从保活态推导（没在监听 = 睡着）。
- */
-const AVATAR_STATE_MAP: Record<string, { color: string; word: string }> = {
-  idle: { color: '#8b93a1', word: '空闲' },
-  done: { color: '#8b93a1', word: '空闲' },
-  thinking: { color: '#5b9bd5', word: '思考' },
-  working: { color: '#46b57c', word: '执行' },
-  waiting: { color: '#46b57c', word: '执行' },
-  blocked: { color: '#e0a63a', word: '需你处理' },
-  failed: { color: '#e05c5c', word: '出错' },
-  sleeping: { color: '#9b7fd4', word: '休眠' },
-};
-export function avatarStateOf(a: AgentView, opts?: { sleeping?: boolean }): { color: string; word: string } {
-  const key = opts?.sleeping ? 'sleeping' : (a.status ?? 'idle');
-  return AVATAR_STATE_MAP[key] ?? AVATAR_STATE_MAP.idle;
-}
-/** 点头像弹的那句「它在干嘛」（人话）：优先服务端 statusDetail，否则按状态给一句 */
-function avatarDoing(a: AgentView, opts?: { sleeping?: boolean }): string {
-  if (opts?.sleeping) return '它在干嘛：歇着呢，没在监听';
-  if (a.statusDetail) return a.statusDetail;
-  switch (a.status) {
-    case 'thinking': return '它在干嘛：在想下一步怎么做';
-    case 'working': return '它在干嘛：正在动手干活';
-    case 'blocked': return '它在干嘛：卡住了，等你看一眼';
-    case 'failed': return '它在干嘛：上一步出错了，没走通';
-    case 'done': return '它在干嘛：刚干完一单';
-    default: return '它在干嘛：闲着，随时能派活';
-  }
-}
-
 export default function App() {
   /** 头像右上角红点：第 8 步起由服务端 tasks.unread 驱动（登录后拉 current，done 事件点亮，看完熄灭） */
   /**
@@ -324,12 +244,18 @@ export default function App() {
    * 权威状态在主进程（driver.ts），挂载时取一次 + 之后靠 'state' 广播同步；
    * 大字横幅「AI 正在控制 / 你正在控制」由它推导，不再用本地 state 猜测。
    */
-  const [task, setTask] = useState<TaskState>({
-    phase: 'idle',
-    detail: '等待主进程同步…',
-    step: 0,
-    blocked: false,
+  // 无 wcId 的旧镜像在接收时绑定主人；本地标记只作归属/新旧循环关联，不写入协议。
+  const [task, setTask] = useState<TaskState & {
+    legacyOwnerId?: number | null;
+    observedLoopId?: string | null;
+    observedAgentId?: number | null;
+    snapshotToken?: string | null;
+  }>({
+    phase: 'idle', detail: '等待主进程同步…', step: 0, blocked: false,
+    legacyOwnerId: null, snapshotToken: null,
   });
+  const [lastStepOwnerId, setLastStepOwnerId] = useState<number | null>(null);
+  const [traceOwnerId, setTraceOwnerId] = useState<number | null>(null);
   /**
    * 第 22 步：可调配置的镜像（权威副本在主进程 userData 下的 JSON）。
    * 挂载时拉一次 + 跟随 'settings' 广播；`settingsRef` 给开页等同步逻辑取「此刻」的值。
@@ -352,6 +278,8 @@ export default function App() {
   const [curAgentId, setCurAgentId] = useState<number | null>(null);
   /** 异步回调里读「此刻是哪个智能体」——直接用 state 会拿到挂载时的旧闭包值 */
   const curAgentRef = useRef<number | null>(null);
+  /** 主进程快照不带 loopId：仅为已确认 SSE 循环存一份关联戳。 */
+  const lastRunningLoopRef = useRef<{ agentId: number | null; loopId: string | null; token: string | null }>({ agentId: null, loopId: null, token: null });
   /**
    * 收尾 7 | 电脑三级可见度（批次 H 的 `agents.computer_visibility`）：status / preview / takeover。
    * 默认 `status`（收起，不抢焦点）—— 这是批次 H 的设计前提，也是服务端那列的默认值。
@@ -829,6 +757,9 @@ export default function App() {
       HOME_URL,
     },
   });
+  if (runningLoopId && streamingAgentId !== null) {
+    lastRunningLoopRef.current = { agentId: streamingAgentId, loopId: runningLoopId, token: session?.token ?? null };
+  }
 
   /**
    * B3：这个项目的对话**已经有内容** ⇒ 引导期早过了，立刻补标记（不必等用户做什么）。
@@ -1508,29 +1439,11 @@ export default function App() {
     });
   };
 
-  /**
-   * 喂给可见度条的真实状态（不是写死的假数据）：
-   * · `status` / `statusDetail` / `statusStep` 来自左栏那一行智能体（头像即状态那套，服务端广播来的）；
-   * · 当前这一步干什么，用主进程报上来的**最后一条步摘要**（`agentSteps` 的尾巴）；
-   * · 页面摘要用当前那张页的标题（没有标题就用地址）。
-   * 拿不到就是 null —— 组件那边会显示「空闲 / 暂无页面摘要」，不猜、不编。
-   */
-  const visAgent = agents.find((a) => a.id === curAgentId) ?? null;
-  const visLastStep = agentSteps.length > 0 ? agentSteps[agentSteps.length - 1] : null;
-  /**
-   * UX 收尾 A①②：状态行的**唯一形态来源**（一处派生，避免"两个 state 同进同退"那类 bug）：
-   *   · `running` = 循环在跑 → 旋转 + 当前动作 + 轨迹抽屉；
-   *   · `paused`  = 用户「停」过、正等「继续」 → ⏸ + 已暂停 + 轨迹抽屉；
-   *   · null      = 都不显示（正常聊天/空闲时状态行整条不渲染）。
-   */
-  const pausedHere = awaitResume && awaitResumeAgent === curAgentId;
-  const runBarMode: 'running' | 'paused' | null =
-    runningLoopId && streaming ? 'running' : pausedHere ? 'paused' : null;
-  // P1：仅在当前智能体正在看的**这张**原生页显示临时让路；不是手动暂停。
-  // 主进程安静满 3 秒会通过原有 state 广播恢复 detail，切页不得串别页。
-  const userInputYieldHere = runBarMode === 'running' && browser.active !== null &&
-    task.wcId === browser.webContentsIdOf(browser.active.id) && task.detail === '你在操作，我停下了';
-  const visPage = browser.active ? browser.active.title || browser.active.url || null : null;
+  /** 步摘要的归属按事件记下；SSE 收尾后仍保留该智能体自己的最后一步。 */
+  const visLastStep = lastStepOwnerId === curAgentId && agentSteps.length > 0
+    ? agentSteps[agentSteps.length - 1] : null;
+  const visPage = browser.active && browser.ownerOf(browser.active.id) === curAgentId
+    ? browser.active.title || browser.active.url || null : null;
 
   /**
    * Phase 4：资源守护者（持续资源监控）。
@@ -1596,11 +1509,21 @@ export default function App() {
      */
     const isTaskState = (v: unknown): v is TaskState =>
       !!v && typeof v === 'object' && typeof (v as TaskState).phase === 'string';
+    const tagSnapshot = (raw: TaskState, ownerAtReceipt: number | null, token: string | null) => ({
+      ...raw,
+      legacyOwnerId: raw.wcId == null ? ownerAtReceipt : null,
+      observedLoopId: lastRunningLoopRef.current.token === token ? lastRunningLoopRef.current.loopId : null,
+      observedAgentId: lastRunningLoopRef.current.token === token ? lastRunningLoopRef.current.agentId : null,
+      snapshotToken: token,
+    });
     try {
+      const ownerAtRequest = curAgentRef.current;
+      const tokenAtRequest = sessionRef.current?.token ?? null;
       const maybe = bridge.getTaskState?.();
       void Promise.resolve(maybe)
         .then((raw) => {
-          if (isTaskState(raw)) setTask(raw);
+          if ((sessionRef.current?.token ?? null) !== tokenAtRequest) return; // 旧账号晚到回包不得覆盖新账号镜像
+          if (isTaskState(raw)) setTask(tagSnapshot(raw, ownerAtRequest, tokenAtRequest));
           else setTask((s) => ({ ...s, detail: '拿不到主进程状态（桥返回了空值），状态行保持上一次的值' }));
         })
         .catch(() => setTask((s) => ({ ...s, detail: '读取主进程状态失败（preload 桥异常）' })));
@@ -1613,7 +1536,7 @@ export default function App() {
       try {
         const parsed: unknown = JSON.parse(payload);
         // ★ F3-③：解析成功不代表形状对（`'null'` / `'{}'` 都能解析）—— 形状不对就忽略，等下一次广播
-        if (isTaskState(parsed)) setTask(parsed);
+        if (isTaskState(parsed)) setTask(tagSnapshot(parsed, curAgentRef.current, sessionRef.current?.token ?? null));
       } catch {
         /* 坏负载忽略，等下一次广播 */
       }
@@ -1729,11 +1652,14 @@ export default function App() {
        * (另一半是服务端把这些也写进了聊天的 delta,已在 loop.ts 删掉)。
        */
       const trace = (line: string) => {
+        setTraceOwnerId(ownerAgent ?? null);
         setRunTrace((prev) => prev.concat(line).slice(-200));
       };
       const here = ownerAgent === curAgentRef.current;
       if (p.kind === 'step') {
+        if (typeof p.wcId === 'number' && tabId === null) return; // 不把归属不明的别页步骤涂到当前智能体
         const line = `${p.summary}${p.ok ? '' : ' ❌'}`;
+        setLastStepOwnerId(ownerAgent ?? null);
         setAgentSteps((prev) => prev.concat(line).slice(-6));
         // 交互对齐片：步骤**只**进轨迹抽屉，绝不 say() 成聊天行（那正是「步骤墙」）。
         trace(`· ${line}`);
@@ -1914,8 +1840,32 @@ export default function App() {
   const filteredAgents = agentQuery.trim()
     ? sidebarAgents.filter((a) => a.name.toLowerCase().includes(agentQuery.trim().toLowerCase()))
     : sidebarAgents;
-  /** 第 16 步：当前智能体的会话状态（服务端为准）——状态行与保活按钮都读它 */
+  /** 会话服务端开关仍用于保活按钮；所有状态展示消费下面同一份派生结果。 */
   const curState = curAgentId === null ? undefined : agentStates[curAgentId];
+  /** 聚合主进程快照带 wcId 时反查页 owner；旧镜像无 wcId 时仅保留接收时认出的主人。 */
+  const taskTabId = task.wcId == null ? null : browser.tabIdOfWebContents(task.wcId);
+  const taskOwnerId = task.snapshotToken !== session.token ? null : task.wcId == null
+    ? task.legacyOwnerId ?? null : taskTabId == null ? null : browser.ownerOf(taskTabId);
+  const activeWcId = browser.active && browser.ownerOf(browser.active.id) === curAgentId
+    ? browser.webContentsIdOf(browser.active.id) : null;
+  const factsByAgent = new Map<number, RunFacts>();
+  for (const a of sidebarAgents) {
+    factsByAgent.set(a.id, deriveRunFacts({
+      agent: a,
+      conversation: agentStates[a.id],
+      task: taskOwnerId === a.id ? task : null,
+      inFlight: {
+        streaming: streaming && streamingAgentId === a.id,
+        loopId: streamingAgentId === a.id ? runningLoopId : null,
+        taskObservedLoopId: taskOwnerId === a.id && task.observedAgentId === a.id ? task.observedLoopId : null,
+        paused: awaitResume && awaitResumeAgent === a.id,
+        activeWebContentsId: a.id === curAgentId ? activeWcId : null,
+        lastStep: a.id === curAgentId ? visLastStep : null,
+      },
+    }));
+  }
+  const curFacts = curAgentId === null ? deriveRunFacts({ agent: null }) :
+    factsByAgent.get(curAgentId) ?? deriveRunFacts({ agent: null });
   /**
    * 当前智能体这一轮用户原话**本身**就是确认（明确开页指令，或对确认提问回了「继续/可以」）。
    * 是的话就不再挂确认按钮——事情已经在做了，再要确认就是自相矛盾（第 13 步的规矩）。
@@ -2091,10 +2041,8 @@ export default function App() {
                 新建/删除收进顶栏「＋」弹层(真操作),不再摆两个按钮 */}
             <div className="contact-list" role="list" aria-label="我的智能体">
               {filteredAgents.map((a) => {
-                // 形态③ 头像六态：休眠 = 没在监听（idle 且保活关）；其余走服务端 status
-                const sleeping = (a.status ?? 'idle') === 'idle' && !agentStates[a.id]?.keepalive;
-                const st = avatarStateOf(a, { sleeping });
-                const doing = avatarDoing(a, { sleeping });
+                const facts = factsByAgent.get(a.id)!;
+                const st = facts.avatar;
                 return (
                 <button
                   type="button"
@@ -2107,7 +2055,7 @@ export default function App() {
                   {/* 形态③：头像即状态 —— 颜色环 + 一个词；悬停/点头像弹「它在干嘛」一行（title 气泡） */}
                   <span
                     className="contact-avatar"
-                    title={doing}
+                    title={facts.doing}
                     aria-label={`${a.name}：${st.word}`}
                     style={{ '--c1': agentColor(a), '--state-c': st.color } as React.CSSProperties}
                   >
@@ -2122,7 +2070,7 @@ export default function App() {
                       <span className="contact-name">{a.name}</span>
                     </span>
                     <span className="contact-line">
-                      <span className="contact-msg">{agentStatusLine(a)}</span>
+                      <span className="contact-msg">{facts.doing}</span>
                     </span>
                   </span>
                 </button>
@@ -2471,30 +2419,18 @@ export default function App() {
             进程重启后靠它把「当前任务」恢复出来，而不是假装任务从未开始；
             保活态也在这里标出来，让人一眼看出「挂着监听但没在烧模型」。
           */}
-          {curState && (curState.current_task || curState.keepalive || curState.browser_confirmed) && (
-            <div className="taskState">
-              <span>{curState.keepalive ? '● 监听中（保活：空闲不调模型）' : '○ 未保活'}</span>
-              {curState.current_task && <span> · 当前任务：{curState.current_task}</span>}
-              {curState.browser_confirmed && <span> · 本会话已同意用浏览器</span>}
-            </div>
-          )}
+          {curFacts.sessionHint && <div className="taskState">{curFacts.sessionHint}</div>}
           {/*
             第 27 步 · **「谁在等谁」状态条**（本步的核心验收点）。
             它渲染在**聊天区里**（不是浏览器层里）—— 这样求助卡模式下也照样看得见。
             颜色/图标/文案全部跟着 `pausedBy` 走：蓝=AI 求助、琥珀=你接管、灰=分不清。
           */}
-          {(() => {
-            const view = driveStateView(task as any);
-            if (!view) return null;
-            return (
-              <div className={`driveState driveState--${view.cls}`} role="status">
-                <span className="driveState__icon" aria-hidden="true">
-                  {view.icon}
-                </span>
-                <span>{view.text}</span>
-              </div>
-            );
-          })()}
+          {curFacts.driveState && (
+            <div className={`driveState driveState--${curFacts.driveState.cls}`} role="status">
+              <span className="driveState__icon" aria-hidden="true">{curFacts.driveState.icon}</span>
+              <span>{curFacts.driveState.text}</span>
+            </div>
+          )}
           {/*
             第 17 步：任务结果从右栏搬到这里（右栏整栏不渲染了）。
             只留「查看结果 / 下载文档」两个动作——结论正文在聊天里以「✅ 任务完成」给出。
@@ -2751,7 +2687,7 @@ export default function App() {
               {/* 交互对齐片：流式也走 markdown（半截的 `**` 不会抛错，见 MarkdownText 的注释） */}
               {streamText ? <MarkdownText text={streamText} /> : <span className="small">正在想…</span>}
               {/* A①：暂停态不画打字光标 —— 光标 = "还在长"，而挂起时它并没有在长 */}
-              {!pausedHere && (
+              {!curFacts.resumeAwaited && (
                 <span className="caret" aria-hidden="true">
                   ▍
                 </span>
@@ -2792,29 +2728,19 @@ export default function App() {
             · 补充注入成功(A③):同一行瞬态多一句「已收到补充」,2.5 秒自动消失(**不弹横幅**)。
           为什么挪出 `.chat`:用户要的是「钉在输入框上方」——它在对话流里会被消息推着走。
         */}
-        {runBarMode && (
-          <div className={`runStatus${runBarMode === 'paused' || userInputYieldHere ? ' runStatus--paused' : ''}`} role="status" aria-live="polite">
+        {curFacts.runBar && (
+          <div className={`runStatus${curFacts.runBar.mode === 'paused' ? ' runStatus--paused' : ''}`} role="status" aria-live="polite">
             <div className="runStatus__row">
-              {runBarMode === 'running' && !userInputYieldHere ? (
+              {curFacts.runBar.mode === 'running' ? (
                 <span className="runStatus__spin" aria-hidden="true" />
               ) : (
-                <span className="runStatus__pauseIco" aria-hidden="true">
-                  ⏸
-                </span>
+                <span className="runStatus__pauseIco" aria-hidden="true">⏸</span>
               )}
-              <span className="runStatus__text">
-                {userInputYieldHere
-                  ? '你在操作，我停下了'
-                  : runBarMode === 'running'
-                    ? visLastStep
-                      ? `正在：${visLastStep}`
-                      : '正在操作浏览器…'
-                    : '已暂停 · 说「继续」接上'}
-              </span>
+              <span className="runStatus__text">{curFacts.runBar.text}</span>
               {supplementFlash && <span className="runStatus__ok">已收到补充</span>}
             </div>
             {/* 轨迹抽屉放在状态行**下面**（同一块里），点开才占地方；默认收起 */}
-            {runTrace.length > 0 && (
+            {runTrace.length > 0 && traceOwnerId === curAgentId && (
               <details className="runTrace">
                 <summary className="runTrace__sum">轨迹 · {runTrace.length} 步（点开看）</summary>
                 <ol className="runTrace__list">
@@ -2859,15 +2785,15 @@ export default function App() {
             }}
             onKeyDown={(e) => e.key === 'Enter' && onSend()}
             /* A①：暂停态（等「继续」）必须能打字，否则用户没法输入那句「继续」 */
-            disabled={streaming && !runningLoopId && !pausedHere}
+            disabled={streaming && !runningLoopId && !curFacts.resumeAwaited}
           />
           {/*
             形态① 真接管（2026-09-27）：执行中**发送键变「接管」**（带旋转图标）。
             它走的就是「发一句『停』」那条路（detectStopIntent → pauseTask/stopDriving），
-            AI 真的暂停这一路、页面归你（driveStateView 显示「你在操作 · AI 已暂停」）。
+            AI 真的暂停这一路、页面归你（deriveRunFacts 的 driveState 显示「你在操作 · AI 已暂停」）。
             不是第二套机制；想补充要求直接按回车（Enter 照旧 = 发送）。
           */}
-          {runningLoopId && streaming ? (
+          {curFacts.runBar?.mode === 'running' && runningLoopId && streamingAgentId === curAgentId ? (
             <button
               type="button"
               className="inputbar-btn send inputbar-btn--stop"
@@ -2877,7 +2803,7 @@ export default function App() {
               <span className="inputbar__spin" aria-hidden="true" />
               接管
             </button>
-          ) : pausedHere ? (
+          ) : curFacts.resumeAwaited ? (
             /**
              * ★ 形态① 真接管：暂停态（等「交还」）→ **发送键变「交还」**（= 发一句「继续」）。
              *   为什么必须单列:挂起时 `streaming` 仍是 true（那条 SSE 还开着），
@@ -2997,9 +2923,7 @@ export default function App() {
             */}
             <ComputerVisibility
               agentId={curAgentId}
-              loopStatus={visAgent?.status ?? (runningLoopId ? 'running' : 'idle')}
-              statusDetail={visAgent?.statusDetail ?? null}
-              step={visAgent?.statusStep ?? null}
+              facts={curFacts}
               currentTool={visLastStep}
               pageSummary={visPage}
               visibility={computerVisibility}

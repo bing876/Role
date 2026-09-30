@@ -1007,9 +1007,8 @@ export interface AgentView {
   conversationId: number | null;
   /** 第 16 步：是否处于「启动并保活」监听态（挂在会话状态上；空闲不调模型） */
   listening?: boolean;
-  /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户 */
-  /** 无感核心 Step2：头像即状态（GrokBot：idle/thinking/working/waiting/blocked/done），不做六个指示器，版式归用户
-   * 形态③（2026-09-27）：补 failed（出错）/ sleeping（休眠）两态 → 六态齐（空闲/思考/执行/需你处理/出错/休眠） */
+  /** 头像即状态：兼容既有服务端状态协议（含旧形态③）；ADR-0012 桌面经 deriveRunFacts 折叠为四种头像，
+   * thinking/sleeping 仅用于「它在干嘛」细节，waiting/done 仍可从旧服务端读到。 */
   status?: 'idle' | 'thinking' | 'working' | 'waiting' | 'blocked' | 'done' | 'failed' | 'sleeping';
   /** 状态人话摘要（折叠一行，细节前端可展开） */
   statusDetail?: string;
