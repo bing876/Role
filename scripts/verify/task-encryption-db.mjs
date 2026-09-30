@@ -26,7 +26,7 @@
  *   （库需要是一个**可以随便写的测试库**：脚本会建表、插用户，不删别人的数据；
  *     所有断言都按本次登录出来的 user_id 收口，不受库里既有数据影响）
  *
- * 反证（必须做，做法见 docs/acceptance/收尾6-goal加密-验收报告.md）：
+ * 反证（必须做，做法见 docs/archive/2026-09/acceptance/收尾6-goal加密-验收报告.md）：
  *   把生产代码改坏（例如让 task/start 回到明文 payload、让 pause 写 session.goal、
  *   让启动回填直接 return），本脚本必须变红。只跑绿不跑红不算验收。
  */

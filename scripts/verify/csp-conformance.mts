@@ -118,7 +118,7 @@ function main(): void {
 
   if (!csp) {
     console.log('  （index.html 没有 CSP meta —— 当前状态：未激活，跳过对账）');
-    console.log('  （要激活：把 docs/对抗性审查报告-20260929.md §七 的策略粘进去，本脚本立刻开始把关）');
+    console.log('  （要激活：把 docs/archive/2026-09/docs-root/对抗性审查报告-20260929.md §七 的策略粘进去，本脚本立刻开始把关）');
     console.log(`\n=== 结论：0 PASS / 0 FAIL（无 CSP，跳过）===`);
     return;
   }

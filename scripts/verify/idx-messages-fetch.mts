@@ -159,7 +159,7 @@ async function main(): Promise<void> {
   await pool.end().catch(() => undefined);
   console.log(`\n=== 索引有效性守卫：${pass} PASS / 0 FAIL ===`);
   console.log(`  数据量：${total} 条消息（含一个 ${LONG_LEN} 条的长会话）`);
-  console.log('  实测依据（300k 消息的大基准，另见 docs/技术接手报告 §10.9）：');
+  console.log('  实测依据（300k 消息的大基准，另见 docs/archive/2026-09/docs-root/技术接手报告-20260928.md §10.9）：');
   console.log('    只有单列索引 → 走主键倒扫，Rows Removed 299,700，58.6 ms');
   console.log('    有复合索引   → 走复合索引，Buffers hit=4，      0.24 ms（~250x）');
   console.log('  注意：绝对耗时不可迁移（PGlite 是 WASM）。可信的是计划形状 + 同环境比值。');

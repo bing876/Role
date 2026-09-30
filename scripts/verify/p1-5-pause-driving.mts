@@ -1,7 +1,7 @@
 /**
  * P1-5 验收：`pauseDriving` / `resumeDriving` 不再"撒谎式成功"。
  *
- * 背景（BUG_LIST P1-5）：
+ * 背景（原件见 `docs/archive/2026-09/repo-root/BUG_LIST.md` P1-5）：
  *   `preload.ts` 暴露了 `pauseDriving()` / `resumeDriving()`，但渲染层零调用；
  *   而 `webBridge.ts`（浏览器预览用的垫片）里这两个是 `async () => true` ——
  *   **无条件返回成功，却什么都没做**。调用方拿到 `true` 会以为"暂停门按住了"，
@@ -123,9 +123,9 @@ log('--- ② 主进程 drive() 的暂停门仍在（真机的拦截在这） ---
   );
 }
 
-// ---- ③ 渲染层的暂停入口确实存在（纠正 BUG_LIST 的过时主诉）--------------
+// ---- ③ 渲染层暂停入口存在（纠正 docs/archive/2026-09/repo-root/BUG_LIST.md 的过时主诉）---
 log('');
-log('--- ③ 渲染层暂停入口：BUG_LIST 说"零调用"，实测是有 ---');
+log('--- ③ 渲染层暂停入口：docs/archive/2026-09/repo-root/BUG_LIST.md 说"零调用"，实测是有 ---');
 {
   const chat = read('apps/desktop/src/features/chat/useChat.ts');
   const glue = read('apps/desktop/src/app/browserGlue.ts');

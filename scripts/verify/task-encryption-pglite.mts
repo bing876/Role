@@ -7,7 +7,7 @@
  *     `apps/server/src/crypto.ts` 的 makeCipher），
  *   HTTP 走 Fastify `inject()` 打进**真路由处理函数**，库是 PGlite（真 PostgreSQL 编译成 WASM，
  *   跑的是真 SQL / 真 JSONB / 真 row_to_json，不是 pg-mem 那种仿制品）。
- *   改坏生产代码，这里就会红（配套的反证记录见 docs/acceptance/收尾6-goal加密-验收报告.md）。
+ *   改坏生产代码，这里就会红（配套的反证记录见 docs/archive/2026-09/acceptance/收尾6-goal加密-验收报告.md）。
  *
  * 真库全链路验收（起真服务端 + 真 PostgreSQL + 直连 SELECT + 重启回填）在
  * `scripts/verify/task-encryption-db.mjs`；两个脚本都挂在 `npm run verify:db` 下。
